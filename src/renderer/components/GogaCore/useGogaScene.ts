@@ -281,6 +281,16 @@ export function useGogaScene(
         coreScale = 1.2 + Math.sin(t * 5) * 0.1
         pCol = new THREE.Color(C.cyan); pSpeed = 0.0006
 
+      } else if (vs === 'transcribing') {
+        // Ripples move inward — layers pulse from outer to inner
+        bloomTarget = 1.9; rotSpeed = 0.001
+        outerCol = new THREE.Color(C.cyan); innerCol = new THREE.Color(C.coreWhite)
+        coreCol = new THREE.Color(C.cyan); haloCol = new THREE.Color(C.cyan)
+        h1Opacity = 0.18 + Math.sin(t * 8) * 0.08
+        h2Opacity = 0.08 + Math.sin(t * 8 + 1) * 0.04
+        coreScale = 1.1 + Math.sin(t * 6) * 0.08
+        pCol = new THREE.Color(C.cyan); pSpeed = 0.0004
+
       } else if (vs === 'thinking') {
         bloomTarget = 2.0; zSpread = 3.2; rotSpeed = 0.004
         coreScale = 1.1 + Math.sin(t * 7) * 0.14

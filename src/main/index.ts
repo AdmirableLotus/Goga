@@ -6,13 +6,13 @@ import { registerMemoryHandlers } from './handlers/memory'
 import { registerLogHandlers } from './handlers/logs'
 import { registerSettingsHandlers } from './handlers/settings'
 import { registerDesktopHandlers } from './handlers/desktop'
-import { registerTtsHandlers } from './handlers/tts'
 import { registerLibraryHandlers } from './handlers/library'
 import { registerBrainHandlers } from './handlers/brain'
 import { registerSecurityHandlers } from './handlers/security'
 import { registerAgentHandlers } from './handlers/agent'
 import { registerMissionHandlers } from './handlers/mission'
 import { registerSttHandlers } from './handlers/stt'
+import { registerVoiceHandlers } from './handlers/voice'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -66,13 +66,12 @@ app.whenReady().then(() => {
   registerLogHandlers(ipcMain)
   registerSettingsHandlers(ipcMain)
   registerDesktopHandlers(ipcMain)
-  registerTtsHandlers(ipcMain)
   registerLibraryHandlers(ipcMain)
   registerBrainHandlers(ipcMain)
   registerSecurityHandlers(ipcMain)
   registerAgentHandlers(ipcMain)
   registerMissionHandlers(ipcMain)
-  registerSttHandlers(ipcMain, getMainWindow)
+  registerVoiceHandlers(ipcMain, getMainWindow)
   createWindow()
 
   // Start loading the primary local model immediately (non-blocking)

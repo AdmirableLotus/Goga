@@ -54,6 +54,13 @@ export interface MainHandlers {
   'tts:voices': () => Promise<string[]>
   'stt:start': () => Promise<{ transcript: string }>
   'stt:stop': () => Promise<void>
+  // Voice orchestrator
+  'voice:listenOnce': () => Promise<void>
+  'voice:stopListening': () => Promise<void>
+  'voice:stopSpeaking': () => Promise<void>
+  'voice:startWakeLoop': () => Promise<void>
+  'voice:stopWakeLoop': () => Promise<void>
+  'voice:status': () => Promise<import('../main/services/voiceOrchestrator').VoiceStatus>
 
   // Library
   'library:ingest': (filePath: string) => Promise<import('./types').BookMeta>
@@ -94,6 +101,9 @@ export interface RendererEvents {
   // Phase D: Mission events
   'mission:event': import('./types').MissionEvent
   'mission:state': import('./types').Mission
+  // Voice
+  'voice:status': { status: import('../main/services/voiceOrchestrator').VoiceStatus }
+  'voice:transcript': { text: string }
 }
 
 export type MainChannel = keyof MainHandlers

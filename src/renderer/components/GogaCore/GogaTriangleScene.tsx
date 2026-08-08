@@ -8,6 +8,7 @@ import type { GogaVisualState } from './GogaVisualState'
 const STATE_LABEL: Record<GogaVisualState, string> = {
   idle:            'IDLE',
   listening:       'LISTENING',
+  transcribing:    'TRANSCRIBING',
   thinking:        'THINKING',
   acting:          'ACTING',
   seeing:          'SEEING',
@@ -22,6 +23,7 @@ const STATE_LABEL: Record<GogaVisualState, string> = {
 const STATE_COLOR: Record<GogaVisualState, string> = {
   idle:            '#8b5cff',
   listening:       '#29d9ff',
+  transcribing:    '#00aadd',
   thinking:        '#b794ff',
   acting:          '#8b5cff',
   seeing:          '#29d9ff',

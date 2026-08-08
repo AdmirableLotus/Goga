@@ -3,6 +3,7 @@ import type { AgentState } from '@shared/types'
 export type GogaVisualState =
   | 'idle'
   | 'listening'
+  | 'transcribing'
   | 'thinking'
   | 'acting'
   | 'seeing'
@@ -35,6 +36,7 @@ export function agentStateToVisual(state: AgentState | null, extras?: { listenin
 export const STATE_COLORS: Record<GogaVisualState, { primary: number; secondary: number; core: number }> = {
   idle:            { primary: 0x6633cc, secondary: 0x3311aa, core: 0x9966ff },
   listening:       { primary: 0x00ccff, secondary: 0x0066cc, core: 0x00ffff },
+  transcribing:    { primary: 0x00aadd, secondary: 0x0044aa, core: 0x88ddff },
   thinking:        { primary: 0x7744ee, secondary: 0x4422bb, core: 0xaa88ff },
   acting:          { primary: 0x8833ff, secondary: 0x00aaff, core: 0xffffff },
   seeing:          { primary: 0x00ddff, secondary: 0x0055ff, core: 0x88ffff },

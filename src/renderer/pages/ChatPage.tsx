@@ -1,28 +1,45 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import type { ChatMessage, AgentStep, AgentState } from '@shared/types'
 import type { ScreenshotResult } from '@shared/ipc'
-import { useSpeech } from '../hooks/useSpeech'
+import type { VoiceStatus } from '../../main/services/voiceOrchestrator'
 import { useGogaVisual } from '../context/GogaVisualContext'
 import { agentStateToVisual } from '../components/GogaCore/GogaVisualState'
 import GogaTriangleScene from '../components/GogaCore/GogaTriangleScene'
 
 interface DisplayMessage extends ChatMessage { screenshot?: ScreenshotResult }
 
-// Only real user/assistant messages count — not the initial system greeting
 function hasConversation(msgs: DisplayMessage[]): boolean {
   return msgs.some(m => m.role === 'user' || (m.role === 'assistant' && m.id !== '0'))
+}
+
+// Map voice status → triangle visual state
+function voiceToVisual(vs: VoiceStatus): import('../components/GogaCore/GogaVisualState').GogaVisualState | null {
+  if (vs === 'listening' || vs === 'wake_listening') return 'listening'
+  if (vs === 'transcribing') return 'transcribing'
+  if (vs === 'speaking') return 'speaking'
+  return null
+}
+
+const MIC_LABEL: Record<VoiceStatus, string> = {
+  idle:           '🎤',
+  wake_listening: '👂',
+  listening:      '⏹',
+  transcribing:   '⋯',
+  speaking:       '🔇',
+  disabled:       '🎤',
 }
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>([
     { id: '0', role: 'system', content: 'Goga is ready. Type or speak to me.', timestamp: Date.now() }
   ])
-  const [input, setInput]           = useState('')
-  const [loading, setLoading]       = useState(false)
+  const [input, setInput]             = useState('')
+  const [loading, setLoading]         = useState(false)
   const [streamingText, setStreamingText] = useState('')
-  const [agentState, setAgentState] = useState<AgentState | null>(null)
-  const [agentSteps, setAgentSteps] = useState<AgentStep[]>([])
-  const [showSteps, setShowSteps]   = useState(true)
+  const [agentState, setAgentState]   = useState<AgentState | null>(null)
+  const [agentSteps, setAgentSteps]   = useState<AgentStep[]>([])
+  const [showSteps, setShowSteps]     = useState(true)
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle')
   const bottomRef      = useRef<HTMLDivElement>(null)
   const stepsBottomRef = useRef<HTMLDivElement>(null)
   const { setVisualState } = useGogaVisual()
@@ -32,6 +49,12 @@ export default function ChatPage() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => { stepsBottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [agentSteps])
 
+  // Sync voice status → triangle
+  useEffect(() => {
+    const v = voiceToVisual(voiceStatus)
+    if (v) setVisualState(v)
+  }, [voiceStatus, setVisualState])
+
   useEffect(() => {
     const unsubs = [
       window.goga.on('chat:token', ({ token }) => setStreamingText(prev => prev + token)),
@@ -39,7 +62,7 @@ export default function ChatPage() {
       window.goga.on('agent:state', state => {
         setAgentState(state)
         setVisualState(agentStateToVisual(state))
-        if (['idle','done','stopped'].includes(state.status)) setLoading(false)
+        if (['idle', 'done', 'stopped'].includes(state.status)) setLoading(false)
       }),
       window.goga.on('agent:stopped', () => {
         setLoading(false)
@@ -47,47 +70,80 @@ export default function ChatPage() {
         setVisualState('stopped')
       }),
       window.goga.on('chat:message', msg => {
-        setMessages(prev => [...prev, msg])
-        if (msg.role === 'assistant') speak(msg.content)
+        setMessages(prev => {
+          // Deduplicate — voice handler and chat handler may both send
+          if (prev.some(m => m.id === msg.id)) return prev
+          return [...prev, msg]
+        })
         setLoading(false)
+        setStreamingText('')
       }),
       window.goga.on('action:approval-required', action => {
         setVisualState('waitingApproval')
         setMessages(prev => [...prev, {
           id: `notify-${action.id}`, role: 'system',
-          content: `⚠️ Approval required: ${action.label} — go to the Approvals tab.`,
+          content: `⚠️ Approval required: ${action.label} — go to Approvals tab or say "yes" / "no".`,
           timestamp: Date.now()
         }])
       }),
+      // Voice status from VoiceOrchestrator
+      window.goga.on('voice:status', ({ status }) => {
+        setVoiceStatus(status)
+        if (status === 'idle' || status === 'disabled') {
+          // Don't override agent visual state
+          if (!agentState || ['idle', 'done', 'stopped', 'error'].includes(agentState.status)) {
+            setVisualState('idle')
+          }
+        }
+      }),
+      // Voice transcript echoed — already added as chat:message, just set loading
+      window.goga.on('voice:transcript', () => {
+        setLoading(true)
+        setAgentSteps([])
+        setStreamingText('')
+        setVisualState('thinking')
+      }),
     ]
     return () => unsubs.forEach(u => u())
-  }, [])
+  }, [agentState, setVisualState])
 
+  // Emergency stop
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key === 'Escape') {
         e.preventDefault()
         window.goga.invoke('agent:stop')
         window.goga.invoke('action:stop')
-        setLoading(false); setVisualState('stopped')
+        window.goga.invoke('voice:stopListening')
+        window.goga.invoke('voice:stopSpeaking')
+        setLoading(false)
+        setVisualState('stopped')
       }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [])
+  }, [setVisualState])
 
-  const handleTranscript = useCallback((text: string) => {
-    setInput(text); setTimeout(() => sendText(text), 300)
-  }, [])
+  // ── Mic button ────────────────────────────────────────────────────────────
+  const handleMic = useCallback(async () => {
+    if (voiceStatus === 'listening') {
+      window.goga.invoke('voice:stopListening')
+    } else if (voiceStatus === 'speaking') {
+      window.goga.invoke('voice:stopSpeaking')
+    } else {
+      // Start listening — non-blocking, result comes back via voice:transcript + chat:message
+      window.goga.invoke('voice:listenOnce')
+    }
+  }, [voiceStatus])
 
-  const { listening, speaking, startListening, stopListening, speak, stopSpeaking } = useSpeech(handleTranscript)
-  useEffect(() => { if (listening) setVisualState('listening') }, [listening])
-  useEffect(() => { if (speaking)  setVisualState('speaking')  }, [speaking])
-
+  // ── Typed send ────────────────────────────────────────────────────────────
   const sendText = async (text: string) => {
     const trimmed = text.trim()
     if (!trimmed || loading) return
-    setInput(''); setLoading(true); setAgentSteps([]); setStreamingText('')
+    setInput('')
+    setLoading(true)
+    setAgentSteps([])
+    setStreamingText('')
     setVisualState('thinking')
 
     const userMsg: DisplayMessage = { id: Date.now().toString(), role: 'user', content: trimmed, timestamp: Date.now() }
@@ -95,18 +151,16 @@ export default function ChatPage() {
 
     try {
       const reply = await window.goga.invoke('chat:send', trimmed)
-      if (reply.content.startsWith('On it,') || reply.content.includes('step by step')) {
-        setMessages(prev => [...prev, reply]); return
+      if (!messages.some(m => m.id === reply.id)) {
+        let dm: DisplayMessage = reply
+        if (reply.content === '__screenshot__') {
+          const actions = await window.goga.invoke('actions:list')
+          const last = actions.find(a => reply.actionIds?.includes(a.id))
+          dm = { ...reply, content: 'Screenshot captured:', screenshot: last?.result as ScreenshotResult }
+        }
+        setMessages(prev => prev.some(m => m.id === dm.id) ? prev : [...prev, dm])
       }
-      let dm: DisplayMessage = reply
-      if (reply.content === '__screenshot__') {
-        const actions = await window.goga.invoke('actions:list')
-        const last = actions.find(a => reply.actionIds?.includes(a.id))
-        dm = { ...reply, content: 'Screenshot captured:', screenshot: last?.result as ScreenshotResult }
-      }
-      setMessages(prev => [...prev, dm])
       setStreamingText('')
-      if (dm.content !== 'Screenshot captured:') speak(dm.content)
     } catch (e) {
       setStreamingText('')
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${e}`, timestamp: Date.now() }])
@@ -116,23 +170,19 @@ export default function ChatPage() {
   }
 
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
-
-  // Core height: welcome=500px, conversation=180px
   const coreH = inConversation ? 180 : 500
+  const micActive = voiceStatus === 'listening' || voiceStatus === 'transcribing'
+  const micLabel = MIC_LABEL[voiceStatus] ?? '🎤'
 
   return (
     <div style={S.page}>
 
-      {/* ── GogaCore — transitions between welcome and compact ── */}
-      <div style={{
-        ...S.coreWrap,
-        height: coreH,
-        transition: 'height 0.6s cubic-bezier(0.4,0,0.2,1)',
-      }}>
+      {/* Triangle */}
+      <div style={{ ...S.coreWrap, height: coreH, transition: 'height 0.6s cubic-bezier(0.4,0,0.2,1)' }}>
         <GogaTriangleScene compact={inConversation} />
       </div>
 
-      {/* ── Welcome greeting (only when no conversation) ── */}
+      {/* Welcome */}
       {!inConversation && (
         <div style={S.greeting}>
           <span style={S.greetName}>Goga</span>
@@ -140,7 +190,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ── Agent step panel ── */}
+      {/* Agent step panel */}
       {(agentSteps.length > 0 || isAgentRunning) && (
         <div style={S.agentPanel}>
           <div style={S.agentHeader}>
@@ -175,7 +225,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ── Messages ── */}
+      {/* Messages */}
       <div style={S.messages}>
         {messages.filter(m => !(m.id === '0' && !inConversation)).map(m => (
           <div key={m.id} style={{ ...S.bubble, ...(m.role === 'user' ? S.user : m.role === 'system' ? S.system : S.assistant) }}>
@@ -200,24 +250,34 @@ export default function ChatPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* ── Input ── */}
+      {/* Input row */}
       <div style={S.inputRow}>
         <button
-          onClick={listening ? stopListening : startListening}
-          disabled={loading}
-          style={{ ...S.iconBtn, background: listening ? '#cc2244' : '#13101f', color: listening ? '#fff' : '#554477', animation: listening ? 'pulse 1s infinite' : 'none' }}
-          title={listening ? 'Stop' : 'Voice input'}
-        >{listening ? '⏹' : '🎤'}</button>
-        {speaking && (
-          <button onClick={stopSpeaking} style={{ ...S.iconBtn, background: '#aa6600', color: '#fff' }} title="Stop speaking">🔇</button>
-        )}
+          onClick={handleMic}
+          disabled={loading && voiceStatus === 'idle'}
+          style={{
+            ...S.iconBtn,
+            background: micActive ? '#1a0a2e' : voiceStatus === 'speaking' ? '#aa6600' : '#13101f',
+            color: micActive ? '#29d9ff' : voiceStatus === 'speaking' ? '#fff' : '#554477',
+            border: micActive ? '1px solid #29d9ff55' : '1px solid transparent',
+            animation: micActive ? 'pulse 1s infinite' : 'none',
+          }}
+          title={voiceStatus === 'listening' ? 'Stop listening' : voiceStatus === 'speaking' ? 'Stop speaking' : 'Voice input'}
+        >{micLabel}</button>
+
         <input
           style={{ flex: 1, background: '#0e0c18', border: '1px solid #2a1f4a', color: '#e8d8ff' }}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendText(input)}
-          placeholder={listening ? '🎤 Listening…' : isAgentRunning ? '⚡ Running… (Ctrl+Shift+Esc to stop)' : 'Type a message or task…'}
-          disabled={loading && !isAgentRunning}
+          placeholder={
+            voiceStatus === 'listening'    ? '🎤 Listening…' :
+            voiceStatus === 'transcribing' ? '⋯ Transcribing…' :
+            voiceStatus === 'speaking'     ? '🔊 Speaking… (click mic to interrupt)' :
+            isAgentRunning                 ? '⚡ Running… (Ctrl+Shift+Esc to stop)' :
+            'Type a message or task…'
+          }
+          disabled={loading && !isAgentRunning && voiceStatus === 'idle'}
         />
         <button onClick={() => sendText(input)} disabled={(loading && !isAgentRunning) || !input.trim()} style={S.sendBtn}>Send</button>
       </div>
@@ -246,6 +306,6 @@ const S: Record<string, React.CSSProperties> = {
   role:        { display: 'block', fontSize: 9, opacity: 0.45, marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.8 },
   screenshot:  { display: 'block', marginTop: 10, maxWidth: '100%', borderRadius: 6, border: '1px solid #2a1f4a' },
   inputRow:    { display: 'flex', gap: 8, padding: '10px 20px', borderTop: '1px solid #1a1428', background: '#0a0816', alignItems: 'center' },
-  iconBtn:     { width: 36, height: 36, borderRadius: '50%', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+  iconBtn:     { width: 36, height: 36, borderRadius: '50%', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0, cursor: 'pointer', border: '1px solid transparent' },
   sendBtn:     { background: '#5b21ff', color: '#fff', fontWeight: 600, padding: '8px 18px' },
 }

@@ -73,10 +73,22 @@ export default function SettingsPage() {
         </Field>
 
         <Section label="Voice & Speech" />
-        <Field label="Voice enabled">
+        <Field label="Voice conversation">
           <input type="checkbox" checked={settings.voiceEnabled} onChange={e => update({ voiceEnabled: e.target.checked })} />
         </Field>
-        <Field label="Voice">
+        <Field label="Wake word (Hey Goga)">
+          <input type="checkbox" checked={settings.wakeWordEnabled ?? false} onChange={e => update({ wakeWordEnabled: e.target.checked })} disabled={!settings.voiceEnabled} />
+        </Field>
+        <Field label="Wake phrase">
+          <input value={settings.wakePhrase ?? 'hey goga'} onChange={e => update({ wakePhrase: e.target.value })} style={{ width: 180 }} disabled={!settings.voiceEnabled || !settings.wakeWordEnabled} />
+        </Field>
+        <Field label="Automatically speak responses">
+          <input type="checkbox" checked={settings.autoSpeakResponses ?? true} onChange={e => update({ autoSpeakResponses: e.target.checked })} disabled={!settings.voiceEnabled} />
+        </Field>
+        <Field label="Allow barge-in (interrupt Goga while speaking)">
+          <input type="checkbox" checked={settings.allowBargeIn ?? true} onChange={e => update({ allowBargeIn: e.target.checked })} disabled={!settings.voiceEnabled} />
+        </Field>
+        <Field label="Goga voice">
           <select value={settings.voiceName} onChange={e => update({ voiceName: e.target.value })} style={styles.select} disabled={!settings.voiceEnabled}>
             <option value="">System default</option>
             {voices.map(v => <option key={v} value={v}>{v}</option>)}

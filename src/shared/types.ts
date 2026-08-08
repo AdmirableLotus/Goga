@@ -158,6 +158,10 @@ export interface AppSettings {
   voiceName: string
   voiceRate: number
   voiceVolume: number
+  wakeWordEnabled: boolean
+  wakePhrase: string
+  autoSpeakResponses: boolean
+  allowBargeIn: boolean
   userName: string
 }
 
@@ -272,6 +276,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceName: '',
   voiceRate: 1.0,
   voiceVolume: 1.0,
+  wakeWordEnabled: false,
+  wakePhrase: 'hey goga',
+  autoSpeakResponses: true,
+  allowBargeIn: true,
   userName: 'Boss'
 }
 
