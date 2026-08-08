@@ -135,6 +135,45 @@ export class MissionEngine extends EventEmitter {
     if (cb) { this.pendingApprovals.delete(missionId); cb(approved) }
   }
 
+  /**
+   * Inject a mid-mission clarification from voice or typed input.
+   * Returns how the utterance was classified.
+   */
+  injectConversation(text: string): 'cancel' | 'clarification' | 'question' | 'ignored' {
+    const lower = text.toLowerCase().trim()
+    const running = this.listMissions().filter(
+      m => m.status === 'running' || m.status === 'planning' || m.status === 'recovering' || m.status === 'verifying'
+    )
+    if (running.length === 0) return 'ignored'
+
+    // Cancel
+    if (/^(stop|halt|cancel|abort|quit|don'?t|wait)[.!]?$/i.test(lower)) {
+      running.forEach(m => this.stop(m.id))
+      return 'cancel'
+    }
+
+    // Question about progress — don't interrupt, just classify
+    if (/\b(what'?s|what is|how|why|when|status|progress|doing|taking)\b/i.test(lower)) {
+      return 'question'
+    }
+
+    // Clarification — inject into next observation as a user directive
+    running.forEach(m => {
+      const lastObs = m.observations[m.observations.length - 1]
+      if (lastObs) {
+        lastObs.lastActionResult = `USER_CLARIFICATION: ${text}`
+      } else {
+        m.observations.push({
+          timestamp: Date.now(),
+          activeWindow: '',
+          activeWindowPid: 0,
+          lastActionResult: `USER_CLARIFICATION: ${text}`
+        })
+      }
+    })
+    return 'clarification'
+  }
+
   // ── Mission loop ───────────────────────────────────────────────────────────
 
   private async runMission(mission: Mission, signal: AbortSignal): Promise<void> {

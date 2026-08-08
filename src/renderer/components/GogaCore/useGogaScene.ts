@@ -342,6 +342,15 @@ export function useGogaScene(
 
       } else if (vs === 'stopped') {
         bloomTarget = 0.9; rotSpeed = 0.0002; pSpeed = 0.0001
+
+      } else if (vs === 'wakeDetected') {
+        // Quick bright cyan awakening pulse
+        bloomTarget = 2.8
+        outerCol = new THREE.Color(C.cyan); innerCol = new THREE.Color(C.coreWhite)
+        coreCol = new THREE.Color(C.cyan); haloCol = new THREE.Color(C.cyan)
+        coreScale = 1.6 + Math.sin(t * 12) * 0.2
+        h1Opacity = 0.4; h2Opacity = 0.2
+        pCol = new THREE.Color(C.cyan); pSpeed = 0.002
       }
 
       // Reset non-seeing tilt

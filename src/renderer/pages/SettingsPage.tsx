@@ -88,6 +88,9 @@ export default function SettingsPage() {
         <Field label="Allow barge-in (interrupt Goga while speaking)">
           <input type="checkbox" checked={settings.allowBargeIn ?? true} onChange={e => update({ allowBargeIn: e.target.checked })} disabled={!settings.voiceEnabled} />
         </Field>
+        <Field label={`Conversation window (${settings.conversationWindowSecs ?? 45}s after last interaction)`}>
+          <input type="range" min="10" max="120" step="5" value={settings.conversationWindowSecs ?? 45} onChange={e => update({ conversationWindowSecs: Number(e.target.value) })} disabled={!settings.voiceEnabled || !settings.wakeWordEnabled} style={{ width: 180 }} />
+        </Field>
         <Field label="Goga voice">
           <select value={settings.voiceName} onChange={e => update({ voiceName: e.target.value })} style={styles.select} disabled={!settings.voiceEnabled}>
             <option value="">System default</option>

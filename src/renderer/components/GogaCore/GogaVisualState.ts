@@ -13,6 +13,7 @@ export type GogaVisualState =
   | 'success'
   | 'error'
   | 'stopped'
+  | 'wakeDetected'
 
 export function agentStateToVisual(state: AgentState | null, extras?: { listening?: boolean; speaking?: boolean }): GogaVisualState {
   if (extras?.listening) return 'listening'
@@ -46,4 +47,5 @@ export const STATE_COLORS: Record<GogaVisualState, { primary: number; secondary:
   success:         { primary: 0x00cc88, secondary: 0x008855, core: 0x44ffcc },
   error:           { primary: 0xcc2222, secondary: 0x881111, core: 0xff4444 },
   stopped:         { primary: 0x332244, secondary: 0x221133, core: 0x554466 },
+  wakeDetected:    { primary: 0x00ffff, secondary: 0x00aaff, core: 0xffffff },
 }

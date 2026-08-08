@@ -90,7 +90,6 @@ export default function ChatPage() {
       window.goga.on('voice:status', ({ status }) => {
         setVoiceStatus(status)
         if (status === 'idle' || status === 'disabled') {
-          // Don't override agent visual state
           if (!agentState || ['idle', 'done', 'stopped', 'error'].includes(agentState.status)) {
             setVisualState('idle')
           }

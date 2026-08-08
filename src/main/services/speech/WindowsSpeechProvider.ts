@@ -2,8 +2,16 @@ import { spawn, ChildProcess } from 'child_process'
 import type { ISttProvider, ITtsProvider, SpeechRecognitionResult } from './ISpeechProvider'
 
 // ── STT ───────────────────────────────────────────────────────────────────────
+//
+// Two modes:
+//   recognize()        — one-shot, used for explicit mic-button presses
+//   startContinuous()  — persistent background loop using RecognizeAsync,
+//                        calls onResult for each utterance, no repeated PS startup cost
+//
+// The continuous script keeps the engine alive and writes each result to stdout
+// as a line, so we parse line-by-line instead of waiting for process exit.
 
-const STT_SCRIPT = (timeoutSec: number) => `
+const ONE_SHOT_SCRIPT = (timeoutSec: number) => `
 Add-Type -AssemblyName System.Speech
 $r = New-Object System.Speech.Recognition.SpeechRecognitionEngine
 $r.SetInputToDefaultAudioDevice()
@@ -15,16 +23,43 @@ if ($result -and $result.Text) { Write-Output $result.Text } else { Write-Output
 $r.Dispose()
 `
 
+// Continuous script: writes each recognized utterance as a line to stdout.
+// Writes "__READY__" when engine is initialized.
+// Runs until process is killed.
+const CONTINUOUS_SCRIPT = `
+Add-Type -AssemblyName System.Speech
+$r = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+$r.SetInputToDefaultAudioDevice()
+$r.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+$r.BabbleTimeout = [TimeSpan]::FromSeconds(1)
+$r.InitialSilenceTimeout = [TimeSpan]::FromSeconds(30)
+$r.EndSilenceTimeout = [TimeSpan]::FromSeconds(0.8)
+$r.EndSilenceTimeoutAmbiguous = [TimeSpan]::FromSeconds(0.5)
+Register-ObjectEvent -InputObject $r -EventName SpeechRecognized -Action {
+  $text = $Event.SourceEventArgs.Result.Text
+  if ($text) { [Console]::WriteLine($text) }
+} | Out-Null
+Register-ObjectEvent -InputObject $r -EventName RecognizeCompleted -Action {
+  [Console]::WriteLine("__COMPLETED__")
+} | Out-Null
+$r.RecognizeAsync([System.Speech.Recognition.RecognizeMode]::Multiple)
+[Console]::WriteLine("__READY__")
+while ($true) { Start-Sleep -Milliseconds 200 }
+`
+
 export class WindowsSttProvider implements ISttProvider {
   readonly name = 'WindowsSpeech'
   private proc: ChildProcess | null = null
+  private contProc: ChildProcess | null = null
+  private contCallback: ((r: SpeechRecognitionResult) => void) | null = null
+  private contError: ((e: Error) => void) | null = null
 
   async recognize(timeoutMs = 12000): Promise<SpeechRecognitionResult> {
     this.abort()
     const timeoutSec = Math.ceil(timeoutMs / 1000)
     return new Promise(resolve => {
       let out = ''
-      this.proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', STT_SCRIPT(timeoutSec)])
+      this.proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', ONE_SHOT_SCRIPT(timeoutSec)])
       this.proc.stdout?.on('data', (d: Buffer) => { out += d.toString() })
       this.proc.on('close', () => {
         this.proc = null
@@ -35,8 +70,47 @@ export class WindowsSttProvider implements ISttProvider {
     })
   }
 
+  startContinuous(onResult: (r: SpeechRecognitionResult) => void, onError?: (e: Error) => void): void {
+    this.stopContinuous()
+    this.contCallback = onResult
+    this.contError = onError ?? null
+
+    this.contProc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', CONTINUOUS_SCRIPT])
+
+    let buf = ''
+    this.contProc.stdout?.on('data', (d: Buffer) => {
+      buf += d.toString()
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const text = line.trim()
+        if (!text || text === '__READY__' || text === '__COMPLETED__') continue
+        this.contCallback?.({ transcript: text })
+      }
+    })
+
+    this.contProc.on('error', (e) => {
+      this.contProc = null
+      this.contError?.(e)
+    })
+
+    this.contProc.on('close', () => {
+      this.contProc = null
+    })
+  }
+
+  stopContinuous(): void {
+    if (this.contProc) {
+      try { this.contProc.kill() } catch { }
+      this.contProc = null
+    }
+    this.contCallback = null
+    this.contError = null
+  }
+
   abort() {
     if (this.proc) { try { this.proc.kill() } catch { } this.proc = null }
+    this.stopContinuous()
   }
 }
 

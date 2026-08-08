@@ -162,6 +162,7 @@ export interface AppSettings {
   wakePhrase: string
   autoSpeakResponses: boolean
   allowBargeIn: boolean
+  conversationWindowSecs: number
   userName: string
 }
 
@@ -280,6 +281,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   wakePhrase: 'hey goga',
   autoSpeakResponses: true,
   allowBargeIn: true,
+  conversationWindowSecs: 45,
   userName: 'Boss'
 }
 

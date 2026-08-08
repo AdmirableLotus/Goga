@@ -18,6 +18,7 @@ const STATE_LABEL: Record<GogaVisualState, string> = {
   success:         'DONE',
   error:           'ERROR',
   stopped:         'STOPPED',
+  wakeDetected:    'AWAKE',
 }
 
 const STATE_COLOR: Record<GogaVisualState, string> = {
@@ -33,6 +34,7 @@ const STATE_COLOR: Record<GogaVisualState, string> = {
   success:         '#00ffcc',
   error:           '#ff2244',
   stopped:         '#443355',
+  wakeDetected:    '#00ffff',
 }
 
 export default function GogaTriangleScene({ compact = false }: { compact?: boolean }) {

@@ -12,6 +12,10 @@ export interface SpeechRecognitionResult {
 export interface ISttProvider {
   /** Listen once, resolve when speech ends or timeout. Returns empty string if no speech. */
   recognize(timeoutMs?: number): Promise<SpeechRecognitionResult>
+  /** Start continuous recognition — calls onResult for each utterance until stopped. */
+  startContinuous(onResult: (r: SpeechRecognitionResult) => void, onError?: (e: Error) => void): void
+  /** Stop continuous recognition. */
+  stopContinuous(): void
   /** Abort any in-progress recognition. */
   abort(): void
   readonly name: string

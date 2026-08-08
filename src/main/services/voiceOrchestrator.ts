@@ -1,18 +1,18 @@
 /**
- * VoiceOrchestrator
+ * VoiceOrchestrator — Phase E.1
  *
- * Manages the full voice lifecycle:
- *   - Wake word detection loop (optional)
- *   - Barge-in: stops TTS, starts STT immediately
- *   - Routes transcript → same chat pipeline as typed input
- *   - Speaks Goga's responses (if autoSpeakResponses)
- *   - Narrates short mission status updates
- *   - Approval detection from voice ("yes"/"no"/"cancel")
+ * New in E.1:
+ *   - Conversation session window: stay awake N seconds after last interaction
+ *   - Self-TTS suppression: reject STT results that match current TTS text
+ *   - allowBargeIn enforcement: when OFF, mic button still works but auto-interrupt blocked
+ *   - Continuous wake loop via startContinuous() — no repeated 4s PS startup cost
+ *   - Mission conversation routing: mid-mission utterances classified before routing
  *
- * SECURITY:
+ * SECURITY (unchanged):
  *   - Only actual STT events are treated as user voice input
  *   - Screen/page text NEVER enters this pipeline
  *   - Voice does NOT bypass AuthorizationService
+ *   - approvalPending gate: voice:approve only fires when action awaiting approval
  */
 
 import { EventEmitter } from 'events'
@@ -24,24 +24,19 @@ import { LogService } from './logs'
 
 export type VoiceStatus =
   | 'idle'
-  | 'wake_listening'   // background wake-word loop
-  | 'listening'        // active STT
-  | 'transcribing'     // processing transcript
-  | 'speaking'         // TTS playing
+  | 'wake_listening'
+  | 'listening'
+  | 'transcribing'
+  | 'speaking'
   | 'disabled'
 
-export interface VoiceOrchestratorEvents {
-  'status': (s: VoiceStatus) => void
-  /** Fired when a transcript is ready — caller routes to chat pipeline */
-  'transcript': (text: string) => void
-  /** Fired when user says a voice approval word while approval is pending */
-  'voice:approve': (approved: boolean) => void
-}
-
-// Words that approve a pending action (only when approval IS pending)
+// Words that approve a pending action — ONLY when approvalPending=true
 const APPROVE_WORDS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|affirmative|absolutely|correct|right)[.!]?$/i
 const REJECT_WORDS  = /^(no|nope|don'?t|cancel|stop|reject|abort|never)[.!]?$/i
 const STOP_WORDS    = /^(stop|halt|cancel|abort|quit)[.!]?$/i
+
+// How long a TTS phrase stays in the suppression window after speaking ends (ms)
+const TTS_SUPPRESS_GRACE_MS = 1500
 
 export class VoiceOrchestrator extends EventEmitter {
   private static instance: VoiceOrchestrator
@@ -55,12 +50,24 @@ export class VoiceOrchestrator extends EventEmitter {
   private approvalPending = false
   private abortWake = false
 
+  // ── Conversation session ──────────────────────────────────────────────────
+  // After wake word or any interaction, stay in active-conversation mode for
+  // conversationWindowSecs. During this window, every utterance is routed
+  // directly without requiring another wake word.
+  private conversationActive = false
+  private conversationTimer: ReturnType<typeof setTimeout> | null = null
+
+  // ── Self-TTS suppression ──────────────────────────────────────────────────
+  // Track what Goga is currently saying so we can reject it if STT picks it up.
+  private currentTtsText = ''
+  private ttsSpeakingUntil = 0   // epoch ms when TTS is expected to finish + grace
+
   static getInstance() {
     if (!VoiceOrchestrator.instance) VoiceOrchestrator.instance = new VoiceOrchestrator()
     return VoiceOrchestrator.instance
   }
 
-  // ── Providers (swappable for Whisper/Piper etc.) ──────────────────────────
+  // ── Providers ─────────────────────────────────────────────────────────────
 
   setSttProvider(p: ISttProvider) { this.stt = p }
   setTtsProvider(p: ITtsProvider) { this.tts = p }
@@ -68,13 +75,33 @@ export class VoiceOrchestrator extends EventEmitter {
   // ── Status ────────────────────────────────────────────────────────────────
 
   getStatus(): VoiceStatus { return this.status }
+  isConversationActive(): boolean { return this.conversationActive }
 
   private setStatus(s: VoiceStatus) {
     this.status = s
     this.emit('status', s)
   }
 
-  // ── Wake word loop ────────────────────────────────────────────────────────
+  // ── Conversation session ──────────────────────────────────────────────────
+
+  private activateConversation() {
+    this.conversationActive = true
+    this.resetConversationTimer()
+    this.emit('conversation:active', true)
+  }
+
+  private resetConversationTimer() {
+    if (this.conversationTimer) clearTimeout(this.conversationTimer)
+    const secs = SettingsService.getInstance().get().conversationWindowSecs ?? 45
+    this.conversationTimer = setTimeout(() => {
+      this.conversationActive = false
+      this.conversationTimer = null
+      this.emit('conversation:active', false)
+      this.log.info('VoiceOrchestrator: conversation window expired, returning to passive mode')
+    }, secs * 1000)
+  }
+
+  // ── Wake word loop (continuous) ───────────────────────────────────────────
 
   startWakeLoop() {
     if (this.wakeLoopActive) return
@@ -83,57 +110,76 @@ export class VoiceOrchestrator extends EventEmitter {
     this.wakeLoopActive = true
     this.abortWake = false
     this.setStatus('wake_listening')
-    this.log.info('VoiceOrchestrator: wake loop started')
-    this.wakeLoop()
+    this.log.info('VoiceOrchestrator: wake loop started (continuous)')
+
+    // Use continuous recognition — no repeated PS startup cost
+    this.stt.startContinuous(
+      (result) => { if (!this.abortWake) this.onContinuousResult(result.transcript) },
+      () => {
+        // Engine died — restart after brief pause if still active
+        if (this.wakeLoopActive && !this.abortWake) {
+          setTimeout(() => { if (this.wakeLoopActive) this.startWakeLoop() }, 1000)
+        }
+      }
+    )
   }
 
   stopWakeLoop() {
     this.abortWake = true
     this.wakeLoopActive = false
+    this.stt.stopContinuous()
     this.stt.abort()
     if (this.status === 'wake_listening') this.setStatus('idle')
+    if (this.conversationTimer) { clearTimeout(this.conversationTimer); this.conversationTimer = null }
+    this.conversationActive = false
     this.log.info('VoiceOrchestrator: wake loop stopped')
   }
 
-  private async wakeLoop() {
+  private onContinuousResult(text: string) {
+    if (!text) return
+    if (this.isSelfTts(text)) {
+      this.log.info(`VoiceOrchestrator: suppressed self-TTS echo: "${text.slice(0, 40)}"`)
+      return
+    }
+
     const settings = SettingsService.getInstance().get()
     const wakePhrase = (settings.wakePhrase ?? 'hey goga').toLowerCase()
+    const lower = text.toLowerCase().trim()
 
-    while (this.wakeLoopActive && !this.abortWake) {
-      try {
-        const result = await this.stt.recognize(4000)
-        if (this.abortWake) break
-        if (!result.transcript) continue
+    if (this.conversationActive) {
+      // Already in conversation — route directly
+      this.handleTranscript(text)
+      return
+    }
 
-        const lower = result.transcript.toLowerCase().trim()
+    // Check for wake word
+    if (lower.includes(wakePhrase) || lower.startsWith('hey goga') || lower.startsWith('goga')) {
+      this.log.info(`VoiceOrchestrator: wake word: "${text}"`)
+      this.emit('status', 'listening')  // quick visual pulse
+      this.activateConversation()
 
-        // Wake word detected
-        if (lower.includes(wakePhrase) || lower.startsWith('hey goga') || lower.startsWith('goga')) {
-          this.log.info(`VoiceOrchestrator: wake word detected: "${result.transcript}"`)
-          // Strip wake phrase from transcript — rest may be the actual command
-          const afterWake = result.transcript.replace(/hey\s+goga[,.]?\s*/i, '').replace(/^goga[,.]?\s*/i, '').trim()
-          if (afterWake.length > 2) {
-            // Inline command: "Hey Goga, open Brave"
-            await this.handleTranscript(afterWake)
-          } else {
-            // Just the wake word — start active listening
-            await this.listenOnce()
-          }
-        }
-      } catch {
-        // STT error — brief pause then retry
-        await new Promise(r => setTimeout(r, 500))
+      const afterWake = text
+        .replace(/hey\s+goga[,.]?\s*/i, '')
+        .replace(/^goga[,.]?\s*/i, '')
+        .trim()
+
+      if (afterWake.length > 2) {
+        this.handleTranscript(afterWake)
+      } else {
+        // Just the wake word — emit wake event for triangle pulse, wait for next utterance
+        this.emit('wake:detected')
       }
     }
+    // Outside conversation window and no wake word — ignore
   }
 
-  // ── Active listening (mic button or post-wake) ────────────────────────────
+  // ── Active listening (mic button) ─────────────────────────────────────────
 
   async listenOnce(): Promise<void> {
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled) return
 
-    // Barge-in: stop any current speech
+    // Barge-in: stop TTS if allowBargeIn is on, or always allow explicit mic press
     if (this.status === 'speaking') {
       this.tts.stop()
     }
@@ -142,6 +188,12 @@ export class VoiceOrchestrator extends EventEmitter {
     try {
       const result = await this.stt.recognize(12000)
       if (!result.transcript) { this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle'); return }
+      if (this.isSelfTts(result.transcript)) {
+        this.log.info(`VoiceOrchestrator: suppressed self-TTS in listenOnce: "${result.transcript.slice(0, 40)}"`)
+        this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+        return
+      }
+      this.activateConversation()
       await this.handleTranscript(result.transcript)
     } catch {
       this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
@@ -153,16 +205,49 @@ export class VoiceOrchestrator extends EventEmitter {
     this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
   }
 
+  // ── Self-TTS suppression ──────────────────────────────────────────────────
+
+  private isSelfTts(transcript: string): boolean {
+    if (!this.currentTtsText) return false
+    if (Date.now() > this.ttsSpeakingUntil) return false
+
+    const t = transcript.toLowerCase().trim()
+    const s = this.currentTtsText.toLowerCase().trim()
+
+    // Exact or near-exact match (STT may drop words)
+    if (s.includes(t) || t.includes(s.slice(0, Math.min(s.length, 20)))) return true
+
+    // Word overlap > 60%
+    const tWords = new Set(t.split(/\s+/))
+    const sWords = s.split(/\s+/)
+    const overlap = sWords.filter(w => tWords.has(w)).length
+    return sWords.length > 0 && overlap / sWords.length > 0.6
+  }
+
+  private markTtsSpeaking(text: string, estimatedDurationMs: number) {
+    this.currentTtsText = text
+    this.ttsSpeakingUntil = Date.now() + estimatedDurationMs + TTS_SUPPRESS_GRACE_MS
+  }
+
+  private clearTtsSuppression() {
+    // Keep suppression active for grace period after TTS ends
+    setTimeout(() => {
+      this.currentTtsText = ''
+      this.ttsSpeakingUntil = 0
+    }, TTS_SUPPRESS_GRACE_MS)
+  }
+
   // ── Transcript routing ────────────────────────────────────────────────────
 
-  private async handleTranscript(text: string) {
+  async handleTranscript(text: string) {
     this.setStatus('transcribing')
+    this.resetConversationTimer()
     this.log.info(`VoiceOrchestrator: transcript: "${text.slice(0, 80)}"`)
 
     // Stop word — cancel speech + mission
     if (STOP_WORDS.test(text.trim())) {
       this.tts.stop()
-      this.emit('transcript', text)   // let chat pipeline handle stop
+      this.emit('transcript', text)
       this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
       return
     }
@@ -181,6 +266,12 @@ export class VoiceOrchestrator extends EventEmitter {
       }
     }
 
+    // Barge-in: if Goga is speaking and allowBargeIn is on, stop TTS
+    const settings = SettingsService.getInstance().get()
+    if (this.status === 'speaking' && settings.allowBargeIn) {
+      this.tts.stop()
+    }
+
     // Normal transcript → chat pipeline
     this.emit('transcript', text)
     this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
@@ -192,37 +283,47 @@ export class VoiceOrchestrator extends EventEmitter {
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled || !settings.autoSpeakResponses) return
 
-    // Strip markdown, JSON, selectors, coordinates — never read technical content aloud
     const clean = this.cleanForSpeech(text)
     if (!clean) return
 
+    // Estimate duration: ~130 words/min at rate 1.0, adjusted by voiceRate
+    const words = clean.split(/\s+/).length
+    const wpm = 130 * (settings.voiceRate ?? 1.0)
+    const estimatedMs = (words / wpm) * 60000
+
+    this.markTtsSpeaking(clean, estimatedMs)
     this.setStatus('speaking')
     try {
       await this.tts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName)
-    } catch { /* ignore — user may have stopped */ }
+    } catch { }
     finally {
+      this.clearTtsSuppression()
       this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
     }
   }
 
   stopSpeaking() {
     this.tts.stop()
+    this.clearTtsSuppression()
     this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
   }
 
-  /** Short mission narration — strips all technical content */
   async narrate(text: string): Promise<void> {
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled || !settings.autoSpeakResponses) return
     const clean = this.cleanForSpeech(text)
     if (!clean || clean.length < 4) return
-    // Don't interrupt user listening
     if (this.status === 'listening' || this.status === 'transcribing') return
+
+    const words = clean.split(/\s+/).length
+    const wpm = 130 * (settings.voiceRate ?? 1.0)
+    this.markTtsSpeaking(clean, (words / wpm) * 60000)
     this.setStatus('speaking')
     try {
       await this.tts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName)
     } catch { }
     finally {
+      this.clearTtsSuppression()
       if (this.status === 'speaking') this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
     }
   }
@@ -233,22 +334,22 @@ export class VoiceOrchestrator extends EventEmitter {
     this.approvalPending = pending
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Speech cleaning ───────────────────────────────────────────────────────
 
-  private cleanForSpeech(text: string): string {
+  cleanForSpeech(text: string): string {
     return text
-      .replace(/```[\s\S]*?```/g, '')          // code blocks
-      .replace(/`[^`]+`/g, '')                  // inline code
-      .replace(/\*\*/g, '').replace(/\*/g, '')  // bold/italic
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`[^`]+`/g, '')
+      .replace(/\*\*/g, '').replace(/\*/g, '')
       .replace(/__/g, '')
-      .replace(/\[UNTRUSTED_DATA[^\]]*\][\s\S]*?\[\/UNTRUSTED_DATA[^\]]*\]/g, '') // injection guard blocks
-      .replace(/\{[\s\S]{0,300}\}/g, '')        // JSON objects
-      .replace(/https?:\/\/\S+/g, '')           // URLs
-      .replace(/[#>\-]{2,}/g, '')               // markdown headers/lists
-      .replace(/\d+,\d+/g, '')                  // coordinates
+      .replace(/\[UNTRUSTED_DATA[^\]]*\][\s\S]*?\[\/UNTRUSTED_DATA[^\]]*\]/g, '')
+      .replace(/\{[\s\S]{0,300}\}/g, '')
+      .replace(/https?:\/\/\S+/g, '')
+      .replace(/[#>\-]{2,}/g, '')
+      .replace(/\d+,\d+/g, '')
       .replace(/\s{2,}/g, ' ')
       .trim()
-      .slice(0, 400)                            // max 400 chars spoken
+      .slice(0, 400)
   }
 
   async getVoices(): Promise<string[]> {
