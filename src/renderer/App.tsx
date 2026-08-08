@@ -6,13 +6,15 @@ import MemoryPage from './pages/MemoryPage'
 import LibraryPage from './pages/LibraryPage'
 import SettingsPage from './pages/SettingsPage'
 import SecurityPage from './pages/SecurityPage'
+import MissionPage from './pages/MissionPage'
 import StopButton from './components/StopButton'
 import { GogaVisualProvider } from './context/GogaVisualContext'
 
-type Tab = 'chat' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
+type Tab = 'chat' | 'mission' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'chat',      label: '💬 Chat' },
+  { id: 'mission',   label: '⚡ Mission' },
   { id: 'activity',  label: '📋 Activity' },
   { id: 'approvals', label: '✅ Approvals' },
   { id: 'memory',    label: '🧠 Memory' },
@@ -48,6 +50,7 @@ export default function App() {
           {tab === 'approvals' && <ApprovalsPage />}
           {tab === 'memory'    && <MemoryPage />}
           {tab === 'library'   && <LibraryPage />}
+          {tab === 'mission'   && <MissionPage />}
           {tab === 'security'  && <SecurityPage />}
           {tab === 'settings'  && <SettingsPage />}
         </main>
