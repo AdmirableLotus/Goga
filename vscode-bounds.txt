@@ -1,0 +1,2 @@
+name=Welcome - Goga - Visual Studio Code x=948 y=0 w=979 h=1039 IsInf=False
+name=deploy-inspect.txt - original reaper coin creations - Visual Studio Code x=Infinity y=Infinity w=-Infinity h=-Infinity IsInf=True

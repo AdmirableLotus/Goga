@@ -1,0 +1,15 @@
+﻿At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169240652-ns9w5lzyfy.ps1:24 char:131
++ ... ystem.Windows.Automation.ValuePattern]::ValueProperty) } catch { '' }
++                                                                          ~
+The hash literal was incomplete.
+At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169240652-ns9w5lzyfy.ps1:25 char:11
++           enabled      = $el.Current.IsEnabled
++           ~~~~~~~
+Unexpected token 'enabled' in expression or statement.
+At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169240652-ns9w5lzyfy.ps1:35 char:7
++       }
++       ~
+Unexpected token '}' in expression or statement.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : IncompleteHashLiteral
+ 

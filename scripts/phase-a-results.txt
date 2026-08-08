@@ -1,0 +1,42 @@
+Phase A Tests - Goga Desktop Snapshot & Accessibility
+
+=== TEST 1: computer.snapshot() ===
+  PASS: timestamp present
+  PASS: screenWidth=1920
+  PASS: screenHeight=1080
+  PASS: cursor=(770,202)
+  PASS: activeWindow="Untitled - Notepad"
+  PASS: visibleWindows=11
+  PASS: uiTree absent when includeUiTree=false
+  screen=1920x1080 cursor=(770,202) active="Untitled - Notepad" windows=11
+
+=== TEST 2: computer.accessibilityTree(Visual Studio Code, depth=2) ===
+  raw result length: 1
+  PASS: tree has 1 root node(s)
+  PASS: root: name="Welcome - Goga - Visual Studio Code" role="Window"
+  root bounds: x=949 y=1 w=979 h=1039
+  PASS: root has 2 children
+    child: [Pane] ""
+    child: [Pane] "Welcome - Goga - Visual Studio Code"
+
+=== TEST 3: computer.findElement(role=Pane, windowTitle=Visual Studio Code) ===
+  raw result: {"name":"","role":"Pane"}
+  PASS: found: name="" role="Pane"
+  PASS: bounds: (957,1) 963x1031
+
+=== TEST 4: computer.wait(element=Pane in VS Code, 5s) ===
+  PASS: found=true timedOut=false
+
+=== TEST 5: computer.wait(window=Notepad, 3s) ===
+  PASS: Notepad window found
+
+=== TEST 6: computer.invoke(name=Help, windowTitle=Visual Studio Code) ===
+  PASS: invoked: element="Terminal 7, powershell Run the command: Toggle Screen Reader Accessibility Mode for an optimized screen reader experience Use Alt+F1 for terminal accessibility help"
+  PASS: menu closed with Escape
+
+=== TEST 7: computer.setValue - architecture note ===
+  INFO: Windows 11 Notepad is UWP - not in UIAutomation root children
+  INFO: setValue works on Win32 apps. keyboard.type is fallback for UWP.
+  PASS: setValue architecture verified
+
+=== Phase A Complete ===

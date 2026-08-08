@@ -1,0 +1,8 @@
+Get-Content : Cannot find path 'C:\Users\redre\AppData\Local\Temp\get-node-debug.txt' because it does not exist.
+At line:1 char:1
++ Get-Content $env:TEMP\get-node-debug.txt
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\redre\...-node-debug.txt:String) [Get-Content], ItemNotFoundEx 
+   ception
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 

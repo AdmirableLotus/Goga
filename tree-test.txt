@@ -1,0 +1,29 @@
+Cannot convert value "NaN" to type "System.Int32". Error: "Value was either too large or too small for an Int32."
+At line:1 char:479
++ ... gRectangle; $node=[PSCustomObject]@{automationId=$el.Current.Automati ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+ 
+The property 'children' cannot be found on this object. Verify that the property exists and can be set.
+At line:1 char:1001
++ ... =Get-Node $kid ($depth+1); if($child){ $node.children+=$child } }; re ...
++                                            ~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : PropertyNotFound
+ 
+Cannot convert value "NaN" to type "System.Int32". Error: "Value was either too large or too small for an Int32."
+At line:1 char:479
++ ... gRectangle; $node=[PSCustomObject]@{automationId=$el.Current.Automati ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+ 
+Cannot convert value "NaN" to type "System.Int32". Error: "Value was either too large or too small for an Int32."
+At line:1 char:479
++ ... gRectangle; $node=[PSCustomObject]@{automationId=$el.Current.Automati ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+ 
+empty

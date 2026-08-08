@@ -1,0 +1,31 @@
+Phase B Tests - FocusManager
+
+=== TEST 1: getFocusState() ===
+  PASS: activeWindow="Untitled - Notepad"
+  PASS: pid=26384
+  PASS: focusedEl="Text editor" role="Document"
+
+=== TEST 2: focusWindow(Visual Studio Code) ===
+  PASS: action="focused" verified="Welcome - Goga - Visual Studio Code"
+  PASS: verified active window matches VS Code
+
+=== TEST 3: ensureFocus(VS Code) after drift to Notepad ===
+  drifted to: "Untitled - Notepad"
+  PASS: recovered: action="focused" verified="Welcome - Goga - Visual Studio Code"
+  PASS: verified VS Code is active after recovery
+
+=== TEST 4: focusElement(role=Pane, VS Code) ===
+  PASS: action="focused" focusedEl="n/a" window="Welcome - Goga - Visual Studio Code"
+
+=== TEST 5: focusWindow(DOES_NOT_EXIST) — clean failure ===
+  PASS: success=false action="failed" error="Window not found: {"title":"DOES_NOT_EXIST_XYZ_GOGA_TEST"}"
+  PASS: action=failed
+
+=== TEST 6: focusWindow handles minimized window ===
+  PASS: action="focused" verified="Untitled - Notepad"
+
+=== TEST 7: ensureFocus on missing window — bounded retries ===
+  PASS: failed cleanly in 743ms
+  PASS: elapsed 743ms < 5000ms — retries are bounded
+
+=== Phase B Complete ===

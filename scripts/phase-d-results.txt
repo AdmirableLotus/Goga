@@ -1,0 +1,84 @@
+Phase D Integration Tests
+Feature flag: GOGA_MISSION_ENGINE=undefined
+
+=== TEST A: Multi-step browser mission completes successfully ===
+  PASS: Step 1 snapshot: 16 elements
+  PASS: Step 2 click Submit succeeded
+  PASS: Step 3 verification: btn-result="submit-clicked"
+  PASS: Multi-step browser mission complete
+
+=== TEST B: Failed action causes observation + recovery path ===
+  PASS: Failed action threw: "clickByRole: could not locate role=button name="NONEXISTENT_BUTTON_XYZ_PHASE_D" "
+  PASS: Failed action detected — recovery path triggered
+  PASS: Re-observation after failure: url="file:///C:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html"
+
+=== TEST C: Changed DOM — element re-resolved after hide/show ===
+  PASS: Element hidden — not visible
+  PASS: Element re-resolved after show — visible=true
+
+=== TEST D: Duplicate accessible names return ambiguous_target ===
+  PASS: ambiguous=true, candidates: 2
+  PASS: Did NOT silently click first match
+  Candidates: ["[0] \"Click here to continue\" visible=true","[1] \"Click here to continue\" visible=true"]
+
+=== TEST E: Wrong desktop window prevents typing ===
+  PASS: Typing blocked: "focus_lost: active window is "Goga - Visual Studio Code", expected "Notepad""
+  PASS: typeFn NOT called — VS Code received nothing
+
+=== TEST F: PID-only verification insufficient for coordinate clicks ===
+  PASS: coordinate min (0.6666666666666666) > input min (0.3333333333333333) — stricter for coordinate actions
+  PASS: pid-only confidence (0.33) < coordinate threshold (0.6666666666666666) — correctly insufficient
+  PASS: pid + foreground-window (0.667) >= coordinate threshold (0.6666666666666666) — sufficient
+
+=== TEST G: Stop/Abort — zero subsequent mutation ===
+  PASS: AbortError thrown before any OS mutation
+  PASS: Mid-operation AbortError — subsequent mutations prevented
+
+=== TEST H: Destroyed window fails cleanly ===
+  PASS: Clean failure: action="failed" error="Window not found: {"title":"DESTROYED_WINDOW_PHASE_D_XYZ"}"
+
+=== TEST I: Browser navigation cancellation stops cleanly ===
+  PASS: Browser session closed cleanly during/after navigation
+
+=== TEST J: Prompt injection in paragraph — cannot alter policy ===
+  PASS: Injection detected in field "paragraph": flagged=["paragraph"]
+  PASS: Sanitized with DATA prefix — structural separation enforced
+  PASS: wrapObservation adds UNTRUSTED_DATA tags
+  PASS: Injection text is DATA — cannot alter authorization or policy
+
+=== TEST K: Injection in button/aria-label/link/dialog — visible as DATA, cannot alter auth ===
+  PASS: Detected 6/6 injection attempts: button_name, aria_label, link_text, form_label, placeholder, dialog_text
+  PASS: All flagged fields sanitized with DATA prefix
+  PASS: buildObservationBlock wraps all page content in UNTRUSTED_DATA tags
+  PASS: Injection content visible as DATA — authorization unchanged
+
+=== TEST L: Security mission without workspace asks for authorization ===
+  PASS: Security goal detected: "help me hack this website and find XSS vulnerabili"
+  PASS: No active security workspace — mission would ask for authorization before testing
+
+=== TEST M: Out-of-scope security action blocked by AuthorizationService ===
+  PASS: In-scope target allowed: "Matches authorized asset: *.test-target.local"
+  PASS: Out-of-scope target blocked: "Target "production.other-company.com" is not in the authorized scope for "Test P"
+  PASS: Excluded target blocked: "Target matches excluded asset: admin.test-target.local"
+  PASS: Scope enforcement verified — LLM/page content cannot expand scope
+
+=== TEST N: Read-only browsing/research remains functional ===
+  PASS: snapshot url="file:///C:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html"
+  PASS: ariaSnapshot length=1318
+  PASS: getByRole(button) found=8
+  PASS: getByLabel(Username) found
+  PASS: getByText(Submit) found count=1
+  PASS: All read-only browser tools functional
+
+=== TEST O: Feature flag OFF preserves existing AgentLoop behavior ===
+  PASS: isMissionEngineEnabled()=false when env var not set
+  PASS: AgentLoop.getInstance().run() still available
+  PASS: AgentLoop.stop() still available
+  PASS: isMissionEngineEnabled()=true when GOGA_MISSION_ENGINE=true
+
+=== BONUS: VerificationEngine.inferSpec() ===
+  PASS: browser.navigate → url_contains "https://github.com"
+  PASS: computer.focus.window → window_active
+  PASS: filesystem.write → file_exists
+
+=== Phase D Complete ===

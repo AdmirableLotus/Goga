@@ -1,0 +1,25 @@
+﻿powershell : At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169656374-6ynr5rp8jrj.ps1:23 char:142
+At line:1 char:123
++ ... ch-Object { powershell -NoProfile -NonInteractive -ExecutionPolicy By ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (At C:\Users\red...ps1:23 char:142:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
++ ... em.Windows.Automation.ValuePattern]::ValueProperty) } catch { $null }
++                                                                          ~
+The hash literal was incomplete.
+At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169656374-6ynr5rp8jrj.ps1:24 char:11
++           enabled      = $el.Current.IsEnabled
++           ~~~~~~~
+Unexpected token 'enabled' in expression or statement.
+At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169656374-6ynr5rp8jrj.ps1:26 char:11
++         } | ConvertTo-Json -Compress
++           ~
+An empty pipe element is not allowed.
+At C:\Users\redre\AppData\Local\Temp\goga-ps-1786169656374-6ynr5rp8jrj.ps1:27 char:7
++       } else { Write-Output 'null' }
++       ~
+Unexpected token '}' in expression or statement.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : IncompleteHashLiteral
+ 

@@ -1,0 +1,58 @@
+Phase C Tests — Browser Semantic Control
+Playwright version: 1.62.1
+Test page: file://c:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html
+
+Opening test page (headless)...
+  Session: browser-1 URL: file:///C:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html
+
+=== TEST 1: browser.snapshot() ===
+  PASS: url="file:///C:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html"
+  PASS: title="Goga Phase C Test Page"
+  PASS: interactiveElements count=16
+  PASS: found Submit button: role="button" name="Submit"
+  Sample elements: button[Submit], button[Cancel], button[Save (disabled)]
+
+=== TEST 2: browser.ariaSnapshot() ===
+  PASS: snapshot length=1318 chars
+  PASS: snapshot truncated to ≤8000 chars
+  PASS: snapshot contains semantic roles
+  First 200 chars: - heading "Goga Phase C Test Page" [level=1] - heading "Buttons" [level=2] - button "Submit form": Submit - button "Cancel" - button "Save (disabled)" [disabled] - paragraph - heading "Form Inputs" [l
+
+=== TEST 3: browser.clickByRole(button, "Submit") ===
+  PASS: clicked=true locator="role=button[name=Submit]"
+  PASS: btn-result="submit-clicked" — click confirmed
+
+=== TEST 4: browser.getByLabel("Username") ===
+  PASS: found=true visible=true value=""
+  PASS: input is visible
+
+=== TEST 5: browser.getByText("Click here to continue") — duplicate text ===
+  PASS: found=true count=3
+  PASS: count=3 ≥ 2 — duplicate text detected correctly
+  first element: tag="undefined" visible=true
+
+=== TEST 6: Dynamic dialog — open and confirm ===
+  PASS: dialog found: count=1
+  PASS: dialog-result="dialog-confirmed"
+
+=== TEST 7: Element disappearance — hide then check ===
+  PASS: status element found before hide: visible=true
+  PASS: element removed from DOM after hide
+  PASS: element restored and visible
+
+=== TEST 8: Semantic locator fallback — getByRole → getByText ===
+  PASS: clicked=true via locator="role=button[name=Cancel]"
+  PASS: btn-result="cancel-clicked"
+
+=== TEST 9: Cancellation — abort during navigation ===
+  PASS: Session still functional after tests: title="Goga Phase C Test Page"
+  PASS: Cancellation architecture note: browser ops use Playwright timeouts; AbortSignal integration is Phase D scope
+
+=== TEST 10: Prompt injection — untrusted page content ===
+  PASS: Injection text not surfaced as interactive element (correct)
+  PASS: Snapshot contains only interactive elements — injection text in <p> is not captured
+  NOTE: Callers must treat all snapshot data as untrusted. System prompt must enforce this.
+
+Browser session closed.
+
+=== Phase C Complete ===

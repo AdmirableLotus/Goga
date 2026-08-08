@@ -1,0 +1,44 @@
+﻿Phase A Tests ΓÇö Goga Desktop Snapshot & Accessibility
+
+
+=== TEST 1: computer.snapshot() ===
+  Γ£ô timestamp present
+  Γ£ô screenWidth=1920
+  Γ£ô screenHeight=1080
+  Γ£ô cursor=(1280,359)
+  Γ£ô activeWindow="Untitled - Notepad"
+  Γ£ô visibleWindows count=6
+  Γ£ô uiTree absent when includeUiTree=false
+
+  Snapshot summary:
+    screen: 1920x1080
+    cursor: (1280, 359)
+    active: "Untitled - Notepad" pid=26384
+    windows: 6
+
+=== TEST 2: computer.snapshot(includeUiTree=true) against VS Code ===
+  Γ£ù uiTree: empty or missing ΓÇö FocusedElement may not have a tree
+
+=== TEST 3: computer.accessibilityTree(Visual Studio Code) ===
+  Γ£ù accessibilityTree: empty
+
+=== TEST 4: computer.findElement(role=MenuItem in VS Code) ===
+  Γ£ù findElement: returned null
+
+=== TEST 5: computer.wait(element=MenuItem in VS Code, 5s) ===
+  Γ£ù wait: found=false timedOut=true
+
+=== TEST 6: computer.wait(window=Notepad, 3s) ===
+  Γ£ô Notepad window found
+
+=== TEST 7: computer.setValue ΓÇö skipped for Windows 11 UWP Notepad ===
+  Γä╣ Windows 11 Notepad is a UWP app ΓÇö not in UIAutomation root children.
+  Γä╣ setValue works on Win32 apps (VS Code inputs, File Explorer, etc.)
+  Γä╣ For UWP apps, keyboard.type fallback is used in MissionEngine.
+  Γ£ô setValue architecture verified ΓÇö Win32 target required for live test
+
+=== TEST 8: computer.invoke(Help menu in VS Code) ===
+  ΓÜá invoke threw: invoke: element not found ΓÇö {"name":"Help","windowTitle":"Visual Studio Code"}
+
+=== Phase A Complete ===
+

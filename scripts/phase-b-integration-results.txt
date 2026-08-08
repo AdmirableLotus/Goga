@@ -1,0 +1,32 @@
+Phase B Integration Tests
+
+=== TEST A: focusGuardedType — correct window allows typing ===
+  PASS: allowed=true, typeFn executed=true
+  PASS: typeFn was called (correct window)
+
+=== TEST B: focusGuardedType — wrong window blocks typing ===
+  PASS: blocked: reason="focus_lost: active window is "● COMMIT_EDITMSG - Goga - Visual Studio Code", expected "Notepad""
+  PASS: typeFn was NOT called (correct — wrong window active)
+
+=== TEST C: Abort during retry — zero subsequent OS mutation ===
+  PASS: AbortError thrown immediately — no OS mutations possible after abort
+  PASS: Mid-operation abort threw AbortError — subsequent mutations prevented
+
+=== TEST D: Destroyed window fails cleanly ===
+  PASS: success=false action="failed" error="Window not found: {"title":"DESTROYED_WINDOW_XYZ_GOGA_TEST_99"}"
+  PASS: action=failed (clean failure, no exception)
+
+=== TEST E: verifyCoordinates re-reads bounds after focus ===
+  Notepad bounds: (26,26) 1440x753
+  PASS: center (746,402) inside bounds — safe=true
+  PASS: (1666,979) outside bounds — safe=false: Coordinates (1666,979) outside window bounds (26,26,1440x753)
+
+=== TEST F: Duplicate window titles — pid resolves correctly ===
+  Targeting: pid=21256 title="? COMMIT_EDITMSG - Goga - Visual Studio Code"
+  PASS: pid-based focus succeeded: verified="● COMMIT_EDITMSG - Goga - Visual Studio Code" verifiedBy=["pid-match"]
+  PASS: verifiedBy includes pid-match (stronger than title-only)
+  title-only confidence=0.00 verifiedBy=[]
+  pid confidence=0.33 verifiedBy=["pid-match"]
+  PASS: Dual-identity comparison complete — pid provides equal or stronger identity
+
+=== Phase B Integration Complete ===

@@ -1,0 +1,3 @@
+remaining-empty:2 null-catches:0
+L375:"          value        = try { $el.GetCurrentPropertyValue([System.Windows.Automation.ValuePattern]::ValueProperty) } catch { '' }\r"
+L460:"          value        = try { $el.GetCurrentPropertyValue([System.Windows.Automation.ValuePattern]::ValueProperty) } catch { '' }\r"
