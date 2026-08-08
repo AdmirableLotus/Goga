@@ -52,6 +52,8 @@ export interface MainHandlers {
   'tts:speak': (text: string) => Promise<void>
   'tts:stop': () => Promise<void>
   'tts:voices': () => Promise<string[]>
+  'stt:start': () => Promise<{ transcript: string }>
+  'stt:stop': () => Promise<void>
 
   // Library
   'library:ingest': (filePath: string) => Promise<import('./types').BookMeta>
