@@ -343,15 +343,46 @@ export class MissionEngine extends EventEmitter {
         const verSpec = this.verifier.inferSpec(plan.tool, plan.args, activeBrowserSession)
         const verResult = await this.verifier.verify(verSpec, signal)
 
-        const stepSucceeded = result.success &&
-          (verResult.outcome === 'passed' || verResult.outcome === 'inconclusive')
+        // PASSED = verified success. INCONCLUSIVE = re-observe/replan, never silent success.
+        // FAILED = action failed or verification explicitly failed.
+        const stepPassed = result.success && verResult.outcome === 'passed'
+        const stepInconclusive = result.success && verResult.outcome === 'inconclusive'
 
-        if (stepSucceeded) {
-          step.verificationPassed = verResult.outcome === 'passed'
+        if (stepPassed) {
+          step.verificationPassed = true
           this.setStepStatus(mission, step, 'succeeded')
           this.emit('mission:event', this.event('step.succeeded', mission.id, step.id,
             { verMethod: verResult.method, verDetail: verResult.detail.slice(0, 80) }))
           replanCount = 0
+          this.setMissionStatus(mission, 'running')
+        } else if (stepInconclusive) {
+          // Re-observe and replan — do NOT count as success or failure yet
+          step.retryCount++
+          this.setMissionStatus(mission, 'recovering')
+          this.emit('mission:event', this.event('step.retrying', mission.id, step.id,
+            { attempt: step.retryCount }))
+          mission.observations.push({
+            ...obs,
+            lastActionResult: `INCONCLUSIVE: ${verResult.detail} — re-observing`,
+            verificationResult: 'inconclusive'
+          })
+          this.emit('mission:event', this.event('mission.replanning', mission.id))
+          if (step.retryCount >= step.maxRetries) {
+            // Exhausted retries on inconclusive — treat as failed
+            this.setStepStatus(mission, step, 'failed',
+              `Verification inconclusive after ${step.maxRetries} attempts: ${verResult.detail}`)
+            replanCount++
+            if (replanCount >= MAX_REPLANS) {
+              this.finishMission(mission, 'failed', undefined,
+                `Step inconclusive after ${step.maxRetries} retries: ${verResult.detail}`)
+              return
+            }
+          } else {
+            this.setStepStatus(mission, step, 'retrying')
+            stepIndex-- // re-observe same step
+            mission.steps.pop()
+            mission.currentStepId = undefined
+          }
           this.setMissionStatus(mission, 'running')
         } else {
           // ── RECOVER ──────────────────────────────────────────────────────
@@ -364,7 +395,6 @@ export class MissionEngine extends EventEmitter {
             this.setStepStatus(mission, step, 'retrying')
             this.emit('mission:event', this.event('step.retrying', mission.id, step.id,
               { attempt: step.retryCount }))
-            // Re-observe and replan from new state
             mission.observations.push({
               ...obs,
               lastActionResult: `FAILED: ${result.error ?? 'unknown'} | verify: ${verResult.detail}`,
@@ -372,8 +402,8 @@ export class MissionEngine extends EventEmitter {
             })
             this.emit('mission:event', this.event('mission.replanning', mission.id))
             replanCount++
-            stepIndex-- // retry this step index
-            mission.steps.pop() // remove failed step, will re-plan
+            stepIndex--
+            mission.steps.pop()
             mission.currentStepId = undefined
           } else {
             this.setStepStatus(mission, step, 'failed',
@@ -384,7 +414,6 @@ export class MissionEngine extends EventEmitter {
                 `Step failed after ${step.maxRetries} retries: ${result.error ?? verResult.detail}`)
               return
             }
-            // Replan from failure
             mission.observations.push({
               ...obs,
               lastActionResult: `FAILED_FINAL: ${result.error ?? verResult.detail}`,

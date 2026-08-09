@@ -105,6 +105,7 @@ export interface RendererEvents {
   // Voice
   'voice:status': { status: import('../main/services/voiceOrchestrator').VoiceStatus }
   'voice:transcript': { text: string }
+  'voice:amplitude': { value: number }
 }
 
 export type MainChannel = keyof MainHandlers

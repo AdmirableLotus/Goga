@@ -42,7 +42,7 @@ export default function ChatPage() {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle')
   const bottomRef      = useRef<HTMLDivElement>(null)
   const stepsBottomRef = useRef<HTMLDivElement>(null)
-  const { setVisualState } = useGogaVisual()
+  const { setVisualState, setAudioAmplitude } = useGogaVisual()
 
   const inConversation = hasConversation(messages)
 
@@ -101,6 +101,9 @@ export default function ChatPage() {
         setAgentSteps([])
         setStreamingText('')
         setVisualState('thinking')
+      }),
+      window.goga.on('voice:amplitude', ({ value }) => {
+        setAudioAmplitude(value)
       }),
     ]
     return () => unsubs.forEach(u => u())

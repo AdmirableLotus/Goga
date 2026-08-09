@@ -19,6 +19,11 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     getWindow()?.webContents.send('voice:status', { status: 'listening' })
   })
 
+  // ── TTS amplitude → renderer ──────────────────────────────────────────────
+  voice.on('amplitude', (value: number) => {
+    getWindow()?.webContents.send('voice:amplitude', { value })
+  })
+
   // ── Transcript → conversation pipeline ───────────────────────────────────
   voice.on('transcript', async (text: string) => {
     const win = getWindow()

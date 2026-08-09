@@ -312,17 +312,24 @@ export class VoiceOrchestrator extends EventEmitter {
     const clean = this.cleanForSpeech(text)
     if (!clean) return
 
-    // Estimate duration: ~130 words/min at rate 1.0, adjusted by voiceRate
     const words = clean.split(/\s+/).length
     const wpm = 130 * (settings.voiceRate ?? 1.0)
     const estimatedMs = (words / wpm) * 60000
 
     this.markTtsSpeaking(clean, estimatedMs)
     this.setStatus('speaking')
+
+    // Hook amplitude from TTS provider
+    const prevAmp = (this.tts as { onAmplitude?: (v: number) => void }).onAmplitude
+    ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = (v: number) => {
+      this.emit('amplitude', v)
+    }
     try {
       await this.tts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName)
     } catch { }
     finally {
+      ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = prevAmp
+      this.emit('amplitude', 0)
       this.clearTtsSuppression()
       this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
     }
@@ -345,10 +352,16 @@ export class VoiceOrchestrator extends EventEmitter {
     const wpm = 130 * (settings.voiceRate ?? 1.0)
     this.markTtsSpeaking(clean, (words / wpm) * 60000)
     this.setStatus('speaking')
+    const prevAmp = (this.tts as { onAmplitude?: (v: number) => void }).onAmplitude
+    ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = (v: number) => {
+      this.emit('amplitude', v)
+    }
     try {
       await this.tts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName)
     } catch { }
     finally {
+      ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = prevAmp
+      this.emit('amplitude', 0)
       this.clearTtsSuppression()
       if (this.status === 'speaking') this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
     }

@@ -123,30 +123,100 @@ function psEscape(text: string) {
 export class WindowsTtsProvider implements ITtsProvider {
   readonly name = 'WindowsSpeech'
   private proc: ChildProcess | null = null
+  onAmplitude?: (amp: number) => void
 
   speak(text: string, rate: number, volume: number, voiceName: string): Promise<void> {
     this.stop()
-    const rateVal = Math.round((rate - 1) * 5)
-    const volVal  = Math.round(volume * 100)
+    const rateVal  = Math.round((rate - 1) * 5)
+    const volVal   = Math.round(volume * 100)
     const voiceLine = voiceName ? `$s.SelectVoice('${psEscape(voiceName)}')` : ''
-    const script = [
-      `$s = New-Object System.Speech.Synthesis.SpeechSynthesizer`,
-      voiceLine,
-      `$s.Rate = ${rateVal}`,
-      `$s.Volume = ${volVal}`,
-      `$s.Speak('${psEscape(text)}')`,
-      `$s.Dispose()`
-    ].filter(Boolean).join('; ')
+    const escaped  = psEscape(text)
 
+    // Write WAV to temp file, play it back with SoundPlayer, stream RMS amplitude
+    // chunks to stdout as "AMP:<0.0-1.0>" lines during playback.
+    const script = `
+Add-Type -AssemblyName System.Speech
+Add-Type -AssemblyName System.Windows.Forms
+$tmp = [System.IO.Path]::GetTempFileName() + '.wav'
+try {
+  $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  ${voiceLine}
+  $s.Rate = ${rateVal}
+  $s.Volume = ${volVal}
+  $s.SetOutputToWaveFile($tmp)
+  $s.Speak('${escaped}')
+  $s.SetOutputToDefaultAudioDevice()
+  $s.Dispose()
+
+  if (-not (Test-Path $tmp)) { exit 0 }
+  $bytes = [System.IO.File]::ReadAllBytes($tmp)
+  $dataStart = 44
+  $dataLen = $bytes.Length - $dataStart
+  if ($dataLen -le 0) { exit 0 }
+
+  # Parse actual sample rate from WAV header (bytes 24-27, little-endian)
+  $sampleRate = [int]$bytes[24] -bor ([int]$bytes[25] -shl 8) -bor ([int]$bytes[26] -shl 16) -bor ([int]$bytes[27] -shl 24)
+  if ($sampleRate -le 0) { $sampleRate = 22050 }
+  $bytesPerSec = $sampleRate * 2  # 16-bit mono
+  $chunksPerSec = 30
+  $chunkBytes = [Math]::Max(2, [int]($bytesPerSec / $chunksPerSec))
+  $totalChunks = [int]($dataLen / $chunkBytes)
+  $msPerChunk = [int](1000.0 / $chunksPerSec)
+
+  # Start playback in background job
+  $player = New-Object System.Media.SoundPlayer($tmp)
+  $player.Play()
+
+  # Stream amplitude synchronized with playback
+  for ($c = 0; $c -lt $totalChunks; $c++) {
+    $start = $dataStart + $c * $chunkBytes
+    $end = [Math]::Min($start + $chunkBytes, $bytes.Length - 1)
+    $sumSq = 0.0; $n = 0
+    for ($b = $start; $b -lt $end; $b += 2) {
+      $lo = [int]$bytes[$b]; $hi = [int]$bytes[$b + 1]
+      $sample = [int16]($lo -bor ($hi -shl 8))
+      $norm = [double]$sample / 32768.0
+      $sumSq += $norm * $norm; $n++
+    }
+    $rms = if ($n -gt 0) { [Math]::Sqrt($sumSq / $n) } else { 0.0 }
+    [Console]::WriteLine('AMP:' + $rms.ToString('F4'))
+    Start-Sleep -Milliseconds $msPerChunk
+  }
+  [Console]::WriteLine('AMP:0.0000')
+  $player.Stop()
+  $player.Dispose()
+} finally {
+  Start-Sleep -Milliseconds 200
+  try { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } catch {}
+}
+`
     return new Promise((resolve, reject) => {
-      this.proc = spawn('powershell', ['-NoProfile', '-Command', script], { windowsHide: true })
-      this.proc.on('close', code => { this.proc = null; code === 0 ? resolve() : reject(new Error(`TTS exit ${code}`)) })
-      this.proc.on('error', err => { this.proc = null; reject(err) })
+      this.proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true })
+      let buf = ''
+      this.proc.stdout?.on('data', (d: Buffer) => {
+        buf += d.toString()
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          const t = line.trim()
+          if (t.startsWith('AMP:')) {
+            const v = parseFloat(t.slice(4))
+            if (!isNaN(v)) this.onAmplitude?.(Math.min(1, v * 3.5)) // boost for visibility
+          }
+        }
+      })
+      this.proc.on('close', code => {
+        this.proc = null
+        this.onAmplitude?.(0)
+        code === 0 ? resolve() : reject(new Error(`TTS exit ${code}`))
+      })
+      this.proc.on('error', err => { this.proc = null; this.onAmplitude?.(0); reject(err) })
     })
   }
 
   stop() {
     if (this.proc) { try { this.proc.kill() } catch { } this.proc = null }
+    this.onAmplitude?.(0)
   }
 
   getVoices(): Promise<string[]> {
