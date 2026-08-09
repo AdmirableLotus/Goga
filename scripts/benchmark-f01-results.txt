@@ -1,0 +1,119 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.1 — Local Model Performance Benchmark                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+── GPU Detection ────────────────────────────────────────────────
+  GPU:          NVIDIA GeForce RTX 3080
+  VRAM Total:   10240 MiB  (10.0 GB)
+  VRAM Used:    5736 MiB
+  VRAM Free:    4318 MiB
+  Driver:       591.86
+  Compute Cap:  8.6
+
+── Ollama Models ────────────────────────────────────────────────
+  llama3:latest                  4.66 GB
+  llava:13b                      8.01 GB
+  moondream:latest               1.74 GB
+
+── Llama 3 Benchmarks (llama3:latest) ───────────────────────────
+  Warming up model (first call loads weights)...
+  Warm-up: 46001ms load=41490ms
+
+  [Conversation profile — temp=0.7]
+  Benchmarking concurrency=1 ctx=4096...
+    ttft=89ms  prompt=303.4t/s  gen=88t/s  total=4596ms  errors=0
+  Benchmarking concurrency=1 ctx=8192...
+    ttft=89ms  prompt=303.7t/s  gen=90.9t/s  total=4707ms  errors=0
+  Benchmarking concurrency=2 ctx=4096...
+    ttft=59ms  prompt=1291.8t/s  gen=88.4t/s  total=5206ms  errors=0
+  Benchmarking concurrency=2 ctx=8192...
+    ttft=52ms  prompt=1267.8t/s  gen=89.5t/s  total=4963ms  errors=0
+  Benchmarking concurrency=4 ctx=4096...
+    ttft=30ms  prompt=1819.4t/s  gen=91t/s  total=5908ms  errors=0
+  Benchmarking concurrency=4 ctx=8192...
+    ttft=34ms  prompt=1797.6t/s  gen=91.8t/s  total=5804ms  errors=0
+
+  [Computer-actions profile — temp=0.1, JSON schema]
+  Benchmarking concurrency=1 ctx=4096...
+    ttft=155ms  gen=93.3t/s  total=4252ms  json=1/1  errors=0
+    sample: {"thought":"","tool":"process.launch","args":{"executable":"notepad.exe"},"done":false}
+  Benchmarking concurrency=1 ctx=8192...
+    ttft=159ms  gen=93.2t/s  total=4489ms  json=1/1  errors=0
+    sample: {"thought":"","tool":"process.launch","args":{"executable":"notepad.exe"},"done":false}
+  Benchmarking concurrency=2 ctx=4096...
+    ttft=83ms  gen=93.7t/s  total=4482ms  json=2/2  errors=0
+    sample: {"thought":"","tool":"process.launch","args":{"executable":"notepad.exe"},"done":false}
+  Benchmarking concurrency=2 ctx=8192...
+    ttft=90ms  gen=93t/s  total=4774ms  json=2/2  errors=0
+    sample: {"thought":"","tool":"process.launch","args":{"executable":"notepad.exe"},"done":false}
+  Benchmarking concurrency=4 ctx=4096...
+    ttft=49ms  gen=94.1t/s  total=5046ms  json=4/4  errors=0
+    sample: {"thought":"","tool":"process.launch","args":{"executable":"notepad.exe"},"done":false}
+  Benchmarking concurrency=4 ctx=8192...
+    ttft=51ms  gen=93.7t/s  total=5368ms  json=4/4  errors=0
+    sample: {"thought":"","tool":"process.launch","args":{"executable":"notepad.exe"},"done":false}
+
+── VRAM after Llama load ─────────────────────────────────────────
+  VRAM used now:  9816 MiB
+  VRAM for Llama: ~4080 MiB
+  VRAM free:      238 MiB
+
+── LLaVA 13B Benchmark (llava:13b) ──────────────────────────────
+  Loading LLaVA and running screenshot analysis...
+  Load duration:      73306ms
+  Analysis latency:   78033ms
+  Generation speed:   16.2 t/s
+  Response sample:    " The image is a solid red color with no visible text or objects."
+
+── VRAM after LLaVA load ─────────────────────────────────────────
+  VRAM used now:      9919 MiB
+  VRAM for LLaVA:     ~103 MiB
+  Combined (both):    ~4183 MiB
+  VRAM free:          135 MiB
+  Combined % of total: 41%  (threshold: 90%)
+  ✓ Within 90% — simultaneous load is safe
+
+════════════════════════════════════════════════════════════════════════════════
+LLAMA 3 BENCHMARK TABLE
+════════════════════════════════════════════════════════════════════════════════
+Profile            Conc  Ctx    TTFT(ms)  Prompt(t/s)  Gen(t/s)  Total(ms)  JSON  Err
+────────────────────────────────────────────────────────────────────────────────
+conversation          1   4096        89        303.4        88       4596     -    0
+conversation          1   8192        89        303.7      90.9       4707     -    0
+conversation          2   4096        59       1291.8      88.4       5206     -    0
+conversation          2   8192        52       1267.8      89.5       4963     -    0
+conversation          4   4096        30       1819.4        91       5908     -    0
+conversation          4   8192        34       1797.6      91.8       5804     -    0
+computer-actions      1   4096       155            -      93.3       4252   1/1    0
+computer-actions      1   8192       159            -      93.2       4489   1/1    0
+computer-actions      2   4096        83            -      93.7       4482   2/2    0
+computer-actions      2   8192        90            -        93       4774   2/2    0
+computer-actions      4   4096        49            -      94.1       5046   4/4    0
+computer-actions      4   8192        51            -      93.7       5368   4/4    0
+
+════════════════════════════════════════════════════════════════════════════════
+LLAVA 13B BENCHMARK TABLE
+════════════════════════════════════════════════════════════════════════════════
+  Load duration:    73306 ms
+  Analysis latency: 78033 ms
+  Generation speed: 16.2 t/s
+  UI element ID:    SKIP (requires real screenshot — synthetic 1x1 PNG used)
+
+════════════════════════════════════════════════════════════════════════════════
+RECOMMENDATIONS
+════════════════════════════════════════════════════════════════════════════════
+
+GPU: NVIDIA GeForce RTX 3080  VRAM: 10240 MiB (10.0 GB)
+Combined Llama+LLaVA VRAM: ~4183 MiB (41% of total)
+
+✓ ModelResidencyManager NOT required at current load:
+  - Both models fit within 90% VRAM threshold simultaneously
+  - Monitor during F1 when actual screenshot analysis runs continuously
+
+Recommended concurrency settings:
+  Computer-actions: concurrency=1 (93.3t/s) vs 2 (93.7t/s) — 0% degradation
+  Recommended: concurrency=1 for computer-actions (determinism > throughput)
+  Conversation: concurrency=1, context=4096 (sufficient for chat history)
+  Computer-actions: temperature=0.0–0.2, context=4096
+  Conversation: temperature=0.6–0.8, context=4096

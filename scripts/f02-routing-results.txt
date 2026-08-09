@@ -1,0 +1,92 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.2 — Runtime Routing Probe                                ║
+╚══════════════════════════════════════════════════════════════╝
+
+── 1. Persisted Settings State ──────────────────────────────────
+  primaryModel:           local
+  missionEngineEnabled:   NOT SET (field absent from AppSettings)
+  autoApproveBelow:       medium
+  requireApprovalForAll:  false
+  localModelPath:         E:\Goga-Models\hf_bartowski_Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+
+── 2. MissionEngine Feature Flag ────────────────────────────────
+  GOGA_MISSION_ENGINE env:    "(not set)"
+  isMissionEngineEnabled():   false
+
+  isMissionEngineEnabled() source (from missionEngine.ts):
+    return process.env.GOGA_MISSION_ENGINE === "true"
+        || settings.missionEngineEnabled === true
+
+  Result: MissionEngine is DISABLED
+
+── 3. Typed Command Routing (orchestrator.ts) ───────────────────
+  Path: chat:send IPC → OrchestratorService.process()
+  Routing decision: looksLikeAgentTask(message) → AgentLoop.run()
+  MissionEngine is NOT called from orchestrator.ts at all.
+  MissionEngine is ONLY reachable via mission:start IPC (MissionPage UI).
+
+  Message                                          → Route
+  ──────────────────────────────────────────────────────────────────────
+  "Open Notepad and type: Goga operator verifica" → AgentLoop.run()
+  "Navigate to google.com                       " → AgentLoop.run()
+  "What is the weather today?                   " → LLM conversation (Ollama/LocalLlama)
+  "Hello, how are you?                          " → LLM conversation (Ollama/LocalLlama)
+  "Run a benchmark                              " → AgentLoop.run()
+  "Tell me about yourself                       " → LLM conversation (Ollama/LocalLlama)
+  "yes                                          " [last="Shall I open Notepad for you?..."] → AgentLoop.run()
+  "yes                                          " [last="How are you doing today?..."] → LLM conversation (Ollama/LocalLlama)
+  "Search for the latest news                   " → AgentLoop.run()
+  "Find files named config.json                 " → AgentLoop.run()
+
+── 4. Voice Command Routing (voiceOrchestrator.ts) ─────────────
+  Path: wake word → STT → VoiceOrchestrator.handleUtterance()
+  VoiceOrchestrator calls: OrchestratorService.process()
+  SAME routing logic as typed commands — no separate voice path.
+  MissionEngine.injectConversation() is called for mid-mission utterances only.
+  Conclusion: voice and typed commands follow IDENTICAL routing.
+
+── 5. GOGA_MISSION_ENGINE Flag Interaction ──────────────────────
+  When GOGA_MISSION_ENGINE=false (default):
+    - mission:start IPC throws "MissionEngine is disabled"
+    - AgentLoop is the ONLY operator path for all chat/voice commands
+    - MissionEngine code is loaded but never executed
+
+  When GOGA_MISSION_ENGINE=true:
+    - mission:start IPC works — MissionPage can start missions
+    - Chat/voice commands STILL route to AgentLoop (orchestrator unchanged)
+    - MissionEngine and AgentLoop are PARALLEL paths, not alternatives
+    - No code in orchestrator.ts checks isMissionEngineEnabled()
+
+  CRITICAL FINDING: The F0 report claim "AgentLoop is disabled" is WRONG.
+  AgentLoop is ALWAYS the chat/voice operator path regardless of the flag.
+  GOGA_MISSION_ENGINE only gates the mission:start IPC handler.
+  The flag does NOT disable AgentLoop. It does NOT redirect chat to MissionEngine.
+
+── 6. Authorization Decision Breakdown ──────────────────────────
+  Default settings: autoApproveBelow="medium", requireApprovalForAll=false
+
+  Tool                   Risk      allowed  requiresApproval  reason
+  ────────────────────────────────────────────────────────────────────────────────
+  computer.screenshot    low       true     false             read-only observation
+  computer.type          medium    true     false             risk medium within auto-approve threshold medium
+  computer.click         medium    true     false             risk medium within auto-approve threshold medium
+  shell.run              critical  true     true              critical risk level
+  filesystem.delete      high      true     true              filesystem.delete always requires approval
+  process.kill           high      true     true              process.kill always requires approval
+  filesystem.write       medium    true     false             risk medium within auto-approve threshold medium
+  web.search             low       true     false             read-only observation
+  browser.navigate       medium    true     false             risk medium within auto-approve threshold medium
+
+  MUTATION BEFORE APPROVAL CHECK:
+  AuthorizationService.evaluate() returns a decision object only.
+  No mutation occurs inside evaluate(). Execution only happens after:
+    AgentLoop: decision.requiresApproval → requestApproval() → await user → registry.execute()
+    MissionEngine: decision.requiresApproval → requestApproval() → await user → registry.execute()
+  Therefore: no medium/high/critical mutation can occur before explicit approval.
+  EXCEPTION: autoApproveBelow="medium" means medium-risk tools execute WITHOUT approval.
+  computer.type (medium) and computer.click (medium) execute without approval by default.
+
+── 7. Primary GGUF Model Status ─────────────────────────────────
+  Configured path: E:\Goga-Models\hf_bartowski_Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+  File exists:     true

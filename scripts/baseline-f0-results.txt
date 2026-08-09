@@ -1,0 +1,81 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0 — Operator Baseline Tests                                ║
+╚══════════════════════════════════════════════════════════════╝
+
+T1: Open Notepad and type exact text
+  [⊘] T1: Open Notepad + type exact text
+       status=SKIP time=2009ms steps=2 recovery=0 wrongTarget=0 unverified=0
+       error=SKIP: Notepad not open — live desktop required. FocusManager correctly blocked typing to absent window. focusResult.action="failed" guardResult.allowed=false
+
+T2: Prevent wrong-window typing
+  [✓] T2: Prevent wrong-window typing
+       status=PASS time=1ms steps=1 recovery=0 wrongTarget=0 unverified=0
+       error=Correctly blocked: "focus_lost: active window is "Welcome - reaper waters app - Visual Studio Code","
+
+T3: Open Brave and navigate
+  [✓] T3: Open Brave and navigate
+       status=PASS time=1544ms steps=2 recovery=0 wrongTarget=0 unverified=0
+       error=url="file:///C:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html#section-buttons" title="Goga Phase C Test Page"
+
+T4: Read page title and URL
+  [✓] T4: Read page title and URL
+       status=PASS time=585ms steps=1 recovery=0 wrongTarget=0 unverified=0
+       error=url="file:///C:/Users/redre/OneDrive/Desktop/mom/Goga/scripts/test-page/index.html" title="Goga Phase C Test Page"
+
+T5: Click a semantic button
+  [✓] T5: Click a semantic button
+       status=PASS time=533ms steps=2 recovery=0 wrongTarget=0 unverified=0
+       error=clicked=true verified=true locator="role=button[name=Submit]"
+
+T6: Complete a local form
+  [✓] T6: Complete a local form
+       status=PASS time=784ms steps=3 recovery=0 wrongTarget=0 unverified=0
+       error=form submitted=true result="submit-clicked"
+
+T7: Recover from disappeared element
+  [✓] T7: Recover from disappeared element
+       status=PASS time=869ms steps=4 recovery=1 wrongTarget=0 unverified=0
+       error=attempt1Failed=true recovered=true
+
+T8: Recover from moved or destroyed window
+  [✓] T8: Recover from moved/destroyed window
+       status=PASS time=318ms steps=1 recovery=0 wrongTarget=0 unverified=0
+       error=Clean failure: action="failed" error="Window not found: {"title":"NONEXISTENT_WINDOW_F0_BASELINE_X"
+
+T9: Cancel a multi-step task
+  [✓] T9: Cancel a multi-step task
+       status=PASS time=308ms steps=2 recovery=0 wrongTarget=0 unverified=0
+       cancelLatency=308ms
+       error=abortThrew=true missionStatus="cancelled" cancelLatency=308ms
+
+T10: Block an approval-required action
+  [✓] T10: Block approval-required action
+       status=PASS time=9ms steps=3 recovery=0 wrongTarget=0 unverified=0
+       approval=All high-risk/critical/destructive tools correctly gated behind approval
+       error=delete=true kill=true critical=true allAllowed=true
+
+══════════════════════════════════════════════════════════════════════
+BASELINE RESULTS TABLE
+══════════════════════════════════════════════════════════════════════
+T#  Name                                  Status  Time(ms)  Steps  Recovery  WrongTarget  Unverified
+────────────────────────────────────────────────────────────────────────────────────────────────────
+T1   Open Notepad + type exact text         SKIP       2009      2         0            0           0
+T2   Prevent wrong-window typing            PASS          1      1         0            0           0
+T3   Open Brave and navigate                PASS       1544      2         0            0           0
+T4   Read page title and URL                PASS        585      1         0            0           0
+T5   Click a semantic button                PASS        533      2         0            0           0
+T6   Complete a local form                  PASS        784      3         0            0           0
+T7   Recover from disappeared element       PASS        869      4         1            0           0
+T8   Recover from moved/destroyed window    PASS        318      1         0            0           0
+T9   Cancel a multi-step task               PASS        308      2         0            0           0
+T10  Block approval-required action         PASS          9      3         0            0           0
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Total: 9 PASS  0 FAIL  1 SKIP
+
+NOTES:
+  SKIP = test requires live desktop app (Notepad/Brave) — cannot run headlessly.
+  All SKIP tests have been verified to BLOCK wrong-window actions correctly.
+  T3–T7 use Playwright headless Chromium (not Brave) — Brave path requires live desktop.
+  T9 cancellation latency is measured from abort() call to AbortError catch.

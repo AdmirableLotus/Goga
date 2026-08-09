@@ -4,6 +4,15 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import type { GogaVisualState } from './GogaVisualState'
+import { STATE_PRESETS } from './livingTriangle/statePresets'
+import { createAudioState, tickAudio } from './livingTriangle/audioReactive'
+import { buildMembranePoints, buildMembraneGeometry, updateMembraneGeometry, tickMembrane } from './livingTriangle/energyMembrane'
+import { createParticles, tickParticles } from './livingTriangle/particles'
+import { createWaveSystem, tickWaves } from './livingTriangle/energyWaves'
+import type { AudioReactiveState } from './livingTriangle/types'
+import type { ParticleSystem } from './livingTriangle/particles'
+import type { WaveSystem } from './livingTriangle/energyWaves'
+import type { MembranePoint } from './livingTriangle/types'
 
 // ── PALETTE ──────────────────────────────────────────────────────────────────
 const C = {
@@ -63,6 +72,12 @@ interface SR {
   vs: GogaVisualState; amp: number
   userRotY: number; userScale: number
   pLight: THREE.PointLight; cLight: THREE.PointLight
+  // Living triangle additions
+  audioState: AudioReactiveState
+  particleSys: ParticleSystem
+  waveSys: WaveSystem
+  membraneLines: Array<{ line: THREE.Line; pts: MembranePoint[] }>
+  prevTime: number
 }
 
 export function useGogaScene(
@@ -204,6 +219,29 @@ export function useGogaScene(
     const particles = new THREE.Points(pGeo, pMat)
     scene.add(particles)
 
+    // ── LIVING TRIANGLE SYSTEMS ──────────────────────────────────────────────
+    // Energy membrane lines — 3 outer sizes, each with organic edge displacement
+    const membraneSizes = [outerSize * 1.04, outerSize * 1.08, outerSize * 1.13]
+    const membraneLines: Array<{ line: THREE.Line; pts: MembranePoint[] }> = []
+    for (let mi = 0; mi < membraneSizes.length; mi++) {
+      const pts = buildMembranePoints(membraneSizes[mi])
+      const geo = buildMembraneGeometry(pts)
+      const opacity = 0.18 - mi * 0.04
+      const mat = new THREE.LineBasicMaterial({ color: C.elecPurple, transparent: true, opacity })
+      const line = new THREE.Line(geo, mat)
+      line.position.z = -0.1 - mi * 0.05
+      scene.add(line)
+      membraneLines.push({ line, pts })
+    }
+
+    // New particle system (replaces old one visually — old one kept for compat)
+    const particleSys = createParticles(scene)
+    // Hide old particles to avoid double-rendering
+    particles.visible = false
+
+    // Energy wave system
+    const waveSys = createWaveSystem(scene)
+
     // ── BLOOM ─────────────────────────────────────────────────────────────────
     const composer = new EffectComposer(renderer)
     composer.addPass(new RenderPass(scene, camera))
@@ -219,6 +257,11 @@ export function useGogaScene(
       particles, pPos, bloom, clock, frameId: 0,
       vs: 'idle', amp: 0, userRotY: 0, userScale: 1,
       pLight, cLight,
+      audioState: createAudioState(),
+      particleSys,
+      waveSys,
+      membraneLines,
+      prevTime: 0,
     }
 
     const ro = new ResizeObserver(() => {
@@ -316,12 +359,13 @@ export function useGogaScene(
         pCol = new THREE.Color(C.cyan); pSpeed = 0.002
 
       } else if (vs === 'speaking') {
-        const a = s.amp
-        bloomTarget = 1.6 + a * 1.6
-        coreScale = 1.0 + a * 1.8
-        h1Opacity = 0.14 + a * 0.28
-        h2Opacity = 0.06 + a * 0.14
-
+        const a = s.audioState.envelope
+        bloomTarget = 1.6 + a * 2.2
+        coreScale = 1.0 + a * 2.0
+        h1Opacity = 0.14 + a * 0.36
+        h2Opacity = 0.06 + a * 0.18
+        outerCol = new THREE.Color(C.elecPurple).lerp(new THREE.Color(C.cyan), a * 0.7)
+        innerCol = new THREE.Color(C.lavender).lerp(new THREE.Color(C.coreWhite), a * 0.5)
       } else if (vs === 'waitingApproval') {
         bloomTarget = 1.6; rotSpeed = 0.0005
         outerCol = new THREE.Color(C.amber); innerCol = new THREE.Color(C.amber)
@@ -362,7 +406,7 @@ export function useGogaScene(
         s.group.position.y = (Math.random() - 0.5) * 0.04
       } else if (vs !== 'idle') {
         s.group.position.x *= 0.85
-        if (vs !== 'idle') s.group.position.y *= 0.85
+        s.group.position.y *= 0.85
       }
 
       // ── Update layers ─────────────────────────────────────────────────────
@@ -424,6 +468,35 @@ export function useGogaScene(
       }
       ;(s.particles.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true
       ;(s.particles.material as THREE.PointsMaterial).color.lerp(pCol, 0.04)
+
+      // ── Audio reactive tick ───────────────────────────────────────────────────
+      tickAudio(s.audioState, s.amp)
+      const audioEnv = s.audioState.envelope
+
+      // ── Energy membrane ──────────────────────────────────────────────────────
+      const preset = STATE_PRESETS[vs]
+      const turbulence = preset.edgeTurbulence + (vs === 'speaking' ? audioEnv * 0.35 : 0)
+      for (let mi = 0; mi < s.membraneLines.length; mi++) {
+        const { line, pts } = s.membraneLines[mi]
+        tickMembrane(pts, t, turbulence * (1 - mi * 0.2), audioEnv)
+        updateMembraneGeometry(line.geometry as THREE.BufferGeometry, pts)
+        const mmat = line.material as THREE.LineBasicMaterial
+        mmat.color.lerp(new THREE.Color(outerCol), 0.06)
+        mmat.opacity = (0.18 - mi * 0.04) + audioEnv * 0.25
+      }
+
+      // ── New particles ─────────────────────────────────────────────────────────
+      tickParticles(s.particleSys, audioEnv, new THREE.Color(pCol))
+
+      // ── Energy waves ──────────────────────────────────────────────────────────
+      const wdt = Math.min(t - s.prevTime, 0.1)
+      s.prevTime = t
+      if (vs === 'speaking' || vs === 'success' || vs === 'wakeDetected') {
+        tickWaves(s.waveSys, wdt, audioEnv, vs === 'speaking' ? C.cyan : C.teal)
+      }
+
+      // Speaking: amplitude drives bloom and outer scale
+      if (vs === 'speaking') { bloomTarget = 1.8 + audioEnv * 2.0 }
 
       // ── Bloom ─────────────────────────────────────────────────────────────
       s.bloom.strength += (bloomTarget - s.bloom.strength) * 0.05
