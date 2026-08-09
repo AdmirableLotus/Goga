@@ -1,15 +1,30 @@
 import http from 'http'
 import { SettingsService } from './settings'
+import type { ToolDefinition } from '../tools/registry'
 
 export interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
   images?: string[]  // base64 images for vision models
 }
 
 export interface OllamaResponse {
-  message: { content: string }
+  message: { content: string; tool_calls?: OllamaToolCall[] }
   done: boolean
+}
+
+export interface OllamaToolCall {
+  function: { name: string; arguments: Record<string, unknown> }
+}
+
+// Ollama native tool format (OpenAI-compatible)
+export interface OllamaTool {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: ToolDefinition['parameters']
+  }
 }
 
 export class OllamaClient {
@@ -32,12 +47,35 @@ export class OllamaClient {
         path: '/api/tags',
         timeout: 5000
       }, res => {
-        // Drain the response so the socket closes cleanly
         res.resume()
         resolve(res.statusCode === 200)
       })
       req.setTimeout(5000, () => { req.destroy(); resolve(false) })
       req.on('error', () => resolve(false))
+    })
+  }
+
+  async listModels(): Promise<string[]> {
+    return new Promise(resolve => {
+      const url = new URL(this.endpoint)
+      const req = http.get({
+        hostname: url.hostname,
+        port: this.getPort(url),
+        path: '/api/tags',
+        timeout: 5000
+      }, res => {
+        let raw = ''
+        res.on('data', (chunk: Buffer) => { raw += chunk.toString() })
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(raw)
+            resolve((json.models as Array<{ name: string }>).map(m => m.name))
+          } catch { resolve([]) }
+        })
+        res.on('error', () => resolve([]))
+      })
+      req.setTimeout(5000, () => { req.destroy(); resolve([]) })
+      req.on('error', () => resolve([]))
     })
   }
 
@@ -51,6 +89,39 @@ export class OllamaClient {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model, messages, stream: !!onToken })
     return this.postJson(url, '/api/chat', body, onToken)
+  }
+
+  /** Send messages with native Ollama tool definitions. Returns either a text reply
+   *  or a parsed tool call. stream=false is required for tool calls. */
+  async chatWithTools(
+    messages: OllamaMessage[],
+    tools: OllamaTool[]
+  ): Promise<{ text: string; toolCall?: OllamaToolCall }> {
+    const url = new URL(this.endpoint)
+    const body = JSON.stringify({ model: this.model, messages, tools, stream: false })
+    return new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: url.hostname,
+        port: this.getPort(url),
+        path: '/api/chat',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+      }, res => {
+        let raw = ''
+        res.on('data', (chunk: Buffer) => { raw += chunk.toString() })
+        res.on('end', () => {
+          try {
+            const json: OllamaResponse = JSON.parse(raw)
+            const toolCall = json.message?.tool_calls?.[0]
+            resolve({ text: json.message?.content ?? '', toolCall })
+          } catch { resolve({ text: raw }) }
+        })
+        res.on('error', reject)
+      })
+      req.on('error', reject)
+      req.write(body)
+      req.end()
+    })
   }
 
   private postJson(url: URL, path: string, body: string, onToken?: (token: string) => void): Promise<string> {

@@ -310,7 +310,26 @@ What is the next single action to take?`
       if (this.llama.isReady()) {
         raw = await this.llama.chat(messages as { role: 'system' | 'user' | 'assistant'; content: string }[])
       } else {
-        raw = await this.ollama.chat(messages)
+        // Try native tool calls first (supported by llama3.1+, qwen2.5, etc.)
+        const settings = SettingsService.getInstance().get()
+        const useNativeTools = settings.primaryModel === 'ollama'
+        if (useNativeTools) {
+          const ollamaTools = this.registry.toOllamaTools()
+          const { text, toolCall } = await this.ollama.chatWithTools(messages, ollamaTools)
+          if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
+          if (toolCall) {
+            return {
+              thought: text || `Using ${toolCall.function.name}`,
+              tool: toolCall.function.name,
+              params: toolCall.function.arguments,
+              done: false
+            }
+          }
+          // Model returned text instead of tool call — parse as JSON
+          raw = text
+        } else {
+          raw = await this.ollama.chat(messages)
+        }
       }
       if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
       return this.parseToolCall(raw)

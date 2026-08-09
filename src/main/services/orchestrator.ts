@@ -64,6 +64,21 @@ export class OrchestratorService {
       return this.startAgentTask(task)
     }
 
+    const settings = SettingsService.getInstance().get()
+    const useOllama = settings.primaryModel === 'ollama'
+
+    // ── PRIMARY: Ollama (when selected) ──────────────────────────────────────
+    if (useOllama) {
+      const ollamaAvailable = await this.ollama.isAvailable()
+      if (ollamaAvailable) {
+        const reply = await this.thinkWithOllama(content, onToken)
+        this.brain.addMessage(reply)
+        this.extractAndStoreFacts(content, reply.content)
+        return reply
+      }
+      this.log.warn('Ollama selected as primary but not available — falling back to LocalLlama')
+    }
+
     // ── PRIMARY: node-llama-cpp local model ───────────────────────────────────
     if (this.llama.isReady()) {
       const reply = await this.thinkWithLocalLlama(content, onToken)
@@ -91,7 +106,7 @@ export class OrchestratorService {
 
     if (ollamaAvailable) {
       this.log.warn('LocalLlama unavailable — falling back to Ollama')
-      const reply = await this.thinkWithOllama(content)
+      const reply = await this.thinkWithOllama(content, onToken)
       this.brain.addMessage(reply)
       this.extractAndStoreFacts(content, reply.content)
       return reply
@@ -199,7 +214,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
     }
   }
 
-  private async thinkWithOllama(userInput: string): Promise<ChatMessage> {
+  private async thinkWithOllama(userInput: string, onToken?: (token: string) => void): Promise<ChatMessage> {
     const history = this.brain.getHistory().slice(-20)
     const systemPrompt = this.buildSystemPrompt(userInput)
 
@@ -212,7 +227,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
     ]
 
     try {
-      const content = await this.ollama.chat(messages)
+      const content = await this.ollama.chat(messages, onToken)
       return { id: nanoid(), role: 'assistant', content: content.trim(), timestamp: Date.now() }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

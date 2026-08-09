@@ -16,6 +16,7 @@ import { registerVoiceHandlers } from './handlers/voice'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
+import { VoiceOrchestrator } from './services/voiceOrchestrator'
 // Bootstrap all tool registrations
 import './tools/index'
 
@@ -87,6 +88,10 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  // Dispose Whisper Python process if running
+  const voice = VoiceOrchestrator.getInstance()
+  const stt = (voice as unknown as { stt: { dispose?: () => void; name: string } }).stt
+  if (stt?.name === 'Whisper' && typeof stt.dispose === 'function') stt.dispose()
 })
 
 app.on('window-all-closed', () => {

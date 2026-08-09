@@ -73,6 +73,7 @@ export interface MainHandlers {
   'brain:deleteFact': (id: string) => Promise<void>
   'brain:clearHistory': () => Promise<void>
   'ollama:status': () => Promise<boolean>
+  'ollama:models': () => Promise<string[]>
   'localModel:status': () => Promise<import('../main/services/localLlama').LocalModelState>
 
   // Security workspace

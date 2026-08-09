@@ -154,6 +154,7 @@ export interface AppSettings {
   modelName: string
   visionModelName: string
   agentMaxSteps: number
+  primaryModel: 'local' | 'ollama'
   voiceEnabled: boolean
   voiceName: string
   voiceRate: number
@@ -164,6 +165,10 @@ export interface AppSettings {
   allowBargeIn: boolean
   conversationWindowSecs: number
   userName: string
+  sttProvider: 'windows' | 'whisper'
+  whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large-v2' | 'large-v3'
+  whisperDevice: 'cuda' | 'cpu' | 'auto'
+  whisperLanguage: string
 }
 
 // ── Phase D: Mission types ───────────────────────────────────────────────────
@@ -269,6 +274,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   localModelPath: 'E:\\Goga-Models\\hf_bartowski_Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf',
   localModelContextSize: 4096,
   localModelGpuLayers: 35,
+  primaryModel: 'local',
   modelEndpoint: 'http://localhost:11434',
   modelName: 'llama3',
   visionModelName: 'llava:13b',
@@ -282,7 +288,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSpeakResponses: true,
   allowBargeIn: true,
   conversationWindowSecs: 45,
-  userName: 'Boss'
+  userName: 'Boss',
+  sttProvider: 'windows',
+  whisperModel: 'base',
+  whisperDevice: 'cuda',
+  whisperLanguage: ''
 }
 
 // ── Security Workspace ────────────────────────────────────────────────────────

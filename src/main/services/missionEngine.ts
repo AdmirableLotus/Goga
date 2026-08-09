@@ -37,7 +37,7 @@ import type {
 // ── Feature flag ──────────────────────────────────────────────────────────────
 export function isMissionEngineEnabled(): boolean {
   return process.env.GOGA_MISSION_ENGINE === 'true' ||
-    (SettingsService.getInstance().get() as Record<string, unknown>).missionEngineEnabled === true
+    (SettingsService.getInstance().get() as unknown as Record<string, unknown>).missionEngineEnabled === true
 }
 
 // ── Planner response ──────────────────────────────────────────────────────────

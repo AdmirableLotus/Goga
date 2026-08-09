@@ -18,6 +18,7 @@
 import { EventEmitter } from 'events'
 import { WindowsSttProvider } from './speech/WindowsSpeechProvider'
 import { WindowsTtsProvider } from './speech/WindowsSpeechProvider'
+import { WhisperSttProvider } from './speech/WhisperSttProvider'
 import type { ISttProvider, ITtsProvider } from './speech/ISpeechProvider'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
@@ -69,8 +70,33 @@ export class VoiceOrchestrator extends EventEmitter {
 
   // ── Providers ─────────────────────────────────────────────────────────────
 
-  setSttProvider(p: ISttProvider) { this.stt = p }
+  setSttProvider(p: ISttProvider) {
+    // Stop current provider before swapping
+    try { this.stt.stopContinuous(); this.stt.abort() } catch { }
+    if ('dispose' in this.stt && typeof (this.stt as { dispose?: () => void }).dispose === 'function') {
+      (this.stt as { dispose: () => void }).dispose()
+    }
+    this.stt = p
+    this.log.info(`VoiceOrchestrator: STT provider → ${p.name}`)
+  }
+
   setTtsProvider(p: ITtsProvider) { this.tts = p }
+
+  /** Re-read sttProvider from settings and swap if needed. */
+  reloadSttProvider() {
+    const settings = SettingsService.getInstance().get()
+    const want = settings.sttProvider ?? 'windows'
+    const current = this.stt.name
+    if (want === 'whisper' && current !== 'Whisper') {
+      this.setSttProvider(new WhisperSttProvider({
+        model:   settings.whisperModel,
+        device:  settings.whisperDevice,
+        language: settings.whisperLanguage || undefined
+      }))
+    } else if (want === 'windows' && current !== 'WindowsSpeech') {
+      this.setSttProvider(new WindowsSttProvider())
+    }
+  }
 
   // ── Status ────────────────────────────────────────────────────────────────
 
