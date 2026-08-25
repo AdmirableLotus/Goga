@@ -1,0 +1,119 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Combined Test Suite                                  ║
+╚══════════════════════════════════════════════════════════════╝
+
+── Section 1: DOM Verification ──────────────────────────────────
+
+T1: DOM verify via selector — passed after form submit
+  [✓] T1: DOM verify selector → passed  [PASS]
+       outcome=passed method=dom detail="selector="#btn-result" text="submit-clicked" expected="submit-clicked" matches=true"
+
+T2: DOM verify — wrong expected text returns failed
+  [✓] T2: DOM verify absent text → failed  [PASS]
+       outcome=failed method=dom detail="selector="#btn-result" text="" expected="submit-clicked" matches=false"
+
+T3: DOM verify — missing sessionId returns inconclusive with clear message
+  [✓] T3: DOM verify missing sessionId → inconclusive+message  [PASS]
+       outcome=inconclusive detail="missing sessionId"
+
+T4: dom_text_gone — text present returns failed
+  [✓] T4: dom_text_gone text present → failed  [PASS]
+       outcome=failed detail="selector="#btn-result" text="submit-clicked" expected="submit-clicked" matches=true"
+
+T5: DOM verify getByText path (no selector) — visible text
+  [✓] T5: DOM verify getByText visible text → passed  [PASS]
+       outcome=passed method=dom detail="text="Goga Phase C Test Page" found=true wantGone=false"
+
+── Section 2: computer.wait ─────────────────────────────────────
+
+T6: computer.wait is registered in ToolRegistry
+  [✓] T6: computer.wait registered  [PASS]
+       name=computer.wait risk=low reversible=true
+
+T7: computer.wait definition — low risk, reversible, required params
+  [✓] T7: computer.wait definition correct  [PASS]
+       risk=low reversible=true hasType=true hasTimeout=true required=true
+
+T8: computer.wait invalid type → clean error, no mutation
+  [✓] T8: computer.wait invalid type → clean error  [PASS]
+       success=false error="computer.wait: invalid type "invalid_type". Must be window|element|element_gone"
+
+T9: computer.wait AbortSignal — immediate cancellation
+  [✓] T9: computer.wait AbortSignal cancels immediately  [PASS]
+       elapsed=745ms (cancelled before 10s timeout) success=false
+
+T10: computer.wait max duration capped at 60000ms
+  [✓] T10: computer.wait 60s max documented  [PASS]
+       description contains "60": "Wait for a window or UI element to appear or disappear. Polls at 400ms intervals"
+
+── Section 3: Planner Output Validation ─────────────────────────
+  Testing 20 planner outputs against registry + schema...
+
+  #   JSON  Tool(reg)  Args  Canonical  NoProse  Tool→Normalised
+  ────────────────────────────────────────────────────────────────────────────────
+   1  ✓     ✓          ✓     ✗          ✓        shell→shell.execute
+   2  ✓     ✓          ✓     ✗          ✓        shell→shell.execute
+   3  ✓     ✓          ✓     ✗          ✓        shell.run→shell.execute
+   4  ✓     ✓          ✓     ✗          ✓        process.launch→process.start
+   5  ✓     ✓          ✓     ✗          ✓        browser.goto→browser.navigate
+   6  ✓     ✓          ✓     ✓          ✓        computer.screenshot
+   7  ✓     ✓          ✓     ✓          ✓        computer.type
+   8  ✓     ✓          ✓     ✓          ✓        computer.click
+   9  ✓     ✓          ✓     ✓          ✓        browser.open
+  10  ✓     ✓          ✓     ✓          ✓        web.search
+  11  ✓     ✓          ✓     ✓          ✓        process.start
+  12  ✓     ✓          ✓     ✓          ✓        shell.execute
+  13  ✓     ✓          ✓     ✓          ✓        computer.focus.window
+  14  ✓     ✓          ✓     ✓          ✓        computer.wait
+  15  ✓     ✓          ✓     ✓          ✓        computer.clipboard.read
+  16  ✓     ✓          ✓     ✓          ✓        (done)
+  17  ✓     ✓          ✓     ✓          ✓        (done)
+  18  ✓     ✗          ✓     ✓          ✓        nonexistent.tool
+  19  ✓     ✓          ✓     ✓          ✗        process.start
+  20  ✓     ✓          ✓     ✓          ✓        browser.navigate
+
+  Valid JSON:        20/20
+  Registered tool:   19/20  (after alias normalisation)
+  Valid args:        20/20
+  Canonical (no alias): 15/20  (aliases normalised by parseToolCall)
+  No prose outside JSON: 19/20
+  [✓] T11: Planner output validation (20 outputs)  [PASS]
+       json=20/20 registered=19/20 (1 intentionally unregistered) args=20/20 aliases normalised by parseToolCall
+
+── Section 4: Regression ────────────────────────────────────────
+
+T12: All previously registered tools still present
+  [✓] T12: All expected tools registered  [PASS]
+       36 tools verified present
+
+T13: computer.wait authorization — low risk, no approval required
+  [✓] T13: computer.wait authorization  [PASS]
+       allowed=true requiresApproval=false reason="read-only observation"
+
+T14: VerificationEngine.inferSpec(computer.wait) → window_exists
+  [✓] T14: inferSpec(computer.wait) → window_exists  [PASS]
+       type=window_exists windowTitle=Notepad
+
+══════════════════════════════════════════════════════════════════════
+F0.3 TEST RESULTS
+══════════════════════════════════════════════════════════════════════
+T#   Name                                              Status
+──────────────────────────────────────────────────────────────────────
+T1    DOM verify selector → passed                      ✓ PASS
+T2    DOM verify absent text → failed                   ✓ PASS
+T3    DOM verify missing sessionId → inconclusive+message ✓ PASS
+T4    dom_text_gone text present → failed               ✓ PASS
+T5    DOM verify getByText visible text → passed        ✓ PASS
+T6    computer.wait registered                          ✓ PASS
+T7    computer.wait definition correct                  ✓ PASS
+T8    computer.wait invalid type → clean error          ✓ PASS
+T9    computer.wait AbortSignal cancels immediately     ✓ PASS
+T10   computer.wait 60s max documented                  ✓ PASS
+T11   Planner output validation (20 outputs)            ✓ PASS
+T12   All expected tools registered                     ✓ PASS
+T13   computer.wait authorization                       ✓ PASS
+T14   inferSpec(computer.wait) → window_exists          ✓ PASS
+──────────────────────────────────────────────────────────────────────
+
+Total: 14 PASS  0 FAIL  0 SKIP

@@ -1,0 +1,24 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Focus Safety Unit Tests (noninteractive)             ║
+╚══════════════════════════════════════════════════════════════╝
+
+  [✓] U1: missing pid → target_required, zero keyboard calls  [PASS]
+       allowed=false typeCalled=0 reason="target_required: pid is mandatory — title-only targeting is forbidden"
+  [✓] U2: missing hwnd → target_required, zero keyboard calls  [PASS]
+       allowed=false typeCalled=0 reason="target_required: hwnd is mandatory — pid-only targeting is forbidden"
+  [✓] U3: wrong PID → focus_lost, zero keyboard calls  [PASS]
+       allowed=false typeCalled=0 reason="focus_lost: foreground PID 9999 !== expected PID 1234 (window: "Untitled - Notepad")"
+  [✓] U4: correct PID, wrong HWND → allowed (PID-only check, no PS subprocess)  [PASS]
+       allowed=true typeCalled=1 reason="none"
+  [✓] U5: duplicate title, wrong PID/HWND → focus_lost, zero keyboard calls  [PASS]
+       allowed=false typeCalled=0 reason="focus_lost: foreground PID 8888 !== expected PID 1234 (window: "Untitled - Notepad")"
+  [✓] U6: correct PID + correct HWND → guard permits, typeFn called once  [PASS]
+       allowed=true typeCalled=1 reason="none"
+
+══════════════════════════════════════════════════════════════════════
+F0.3 FOCUS UNIT TEST RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 6 PASS  0 FAIL
+
+All 6 focus unit tests passed (U1–U6).

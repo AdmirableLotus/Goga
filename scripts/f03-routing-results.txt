@@ -1,0 +1,28 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Routing Unit Tests (noninteractive)                  ║
+╚══════════════════════════════════════════════════════════════╝
+
+  [✓] R1: P2 phrase: fill+submit+form → agent path  [PASS]
+       message="fill and submit the form" expectAgent=true gotAgent=true
+  [✓] R5: conversational fill without form/field/input context → chat path  [PASS]
+       message="I need to fill my water bottle" expectAgent=false gotAgent=false
+  [✓] R2: fill + form → agent path  [PASS]
+       message="fill the form" expectAgent=true gotAgent=true
+  [✓] R3: submit + form → agent path  [PASS]
+       message="submit the form" expectAgent=true gotAgent=true
+  [✓] R4: complete + form → agent path  [PASS]
+       message="complete this form" expectAgent=true gotAgent=true
+  [✓] R6: submit without form context → chat path  [PASS]
+       message="please submit my resignation" expectAgent=false gotAgent=false
+  [✓] R7: existing open+and trigger → agent path  [PASS]
+       message="open notepad and type a message" expectAgent=true gotAgent=true
+  [✓] R8: conversational → chat path  [PASS]
+       message="what time is it" expectAgent=false gotAgent=false
+
+══════════════════════════════════════════════════════════════════════
+F0.3 ROUTING TEST RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 8 PASS  0 FAIL
+
+All 8 routing tests passed (R1+R5 are required proof cases).
