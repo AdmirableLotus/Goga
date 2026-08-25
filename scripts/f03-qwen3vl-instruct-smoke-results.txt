@@ -1,0 +1,145 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Qwen3-VL 2B Smoke Test  (checkpoint 2B)             ║
+╚══════════════════════════════════════════════════════════════╝
+
+  Model: qwen3-vl:2b-instruct
+  Architecture: qwen3vl  |  2.1B Q4_K_M  |  context: 262144
+  Parameters: temperature=1  top_k=20  top_p=0.95
+  Note: load_duration = model-loading time; true TTFT not measured (stream:false)
+  T1/T1B anomaly: benign exact-output prompts produced an unexpected refusal (cause unproven)
+
+── T1: plain-text  think:default (/api/chat) ────────────────────
+  Content: "Reply with exactly TEXT_OK_9137"
+  HTTP status:        200
+  thinking:           (none)
+  answer (12 chars): "TEXT_OK_9137"
+  done_reason:        stop
+  prompt_eval_count:  18
+  eval_count:         8
+  Load duration:      34216 ms  (model-loading time)
+  Prompt eval:        164 ms
+  Generation:         142 ms
+  Total duration:     34525 ms
+  Wall elapsed:       34537 ms
+  Gen speed:          56.2 t/s
+  TEXT PASS: YES ✓
+
+── T1B: plain-text  think:false (/api/chat) ─────────────────────
+  Content: "Reply with exactly TEXT_OK_9137"
+  HTTP status:        200
+  thinking:           (none)
+  answer (12 chars): "TEXT_OK_9137"
+  done_reason:        stop
+  prompt_eval_count:  18
+  eval_count:         8
+  Load duration:      149 ms  (model-loading time)
+  Prompt eval:        4 ms
+  Generation:         27 ms
+  Total duration:     183 ms
+  Wall elapsed:       184 ms
+  Gen speed:          293.8 t/s
+  TEXT PASS: YES ✓
+
+── Generating OCR PNG (Playwright, 640×480) ─────────────────────
+  Dimensions:   640×480
+  PNG bytes:    11799
+  Base64 len:   15732 chars
+  SHA-256:      506dc6ecd4a361789f0d0c966325d2ad92745c30fa327a86469d3e4acd29f609
+
+── T2: OCR vision  think:false (/api/chat) ──────────────────────
+  Content: "Read the large text in this image. Reply with only the exact text."
+  HTTP status:        200
+  thinking:           (none)
+  answer (14 chars): "VISION_OK_7429"
+  done_reason:        stop
+  prompt_eval_count:  1061
+  eval_count:         8
+  Load duration:      147 ms  (model-loading time)
+  Prompt eval:        512 ms
+  Generation:         32 ms
+  Total duration:     718 ms
+  Wall elapsed:       719 ms
+  Gen speed:          253.8 t/s
+  VISION PASS: YES ✓
+
+── Generating shapes PNG (Playwright, 640×480) ──────────────────
+  Dimensions:   640×480
+  PNG bytes:    5080
+  Base64 len:   6776 chars
+  SHA-256:      7adb3a8353f591e98a3edc86bdb12a782bb54351223c55f8ba0cfc8ce46ab49d
+
+── T3: semantic shapes  think:false (/api/chat) ─────────────────
+  Content: "Describe the objects in this image. State the exact count, shape, and color of each object. Do not mention anything that is not visible."
+  HTTP status:        200
+  thinking:           (none)
+  answer (233 chars): "There are two objects in the image.
+
+- The first object is a red square.
+- The second object is a blue circle.
+
+The total count of these objects is 2. The shapes are a square and a circle, with colors being red and blue respectively."
+  done_reason:        stop
+  prompt_eval_count:  1075
+  eval_count:         54
+  Load duration:      155 ms  (model-loading time)
+  Prompt eval:        278 ms
+  Generation:         213 ms
+  Total duration:     716 ms
+  Wall elapsed:       717 ms
+  Gen speed:          253 t/s
+  red square:   found ✓
+  blue circle:  found ✓
+  SHAPES PASS: YES ✓
+
+── Generating mock-desktop PNG (Playwright, 1280×720) ───────────
+  Dimensions:   1280×720
+  PNG bytes:    9108
+  Base64 len:   12144 chars
+  SHA-256:      74d24bbdd43858689ef4fbc3ad72b390e975e17e1c570431849445073ec0e5d4
+
+── T4: mock desktop  think:false (/api/chat) ────────────────────
+  Content: "Identify the application, transcribe the main text exactly, and list every visible button. Do not invent anything."
+  HTTP status:        200
+  thinking:           (none)
+  answer (86 chars): "Application: Notepad
+
+Main Text:
+Hello Goga test 123
+
+Visible Buttons:
+- Save
+- Cancel"
+  done_reason:        stop
+  prompt_eval_count:  1107
+  eval_count:         26
+  Load duration:      158 ms  (model-loading time)
+  Prompt eval:        277 ms
+  Generation:         106 ms
+  Total duration:     615 ms
+  Wall elapsed:       616 ms
+  Gen speed:          245.7 t/s
+  Notepad:              found ✓
+  Hello Goga test 123:  found ✓
+  Save button:          found ✓
+  Cancel button:        found ✓
+  DESKTOP PASS: YES ✓
+
+══════════════════════════════════════════════════════════════════════
+CHECKPOINT 2B SUMMARY
+══════════════════════════════════════════════════════════════════════
+  T1   plain-text  think:default: PASS ✓
+      thinking=0 chars  answer=12 chars  eval_count=8
+      gen=56.2 t/s  elapsed=34537 ms  done_reason=stop
+  T1B  plain-text  think:false  : PASS ✓
+      thinking=0 chars  answer=12 chars  eval_count=8
+      gen=293.8 t/s  elapsed=184 ms  done_reason=stop
+  T2   OCR vision  think:false  : PASS ✓
+      thinking=0 chars  answer=14 chars  eval_count=8
+      gen=253.8 t/s  elapsed=719 ms  done_reason=stop
+  T3   shapes      think:false  : PASS ✓
+      thinking=0 chars  answer=233 chars  eval_count=54
+      gen=253 t/s  elapsed=717 ms  done_reason=stop
+  T4   mock-desktop think:false : PASS ✓
+      thinking=0 chars  answer=86 chars  eval_count=26
+      gen=245.7 t/s  elapsed=616 ms  done_reason=stop

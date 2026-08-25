@@ -63,7 +63,7 @@ export interface MainHandlers {
   'voice:status': () => Promise<import('../main/services/voiceOrchestrator').VoiceStatus>
 
   // Library
-  'library:ingest': (filePath: string) => Promise<import('./types').BookMeta>
+  'library:ingest': (filePath?: string) => Promise<import('./types').BookMeta>
   'library:list': () => Promise<import('./types').BookMeta[]>
   'library:delete': (bookId: string) => Promise<void>
   'library:search': (query: string, topK?: number) => Promise<import('./types').BookChunk[]>

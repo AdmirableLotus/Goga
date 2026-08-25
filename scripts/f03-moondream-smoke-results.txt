@@ -1,0 +1,131 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Moondream Smoke Test (rev 2)                         ║
+╚══════════════════════════════════════════════════════════════╝
+
+Model template (from ollama show --modelfile):
+  TEMPLATE "{{ if .Prompt }} Question: {{ .Prompt }}\n\n{{ end }} Answer: {{ .Response }}\n\n"
+  PARAMETER stop  <|endoftext|>
+  PARAMETER stop  Question:
+  PARAMETER temperature 0
+
+── Images ───────────────────────────────────────────────────────
+  640×480: 640×480  PNG=1911 bytes  b64=2548 chars  SHA256=6461b223183bcea3de388a227d333773b111d78eb76656f4feae79d63f436aee
+
+── A: /api/generate  text only  temperature:default ─────────────
+  Prompt: "Reply with exactly TEXT_OK_9137"
+  HTTP status:        200
+  Response (0 chars): ""
+  done_reason:        stop
+  prompt_eval_count:  16
+  eval_count:         1
+  Load duration:      1902 ms
+  Prompt eval:        28 ms
+  Generation:         0 ms
+  Total duration:     1933 ms
+  Wall elapsed:       1954 ms
+  Gen speed:          N/A
+
+── B: /api/chat  text only  temperature:default ─────────────────
+  Content: "Reply with exactly TEXT_OK_9137"
+  HTTP status:        200
+  Response (0 chars): ""
+  done_reason:        stop
+  prompt_eval_count:  16
+  eval_count:         1
+  Load duration:      56 ms
+  Prompt eval:        11 ms
+  Generation:         0 ms
+  Total duration:     68 ms
+  Wall elapsed:       70 ms
+  Gen speed:          N/A
+
+── C: /api/chat  640×480 vision  temperature:default ────────────
+  Content: "Read the large text in this image. Reply with only that exact text."
+  HTTP status:        200
+  Response (0 chars): ""
+  done_reason:        stop
+  prompt_eval_count:  751
+  eval_count:         1
+  Load duration:      49 ms
+  Prompt eval:        167 ms
+  Generation:         0 ms
+  Total duration:     236 ms
+  Wall elapsed:       236 ms
+  Gen speed:          N/A
+  VISION PASS:        NO ✗
+
+── D: /api/generate  640×480 vision  temperature:default ────────
+  Prompt: "Read the large text in this image. Reply with only that exact text."
+  HTTP status:        200
+  Response (9 chars): "xtn-74973"
+  done_reason:        stop
+  prompt_eval_count:  751
+  eval_count:         7
+  Load duration:      56 ms
+  Prompt eval:        5 ms
+  Generation:         17 ms
+  Total duration:     94 ms
+  Wall elapsed:       97 ms
+  Gen speed:          400.5 t/s
+  VISION PASS:        NO ✗
+
+── A2: /api/generate  text only  temperature:0.2 (A failed) ─────
+  Prompt: "Reply with exactly TEXT_OK_9137"
+  HTTP status:        200
+  Response (0 chars): ""
+  done_reason:        stop
+  prompt_eval_count:  16
+  eval_count:         1
+  Load duration:      54 ms
+  Prompt eval:        4 ms
+  Generation:         0 ms
+  Total duration:     96 ms
+  Wall elapsed:       97 ms
+  Gen speed:          N/A
+
+── C2: /api/chat  640×480 vision  temperature:0.2 (A failed) ────
+  Content: "Read the large text in this image. Reply with only that exact text."
+  HTTP status:        200
+  Response (9 chars): "xtn-74973"
+  done_reason:        stop
+  prompt_eval_count:  751
+  eval_count:         7
+  Load duration:      46 ms
+  Prompt eval:        5 ms
+  Generation:         17 ms
+  Total duration:     110 ms
+  Wall elapsed:       110 ms
+  Gen speed:          418.8 t/s
+  VISION PASS:        NO ✗
+
+══════════════════════════════════════════════════════════════════════
+SMOKE TEST SUMMARY
+══════════════════════════════════════════════════════════════════════
+  A  /api/generate text  temp:default
+     status=EMPTY  eval_count=1  gen=N/A  elapsed=1954 ms
+     prompt_eval_count=16  done_reason=stop
+     response=""
+  B  /api/chat      text  temp:default
+     status=EMPTY  eval_count=1  gen=N/A  elapsed=70 ms
+     prompt_eval_count=16  done_reason=stop
+     response=""
+  C  /api/chat      vision temp:default
+     status=EMPTY  eval_count=1  gen=N/A  elapsed=236 ms
+     prompt_eval_count=751  done_reason=stop
+     response=""
+  D  /api/generate vision temp:default
+     status=WRONG TEXT  eval_count=7  gen=400.5 t/s  elapsed=97 ms
+     prompt_eval_count=751  done_reason=stop
+     response="xtn-74973"
+  A2  /api/generate text  temp:0.2
+     status=EMPTY  eval_count=1  gen=N/A  elapsed=97 ms
+     prompt_eval_count=16  done_reason=stop
+     response=""
+  C2  /api/chat      vision temp:0.2
+     status=WRONG TEXT  eval_count=7  gen=418.8 t/s  elapsed=110 ms
+     prompt_eval_count=751  done_reason=stop
+     response="xtn-74973"
+
+── Interpretation ───────────────────────────────────────────────
+  RESULT: Both text endpoints fail → investigate model/Ollama compatibility or damaged model

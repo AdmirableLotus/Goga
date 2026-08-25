@@ -1,0 +1,184 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Qwen3-VL 2B Benchmark                               ║
+╚══════════════════════════════════════════════════════════════╝
+
+  Model:   qwen3-vl:2b (Ollama)
+  Prereq:  GGUF primary must be GPU-resident in node-llama-cpp
+  Purpose: Measure Qwen3-VL latency + accuracy WITH primary model in VRAM
+  Scoring: message.content only — message.thinking recorded but never scored
+
+── Step 1: Ollama health check ──────────────────────────────────
+  Ollama version: 0.32.9
+
+── Step 2: stopping qwen3-vl:2b ────────────────────────────────
+  qwen3-vl:2b confirmed absent from ollama ps
+
+── Step 3: Baseline Resources ───────────────────────────────────
+  GPU:       NVIDIA GeForce RTX 3080
+  VRAM used: 5254 MiB  free: 4800 MiB  total: 10240 MiB
+  RAM used:  16044 MiB  free: 16622 MiB
+
+── Step 4: Controlled Screenshot Capture ────────────────────────
+  ENTER arms the capture. A 5-second countdown follows before capture.
+  Use the countdown to return to the target window and set the UI state.
+
+  [1/10] sc01-notepad-text
+         Setup: Open Notepad and type: "Hello Goga test 123"
+         Press ENTER to arm capture...
+         [OK] 196 KB
+  [2/10] sc02-calculator
+         Setup: Open Calculator (standard mode)
+         Press ENTER to arm capture...
+         [OK] 179 KB
+  [3/10] sc03-brave-form
+         Setup: Open Brave and navigate to about:blank, then open DevTools (F12)
+         Press ENTER to arm capture...
+         [OK] 953 KB
+  [4/10] sc04-file-dialog
+         Setup: In Notepad, press Ctrl+S to open the Save As dialog
+         Press ENTER to arm capture...
+         [OK] 204 KB
+  [5/10] sc05-taskbar
+         Setup: Close all dialogs. Show the desktop with taskbar visible.
+         Press ENTER to arm capture...
+         [OK] 243 KB
+  [6/10] sc06-notepad-menu
+         Setup: Open Notepad and click the Format menu to expand it
+         Press ENTER to arm capture...
+         [OK] 61 KB
+  [7/10] sc07-calc-result
+         Setup: In Calculator, compute 123 + 456 (show the result 579)
+         Press ENTER to arm capture...
+         [OK] 163 KB
+  [8/10] sc08-vscode-editor
+         Setup: Switch to VS Code with a TypeScript file open
+         Press ENTER to arm capture...
+         [OK] 239 KB
+  [9/10] sc09-disabled-button
+         Setup: Open the test page: scripts/test-page/index.html in Brave
+         Press ENTER to arm capture...
+         [OK] 238 KB
+  [10/10] sc10-multi-window
+         Setup: Arrange Notepad and Calculator side by side (both visible)
+         Press ENTER to arm capture...
+         [OK] 108 KB
+
+  Captured: 10/10 screenshots
+
+── Cold Call (sc01 — first Qwen3-VL inference) ──────────────────
+  Screenshot: sc01-notepad-text
+  Prompt:     "What text is written in the text editor? Transcribe it exactly."
+  Load duration:   3101 ms
+  Prompt eval:     780 ms
+  Generation:      1611 ms
+  Total duration:  5560 ms
+  Wall elapsed:    5563 ms
+  Gen speed:       256.4 t/s
+  Thinking length: 1443 chars
+  Response:        "Hello Goga test 123"
+
+── Resources After Cold Load ────────────────────────────────────
+  VRAM used:  8664 MiB  (delta: +3410 MiB)
+  VRAM free:  1390 MiB
+  % of total: 84.6%
+
+── Ollama PS (CPU/GPU Split) ─────────────────────────────────────
+  qwen3-vl:2b  size=1.98GB  vram=1.98GB  GPU=100%  CPU=0%
+
+── Warm Calls (screenshots 2–10) ────────────────────────────────
+  [2/10] sc02-calculator
+         Prompt: "What application is open? List all visible buttons."
+         elapsed=9105ms  promptMs=633  genMs=8186  genTps=248.7  thinking=5961chars  response=""
+  [3/10] sc03-brave-form
+         Prompt: "Describe the active window and any panels or tabs visible."
+         elapsed=10748ms  promptMs=640  genMs=9498  genTps=214.3  thinking=7998chars  response=""
+  [4/10] sc04-file-dialog
+         Prompt: "Is there a dialog box open? What is its title and what controls are visible?"
+         elapsed=2782ms  promptMs=623  genMs=1681  genTps=236.1  thinking=971chars  response="Yes, there is a dialog box open in the image.  
+
+### Title  
+The title of the dialog box is **"Save As"**.  
+
+### Visibl"
+  [5/10] sc05-taskbar
+         Prompt: "Describe the taskbar. What icons or pinned apps are visible?"
+         elapsed=10060ms  promptMs=635  genMs=9059  genTps=224.4  thinking=8227chars  response=""
+  [6/10] sc06-notepad-menu
+         Prompt: "What menu is open? List all menu items visible."
+         elapsed=1661ms  promptMs=640  genMs=580  genTps=236.3  thinking=307chars  response="The open menu is the **File** menu (since it's the first item in the menu bar). The visible menu items in the top menu b"
+  [7/10] sc07-calc-result
+         Prompt: "What number is displayed in the calculator result area?"
+         elapsed=1254ms  promptMs=641  genMs=239  genTps=238.8  thinking=116chars  response="The number displayed in the calculator result area is 579."
+  [8/10] sc08-vscode-editor
+         Prompt: "What is the name of the file open in the editor? What programming language is it"
+         elapsed=4890ms  promptMs=668  genMs=3854  genTps=231.2  thinking=2880chars  response="To determine the name of the open file and its programming language, we analyze the image:  
+
+1. **File Name**:  
+   In "
+  [9/10] sc09-disabled-button
+         Prompt: "Are there any disabled or grayed-out buttons? Describe them."
+         elapsed=3700ms  promptMs=619  genMs=2684  genTps=242.5  thinking=2188chars  response="In the "Goga Phase C Test Page" panel, **three buttons** exist within the "Buttons" section. Among these, the following "
+  [10/10] sc10-multi-window
+         Prompt: "How many windows are visible? List their titles."
+         elapsed=2928ms  promptMs=583  genMs=2044  genTps=241.7  thinking=1529chars  response="To determine the number of visible windows and their titles, we analyze the screenshot:
+
+1. **Left Window**: Identified "
+
+── Accuracy Scoring ─────────────────────────────────────────────
+  Scoring: CORRECT      (all groundTruth keywords found)
+           PARTIAL      (≥50% groundTruth keywords found)
+           WRONG        (<50% groundTruth keywords found)
+           HALLUCINATED (falseElement keyword found in response)
+  OCR scenes (sc01, sc07): keyword match IS the OCR score
+
+  sc01-notepad-text: CORRECT — 4/4 keywords matched
+  sc02-calculator: WRONG — 0/1 keywords matched
+  sc03-brave-form: WRONG — 0/4 keywords matched
+  sc04-file-dialog: CORRECT — 5/5 keywords matched
+  sc05-taskbar: WRONG — 0/4 keywords matched
+  sc06-notepad-menu: WRONG — 0/3 keywords matched
+  sc07-calc-result: CORRECT — 1/1 keywords matched
+  sc08-vscode-editor: WRONG — 1/5 keywords matched
+  sc09-disabled-button: PARTIAL — 3/4 keywords matched
+  sc10-multi-window: PARTIAL — 2/4 keywords matched
+
+  OCR score (sc01 + sc07): 2/2 (100%)
+
+  Total scored:  10
+  CORRECT:       3  (30%)
+  PARTIAL:       2  (20%)
+  WRONG:         5  (50%)
+  HALLUCINATED:  0  (0%)
+  Accuracy:      50% (correct+partial)
+
+── Warm Latency Statistics ──────────────────────────────────────
+  Samples:  9
+  Min:      1254 ms
+  Avg:      5236 ms
+  P50:      3700 ms
+  P95:      10748 ms
+  Max:      10748 ms
+  Avg gen:  234.9 t/s
+
+── Final Resources ──────────────────────────────────────────────
+  VRAM used:  8583 MiB  (delta from baseline: +3329 MiB)
+  VRAM free:  1471 MiB
+  % of total: 83.8%
+
+══════════════════════════════════════════════════════════════════════
+QWEN3-VL BENCHMARK SUMMARY
+══════════════════════════════════════════════════════════════════════
+  Screenshots:       10/10 captured
+  Cold load:         5563 ms
+  Warm avg latency:  5236 ms
+  Avg gen speed:     234.9 t/s
+  VRAM delta:        +3410 MiB
+  Accuracy:          50% (3 correct, 2 partial)
+  Hallucination:     0% (0/10)
+
+  Co-residence check (GGUF primary + Qwen3-VL):
+    GGUF baseline VRAM:  5254 MiB
+    After Qwen3-VL:      8664 MiB
+    Headroom remaining:  1576 MiB
+    VERDICT: FITS — Qwen3-VL co-resides with GGUF primary ✓

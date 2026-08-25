@@ -1,0 +1,30 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — readNotepadTextByHwnd Unit Tests (noninteractive)   ║
+╚══════════════════════════════════════════════════════════════╝
+
+  [✓] RB1: Supplied HWND contains marker → returned  [PASS]
+       hwnd=0x50a34 text="some text GogaVerification_TEST more text"
+  [✓] RB2: Different HWND (same PID) does not return other window's marker  [PASS]
+       hwnd=0x50b00 text="unrelated content"
+  [✓] RB3: IsWindow false → returns empty string  [PASS]
+       text=""
+  [✓] RB4: TextPattern present → used first (not ValuePattern)  [PASS]
+       text="GogaVerification_TEST"
+  [✓] RB5: TextPattern absent, ValuePattern present → ValuePattern used  [PASS]
+       text="GogaVerification_TEST"
+  [✓] RB6: TextPattern+ValuePattern absent, LegacyIAccessible present → fallback used  [PASS]
+       text="GogaVerification_TEST"
+  [✓] RB7: Polling: marker appears on second poll → returned correctly  [PASS]
+       text="text GogaVerification_TEST end" pollCount=2
+
+══════════════════════════════════════════════════════════════════════
+F0.3 READBACK UNIT TEST RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 7 PASS  0 FAIL
+
+Key invariant: readNotepadTextByHwnd is anchored to the exact supplied HWND.
+It never searches by PID, title, foreground window, or global UIAutomation root.
+Two windows sharing PID 21660 return independent results (RB1 vs RB2).
+
+All readback unit tests passed.

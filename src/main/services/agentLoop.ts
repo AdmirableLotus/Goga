@@ -354,10 +354,33 @@ What is the next single action to take?`
       if (parsed.done) return parsed
       if (!parsed.tool) return { ...parsed, done: true, reply: parsed.reply ?? 'No tool specified' }
       if (!parsed.params) parsed.params = {}
+      // Normalise common model aliases to registered tool names
+      parsed.tool = AgentLoop.normaliseToolName(parsed.tool)
       return parsed
     } catch {
       return { thought: 'JSON parse failed', tool: '', params: {}, done: true, reply: raw.slice(0, 300) }
     }
+  }
+
+  /**
+   * Map common LLM-generated aliases to the exact registered tool names.
+   * The GGUF model outputs "shell" instead of "shell.execute", "process.launch"
+   * instead of "process.start", etc. Normalise here so the registry lookup succeeds.
+   */
+  static normaliseToolName(name: string): string {
+    const ALIASES: Record<string, string> = {
+      'shell':            'shell.execute',
+      'shell.run':        'shell.execute',
+      'shell.command':    'shell.execute',
+      'process.launch':   'process.start',
+      'process.run':      'process.start',
+      'browser.goto':     'browser.navigate',
+      'browser.go':       'browser.navigate',
+      'computer.type_text': 'computer.type',
+      'computer.keyboard': 'computer.type',
+      'computer.press':   'computer.key',
+    }
+    return ALIASES[name] ?? name
   }
 
   // ── VERIFICATION ───────────────────────────────────────────────────────────

@@ -141,6 +141,184 @@ export class DesktopAdapter implements ToolAdapter {
     return { title: win.title, owner: win.owner.name, pid: win.owner.processId, bounds: win.bounds }
   }
 
+  /** Returns the foreground window's PID, HWND, and title via Win32 APIs.
+   *  Uses GetForegroundWindow + GetWindowThreadProcessId — no UIAutomation overhead.
+   *  hwnd is the raw HWND integer (IntPtr value). Returns hwnd=0 on failure. */
+  async activeWindowWithHwnd(): Promise<{ pid: number; hwnd: number; title: string }> {
+    const ps = `
+      Add-Type @"
+        using System; using System.Runtime.InteropServices; using System.Text;
+        public class FgWin {
+          [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+          [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+          [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+        }
+"@
+      $hwnd = [FgWin]::GetForegroundWindow()
+      $pid  = 0
+      [FgWin]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+      $sb = New-Object System.Text.StringBuilder 512
+      [FgWin]::GetWindowText($hwnd, $sb, 512) | Out-Null
+      "$([int64]$hwnd)|$pid|$($sb.ToString())"
+    `
+    try {
+      const raw = (await this.runPS(ps)).trim()
+      const parts = raw.split('|')
+      const hwnd  = parseInt(parts[0] ?? '0', 10)
+      const pid   = parseInt(parts[1] ?? '0', 10)
+      const title = parts.slice(2).join('|')
+      return { hwnd: isNaN(hwnd) ? 0 : hwnd, pid: isNaN(pid) ? 0 : pid, title }
+    } catch { return { hwnd: 0, pid: 0, title: '' } }
+  }
+
+  /** Enumerate all visible top-level windows for a given PID using Win32 EnumWindows.
+   *  Win32 is used instead of UIAutomation because UIAutomation can return
+   *  zero/infinite bounds for windows owned by single-instance host processes
+   *  (e.g. Windows 11 Notepad routes new windows to an existing host PID). */
+  async windowsByPid(pid: number): Promise<Array<{ hwnd: number; title: string; pid: number }>> {
+    const ps = `
+      Add-Type @"
+        using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+        public static class WBP {
+          public delegate bool EWP(IntPtr h, IntPtr l);
+          [DllImport("user32.dll")] public static extern bool EnumWindows(EWP cb, IntPtr l);
+          [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+          [DllImport("user32.dll")] public static extern int  GetWindowThreadProcessId(IntPtr h, out int p);
+          [DllImport("user32.dll")] public static extern int  GetWindowText(IntPtr h, StringBuilder s, int n);
+          public static List<long[]> ForPid(int pid) {
+            var r = new List<long[]>();
+            EnumWindows((h, l) => {
+              if (IsWindowVisible(h)) {
+                int p2 = 0; GetWindowThreadProcessId(h, out p2);
+                if (p2 == pid) { var sb = new StringBuilder(512); GetWindowText(h, sb, 512); r.Add(new long[]{ h.ToInt64(), p2, sb.Length }); }
+              }
+              return true;
+            }, IntPtr.Zero);
+            return r;
+          }
+          public static string GetTitle(long hwnd) { var sb = new StringBuilder(512); GetWindowText(new IntPtr(hwnd), sb, 512); return sb.ToString(); }
+        }
+"@
+      $rows = [WBP]::ForPid(${pid})
+      $out = @()
+      foreach ($r in $rows) {
+        $title = [WBP]::GetTitle($r[0])
+        if ($title.Length -gt 0) { $out += [PSCustomObject]@{ hwnd = $r[0]; pid = [int]$r[1]; title = $title } }
+      }
+      if ($out.Count -gt 0) { $out | ConvertTo-Json -Compress } else { Write-Output '[]' }
+    `
+    try {
+      const raw = (await this.runPS(ps)).trim()
+      if (!raw || raw === '[]' || raw === 'null') return []
+      const parsed = JSON.parse(raw)
+      const arr = Array.isArray(parsed) ? parsed : [parsed]
+      return arr
+        .map((w: Record<string, unknown>) => ({ hwnd: Number(w.hwnd), title: String(w.title ?? ''), pid: Number(w.pid) }))
+        .filter((w: { hwnd: number }) => w.hwnd !== 0)
+    } catch { return [] }
+  }
+
+  /** Find a visible top-level window by title substring using Win32 EnumWindows,
+   *  excluding any HWNDs present in baselineHwnds.
+   *  Returns the real owner PID+HWND regardless of which process launched the app.
+   *  Use after process.start to resolve the actual window identity. */
+  async windowByTitleDiff(
+    titleSubstring: string,
+    baselineHwnds: Set<number> = new Set()
+  ): Promise<{ hwnd: number; pid: number; title: string } | null> {
+    const escaped = titleSubstring.replace(/\\/g, '\\\\').replace(/'/g, "''")
+    const ps = `
+      Add-Type @"
+        using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+        public static class WTD {
+          public delegate bool EWP(IntPtr h, IntPtr l);
+          [DllImport("user32.dll")] public static extern bool EnumWindows(EWP cb, IntPtr l);
+          [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+          [DllImport("user32.dll")] public static extern int  GetWindowThreadProcessId(IntPtr h, out int p);
+          [DllImport("user32.dll")] public static extern int  GetWindowText(IntPtr h, StringBuilder s, int n);
+          public static List<long[]> All() {
+            var r = new List<long[]>();
+            EnumWindows((h, l) => {
+              if (IsWindowVisible(h)) {
+                int p2 = 0; GetWindowThreadProcessId(h, out p2);
+                var sb = new StringBuilder(512); GetWindowText(h, sb, 512);
+                if (sb.Length > 0) r.Add(new long[]{ h.ToInt64(), p2 });
+              }
+              return true;
+            }, IntPtr.Zero);
+            return r;
+          }
+          public static string GetTitle(long hwnd) { var sb = new StringBuilder(512); GetWindowText(new IntPtr(hwnd), sb, 512); return sb.ToString(); }
+        }
+"@
+      $rows = [WTD]::All()
+      $out = @()
+      foreach ($r in $rows) {
+        $title = [WTD]::GetTitle($r[0])
+        if ($title -match '${escaped}') { $out += [PSCustomObject]@{ hwnd = $r[0]; pid = [int]$r[1]; title = $title } }
+      }
+      if ($out.Count -gt 0) { $out | ConvertTo-Json -Compress } else { Write-Output '[]' }
+    `
+    try {
+      const raw = (await this.runPS(ps)).trim()
+      if (!raw || raw === '[]' || raw === 'null') return null
+      const parsed = JSON.parse(raw)
+      const arr: Array<{ hwnd: number; pid: number; title: string }> =
+        (Array.isArray(parsed) ? parsed : [parsed])
+          .map((w: Record<string, unknown>) => ({ hwnd: Number(w.hwnd), pid: Number(w.pid), title: String(w.title ?? '') }))
+          .filter((w: { hwnd: number }) => w.hwnd !== 0 && !baselineHwnds.has(w.hwnd))
+      // Exactly one new HWND required — zero or multiple is ambiguous and unsafe
+      if (arr.length !== 1) return null
+      return arr[0]
+    } catch { return null }
+  }
+
+  /** SetForegroundWindow by HWND using the keybd_event trick to bypass
+   *  Windows UIPI foreground lock restriction, then reads the resulting
+   *  foreground window — all in one PS call to avoid inter-process races.
+   *  Returns the resulting foreground window's PID, HWND, and title. */
+  async focusAndGetForeground(hwnd: number): Promise<{ pid: number; hwnd: number; title: string }> {
+    const ps = `
+      Add-Type @"
+        using System; using System.Runtime.InteropServices; using System.Text;
+        public class FGF {
+          [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+          [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+          [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+          [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+          [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+          [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+          [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+          public static void ForceForeground(IntPtr hwnd) {
+            keybd_event(0, 0, 0, UIntPtr.Zero);
+            uint myThread = GetCurrentThreadId();
+            IntPtr fg = GetForegroundWindow();
+            int fgPidOut = 0;
+            uint fgThread = (uint)GetWindowThreadProcessId(fg, out fgPidOut);
+            if (fgThread != myThread) AttachThreadInput(myThread, fgThread, true);
+            SetForegroundWindow(hwnd);
+            if (fgThread != myThread) AttachThreadInput(myThread, fgThread, false);
+          }
+        }
+"@
+      [FGF]::ForceForeground([IntPtr]${hwnd})
+      Start-Sleep -Milliseconds 150
+      $fg = [FGF]::GetForegroundWindow()
+      $pid = 0
+      [FGF]::GetWindowThreadProcessId($fg, [ref]$pid) | Out-Null
+      $sb = New-Object System.Text.StringBuilder 512
+      [FGF]::GetWindowText($fg, $sb, 512) | Out-Null
+      "$([int64]$fg)|$pid|$($sb.ToString())"
+    `
+    try {
+      const raw = (await this.runPS(ps)).trim()
+      const parts = raw.split('|')
+      const hwndOut = parseInt(parts[0] ?? '0', 10)
+      const pid     = parseInt(parts[1] ?? '0', 10)
+      const title   = parts.slice(2).join('|')
+      return { hwnd: isNaN(hwndOut) ? 0 : hwndOut, pid: isNaN(pid) ? 0 : pid, title }
+    } catch { return { hwnd: 0, pid: 0, title: '' } }
+  }
   async windowList(): Promise<WindowInfo[]> {
     const { default: activeWin } = await (new Function('return import("active-win")'))()
     const wins: WindowInfo[] = []

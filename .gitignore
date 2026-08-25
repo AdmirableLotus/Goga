@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 .env
+scripts/f02-screenshots/
+scripts/f03-screenshots/

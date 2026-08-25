@@ -1,0 +1,44 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — HWND Cleanup Ownership Tests + Diagnostic           ║
+╚══════════════════════════════════════════════════════════════╝
+
+
+── C1/C2: Cleanup ownership branch tests (mocked, noninteractive) ──
+  [✓] C1: Ordinary PID 21660: WM_CLOSE sent to exact HWND, no process termination  [PASS]
+       wmCloseSentToHwnd=0x4a0698 processTerminated=false protectedPidBlocked=false
+  [✓] C2: Protected PID 23116: WM_CLOSE still sent to exact HWND, PID never terminated  [PASS]
+       wmCloseSentToHwnd=0x3301e2 processTerminated=false protectedPidBlocked=true
+
+── C3: Save-dialog scoping proof (static analysis) ─────────────────
+  [✓] C3a: Save-dialog search uses GetWindow(GW_OWNER=4) anchored to testHwnd  [PASS]
+       hasGetWindowOwner=true hasOwnerEqTestHwnd=true
+  [✓] C3b: No taskkill or Stop-Process in cleanup path  [PASS]
+       noTaskkill=true noStopProcess=true
+  [✓] C3c: Save-dialog not scoped by broad ProcessId filter  [PASS]
+       noProcessIdDialog=true
+
+── D1/D2/D3/D5: Live HWND diagnostic ───────────────────────────────
+  [✓] D1: windowByTitleDiff returns null for zero matches  [PASS]
+       success=false data=null
+  [✓] D2: windowByTitleDiff returns null when multiple HWNDs match  [PASS]
+       success=false data=null
+
+  Live test: baseline hwnd count=31
+  Live test: process.start launcherPid=27804
+  Live test: windowByTitleDiff hwnd=0x4f0772 pid=21660
+  Live test: newPid=21660 PROTECTED_PID=23116 isProtected=false
+  [✓] D3: windowByTitleDiff returns exactly one result for one new Notepad  [PASS]
+       hwnd=0x4f0772 pid=21660
+  Live test: WM_CLOSE result: gone=True
+  [✓] D5: All baseline HWNDs survive after scoped WM_CLOSE cleanup  [PASS]
+       missing=0/31 allSurvived=true
+
+══════════════════════════════════════════════════════════════════════
+F0.3 HWND DIAGNOSTIC RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 9 PASS  0 FAIL  0 SKIP
+PROTECTED_PID=23116: WM_CLOSE to its windows is permitted; process termination is blocked
+No taskkill or Stop-Process exists in any cleanup path
+
+HWND diagnostic passed.

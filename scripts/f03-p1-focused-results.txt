@@ -1,0 +1,36 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Focused P1 Live Harness                             ║
+║  Exact-HWND readback · Rich baseline · Scoped cleanup       ║
+╚══════════════════════════════════════════════════════════════╝
+
+
+── P1 (focused): Notepad — exact-HWND readback ──────────────────
+       baseline hwnd count=31 baselineValid=true
+       baseline snapshot saved to: c:\Users\redre\OneDrive\Desktop\mom\Goga\scripts\f03-p1-baseline-snapshot.json
+       process.start launcherPid=30240
+  [✓] P1a: process.start launched Notepad, returned PID  [PASS]
+       pid=30240 success=true
+  [✓] P1b: AuthorizationService allowed process.start  [PASS]
+       allowed=true requiresApproval=false
+       windowByTitleDiff hwnd=0x1407a4 ownerPid=28984 exactlyOne=true
+       testHwnd absent from baseline: true
+  [✓] P1b2: Test HWND absent from pre-launch baseline  [PASS]
+       hwnd=0x1407a4 inBaseline=false exactlyOne=true
+  [✓] P1c: computer.type step succeeded  [PASS]
+       success=true error=none
+  [✓] P1d: Exact-HWND readback contains marker  [PASS]
+       hwnd=0x1407a4 marker="GogaVerification_1787012088448" readBack="Hello Goga test 123Get your bot token (5 minutes)Open Telegram  search @BotFatherSend /newbotGive it a name -"
+  [✓] P1e: VerificationEngine window_exists=passed  [PASS]
+       outcome=passed detail="window "Notepad" found in 10 windows"
+       cleanup: WM_CLOSE hwnd=0x1407a4 pid=28984 gone=True
+       cleanup: baseline survival missing=0/31 allSurvived=true
+  [✓] P1f: Cleanup: exact HWND closed (gone=True) and missing=0  [PASS]
+       hwnd=0x1407a4 gone=true allSurvived=true
+
+══════════════════════════════════════════════════════════════════════
+F0.3 P1 FOCUSED RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 7 PASS  0 FAIL
+
+P1 focused harness passed.

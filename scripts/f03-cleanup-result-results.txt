@@ -1,0 +1,31 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Cleanup Result Tests (noninteractive)               ║
+╚══════════════════════════════════════════════════════════════╝
+
+  [✓] CR1: gone=True → cleanup returns { gone: true } → test result PASS  [PASS]
+       gone=true fallbackActions=0
+  [✓] CR2: gone=False → cleanup returns { gone: false } → test result FAIL  [PASS]
+       gone=false wouldRegisterFail=true
+  [✓] CR3: gone=False case: no fallback action attempted  [PASS]
+       fallbackActions=0
+  [✓] CR4: gone=unknown (PS error) → { gone: false } → fail-safe FAIL  [PASS]
+       gone=false
+  [✓] CR5: Suite exit code is nonzero when cleanup fails  [PASS]
+       simFail=1 exitCode=1
+  [✓] CR6: Protected PID 23116: WM_CLOSE proceeds, gone=True → PASS  [PASS]
+       gone=true fallbackActions=0
+
+══════════════════════════════════════════════════════════════════════
+F0.3 CLEANUP RESULT TEST RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 6 PASS  0 FAIL
+
+Failure propagation:
+  gone=True  → closeNotepadHwnd returns { gone: true }
+             → finally calls result(id, name, true, ...)  → PASS, no suite impact
+  gone=False → closeNotepadHwnd returns { gone: false }
+             → finally calls result(id, name, false, ...) → FAIL, fail++ → exit(1)
+  No fallback action is taken in either case.
+
+All cleanup result tests passed.

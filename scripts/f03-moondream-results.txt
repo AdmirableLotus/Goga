@@ -1,0 +1,181 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Moondream Benchmark                                  ║
+╚══════════════════════════════════════════════════════════════╝
+
+  Model:   moondream:latest (Ollama)
+  Prereq:  GGUF primary (Llama 3.1 8B) must be loaded in node-llama-cpp
+  Purpose: Measure moondream latency + accuracy WITH primary model in VRAM
+
+── Baseline Resources ───────────────────────────────────────────
+  GPU:       NVIDIA GeForce RTX 3080
+  VRAM used: 7788 MiB  free: 2266 MiB  total: 10240 MiB
+  RAM used:  15838 MiB  free: 16828 MiB
+
+── Checking moondream:latest ────────────────────────────────────
+  moondream:latest is available
+
+── Controlled Screenshot Capture ────────────────────────────────
+  You will be prompted to set up each scenario before capture.
+
+  [1/10] sc01-notepad-text
+         Setup: Open Notepad and type: "Hello Goga test 123"
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 246 KB
+  [2/10] sc02-calculator
+         Setup: Open Calculator (standard mode)
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 257 KB
+  [3/10] sc03-brave-form
+         Setup: Open Brave and navigate to about:blank, then open DevTools (F12)
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 261 KB
+  [4/10] sc04-file-dialog
+         Setup: In Notepad, press Ctrl+S to open the Save As dialog
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 219 KB
+  [5/10] sc05-taskbar
+         Setup: Close all dialogs. Show the desktop with taskbar visible.
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 252 KB
+  [6/10] sc06-notepad-menu
+         Setup: Open Notepad and click the Format menu to expand it
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 270 KB
+  [7/10] sc07-calc-result
+         Setup: In Calculator, compute 123 + 456 (show the result 579)
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 242 KB
+  [8/10] sc08-vscode-editor
+         Setup: Switch to VS Code with a TypeScript file open
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 229 KB
+  [9/10] sc09-disabled-button
+         Setup: Open the test page: scripts/test-page/index.html in Brave
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 242 KB
+  [10/10] sc10-multi-window
+         Setup: Arrange Notepad and Calculator side by side (both visible)
+         Press ENTER when ready (or wait 5s for auto-capture)...
+         [OK] 255 KB
+
+  Captured: 10/10 screenshots
+
+── Cold Call (first moondream inference) ────────────────────────
+  Screenshot: sc01-notepad-text
+  Prompt:     "What text is written in the text editor? Transcribe it exactly."
+  Load duration:   56 ms
+  Total duration:  407 ms
+  Wall elapsed:    410 ms
+  Gen speed:       1000000 t/s
+  Response:        ""
+
+── Resources After Cold Load ────────────────────────────────────
+  VRAM used:  7972 MiB  (delta: +184 MiB)
+  VRAM free:  2082 MiB
+  % of total: 77.9%
+  NOTE: Low VRAM delta — moondream may be CPU-offloaded or already cached
+
+── Ollama PS (CPU/GPU Split) ─────────────────────────────────────
+  moondream:latest  size=1.24GB  vram=1.24GB  GPU=100%  CPU=0%
+
+── Warm Calls (screenshots 2–10) ────────────────────────────────
+  [2/10] sc02-calculator
+         Prompt: "What application is open? List all visible buttons."
+         elapsed=294ms  genTps=369.4  response="
+A calculator application is open on the computer screen, with a window displaying its interface and a calculator icon i"
+  [3/10] sc03-brave-form
+         Prompt: "Describe the active window and any panels or tabs visible."
+         elapsed=393ms  genTps=385.5  response="
+The image shows a computer screen with various windows open, including one that displays a calculator. The calculator i"
+  [4/10] sc04-file-dialog
+         Prompt: "Is there a dialog box open? What is its title and what controls are visible?"
+         elapsed=337ms  genTps=383.7  response="
+There is a window with an open dialog box on it. The title of the window is "Open Dialog Box". The controls visible in "
+  [5/10] sc05-taskbar
+         Prompt: "Describe the taskbar. What icons or pinned apps are visible?"
+         elapsed=357ms  genTps=388.2  response="
+The taskbar in the image displays various icons and pinned apps, including a messaging app, a web browser, and a docume"
+  [6/10] sc06-notepad-menu
+         Prompt: "What menu is open? List all menu items visible."
+         elapsed=329ms  genTps=381.2  response="
+The image shows a computer screen with various icons and windows displayed on it, including a calculator window in the "
+  [7/10] sc07-calc-result
+         Prompt: "What number is displayed in the calculator result area?"
+         elapsed=220ms  genTps=1000000  response=""
+  [8/10] sc08-vscode-editor
+         Prompt: "What is the name of the file open in the editor? What programming language is it"
+         elapsed=227ms  genTps=395.7  response="xtrascript"
+  [9/10] sc09-disabled-button
+         Prompt: "Are there any disabled or grayed-out buttons? Describe them."
+         elapsed=332ms  genTps=386.5  response="
+There are no disabled or grayed-out buttons in the image, but rather a window with multiple open tabs on it. The window"
+  [10/10] sc10-multi-window
+         Prompt: "How many windows are visible? List their titles."
+         elapsed=263ms  genTps=399.1  response="
+There are three windows open on the computer screen, each displaying different content or applications."
+
+── Accuracy Scoring ─────────────────────────────────────────────
+  Scoring: CORRECT      (all groundTruth keywords found)
+           PARTIAL      (≥50% groundTruth keywords found)
+           WRONG        (<50% groundTruth keywords found)
+           HALLUCINATED (falseElement keyword found in response)
+  OCR scenes (sc01, sc07): keyword match IS the OCR score
+
+  sc01-notepad-text: WRONG — 0/4 keywords matched
+  sc02-calculator: CORRECT — 1/1 keywords matched
+  sc03-brave-form: HALLUCINATED — "calculator" not present on screen
+  sc04-file-dialog: WRONG — 2/5 keywords matched
+  sc05-taskbar: WRONG — 1/4 keywords matched
+  sc06-notepad-menu: HALLUCINATED — "calculator" not present on screen
+  sc07-calc-result: WRONG — 0/1 keywords matched
+  sc08-vscode-editor: WRONG — 0/5 keywords matched
+  sc09-disabled-button: PARTIAL — 3/4 keywords matched
+  sc10-multi-window: HALLUCINATED — "three" not present on screen
+
+  OCR score (sc01 + sc07): 0/2 (0%)
+
+  Total scored:  10
+  CORRECT:       1  (10%)
+  PARTIAL:       1  (10%)
+  WRONG:         5  (50%)
+  HALLUCINATED:  3  (30%)
+  Accuracy:      20% (correct+partial)
+
+── Warm Latency Statistics ──────────────────────────────────────
+  Samples:  9
+  Min:      220 ms
+  Avg:      306 ms
+  P50:      329 ms
+  P95:      393 ms
+  Max:      393 ms
+  Avg gen:  111454.4 t/s
+
+── Final Resources ──────────────────────────────────────────────
+  VRAM used:  7970 MiB  (delta from baseline: +182 MiB)
+  VRAM free:  2084 MiB
+  % of total: 77.8%
+
+══════════════════════════════════════════════════════════════════════
+MOONDREAM BENCHMARK SUMMARY
+══════════════════════════════════════════════════════════════════════
+  Screenshots:       10/10 captured
+  Cold TTFT:         410 ms
+  Warm avg latency:  306 ms
+  Avg gen speed:     111454.4 t/s
+  VRAM delta:        +184 MiB
+  Accuracy:          20% (1 correct, 1 partial)
+  Hallucination:     30% (3/10)
+
+  Co-residence check (GGUF primary + moondream):
+    GGUF baseline VRAM:  7788 MiB
+    After moondream:     7972 MiB
+    Headroom remaining:  2268 MiB
+    VERDICT: FITS — moondream co-resides with GGUF primary ✓
+
+  vs LLaVA 13B (from F0.2 benchmark):
+    LLaVA cold:   ~82163 ms    Moondream cold:  410 ms
+    LLaVA warm:   ~7162 ms     Moondream warm:  306 ms
+    LLaVA VRAM:   +8363 MiB    Moondream VRAM:  +184 MiB
+    LLaVA gen:    ~17.4 t/s    Moondream gen:   111454.4 t/s
+  Screenshots deleted.

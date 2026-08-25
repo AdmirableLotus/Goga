@@ -1,0 +1,157 @@
+[
+  {
+    "hwnd": 4392762,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 1706068,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65868,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65848,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 132496,
+    "pid": 26724,
+    "title": "index.html - Goga - Visual Studio Code"
+  },
+  {
+    "hwnd": 460160,
+    "pid": 26724,
+    "title": "Reaper Waters (localhost:3000) - reaper waters app - Visual Studio Code"
+  },
+  {
+    "hwnd": 196672,
+    "pid": 22156,
+    "title": "Goga vs Ultron Features - Brave"
+  },
+  {
+    "hwnd": 3410034,
+    "pid": 22156,
+    "title": "Netflix - Brave"
+  },
+  {
+    "hwnd": 330070,
+    "pid": 27776,
+    "title": "?Reaper Waters - (1281)"
+  },
+  {
+    "hwnd": 197850,
+    "pid": 12300,
+    "title": "Downloads - File Explorer"
+  },
+  {
+    "hwnd": 2818792,
+    "pid": 4184,
+    "title": ""
+  },
+  {
+    "hwnd": 1313028,
+    "pid": 3704,
+    "title": "C:\\Program Files\\WindowsApps\\ngrok.ngrok_3.39.9.0_x64__1g87z0zv29zzc\\ngrok.exe - ngrok  http 3000 --host-header=\"localhost:3000\""
+  },
+  {
+    "hwnd": 854220,
+    "pid": 9984,
+    "title": ""
+  },
+  {
+    "hwnd": 854248,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 722438,
+    "pid": 3704,
+    "title": "C:\\WINDOWS\\system32\\cmd.exe "
+  },
+  {
+    "hwnd": 198452,
+    "pid": 24864,
+    "title": ""
+  },
+  {
+    "hwnd": 589866,
+    "pid": 23908,
+    "title": "Settings"
+  },
+  {
+    "hwnd": 328474,
+    "pid": 9984,
+    "title": "Settings"
+  },
+  {
+    "hwnd": 262708,
+    "pid": 11296,
+    "title": "Windows Input Experience"
+  },
+  {
+    "hwnd": 66352,
+    "pid": 27416,
+    "title": "NVIDIA GeForce Overlay"
+  },
+  {
+    "hwnd": 66014,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 66004,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65986,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65948,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65946,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65944,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 65942,
+    "pid": 12300,
+    "title": ""
+  },
+  {
+    "hwnd": 198440,
+    "pid": 3328,
+    "title": "Goga"
+  },
+  {
+    "hwnd": 5638104,
+    "pid": 26724,
+    "title": "deploy.js - original reaper coin creations - Visual Studio Code"
+  },
+  {
+    "hwnd": 1182100,
+    "pid": 13584,
+    "title": "Snipping Tool"
+  },
+  {
+    "hwnd": 65890,
+    "pid": 12300,
+    "title": "Program Manager"
+  }
+]

@@ -13,5 +13,14 @@ export default defineConfig({
     outDir: '../../dist/renderer',
     emptyOutDir: true
   },
-  server: { port: 5173 }
+  server: { port: 5173 },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    root: '.',
+    include: ['src/**/*.test.{ts,tsx}'],
+    resolve: {
+      alias: { '@shared': path.resolve(__dirname, 'src/shared') }
+    },
+  },
 })

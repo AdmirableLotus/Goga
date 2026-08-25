@@ -16,6 +16,22 @@
 import { DesktopAdapter } from '../adapters/desktop'
 import { BrowserAdapter } from '../adapters/browser'
 
+// Lazy import of the shared browser singleton from tools/browser.ts.
+// VerificationEngine must use the same BrowserAdapter instance that holds
+// the active sessions — creating a new instance would have no sessions.
+function getSharedBrowser(): BrowserAdapter {
+  // tools/browser.ts exports `browserAdapter` — the singleton used by all
+  // browser.* tool registrations. We import lazily to avoid circular deps
+  // at module load time (tools/browser imports ToolRegistry which is fine,
+  // but VerificationEngine is loaded before tools/index in some test paths).
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../tools/browser')
+    if (mod.browserAdapter instanceof BrowserAdapter) return mod.browserAdapter
+  } catch { /* fall through to own instance */ }
+  return new BrowserAdapter()
+}
+
 export type VerificationOutcome = 'passed' | 'failed' | 'inconclusive'
 
 export interface VerificationResult {
@@ -35,12 +51,15 @@ export interface VerificationSpec {
   sessionId?: string
   filePath?: string
   processName?: string
+  /** CSS selector — when set, verifyDom evaluates textContent of the matched
+   *  element directly instead of using getByText (which only finds visible text). */
+  selector?: string
 }
 
 export class VerificationEngine {
   private static instance: VerificationEngine
   private desktop = new DesktopAdapter()
-  private browser = new BrowserAdapter()
+  private get browser(): BrowserAdapter { return getSharedBrowser() }
 
   static getInstance(): VerificationEngine {
     if (!VerificationEngine.instance) VerificationEngine.instance = new VerificationEngine()
@@ -143,11 +162,36 @@ export class VerificationEngine {
   }
 
   private async verifyDom(spec: VerificationSpec): Promise<VerificationResult> {
-    if (!spec.sessionId || !spec.expected) return { outcome: 'inconclusive', method: 'dom', detail: 'missing sessionId or expected' }
+    if (!spec.sessionId) return { outcome: 'inconclusive', method: 'dom', detail: 'missing sessionId' }
+    if (!spec.expected && !spec.selector) return { outcome: 'inconclusive', method: 'dom', detail: 'missing expected or selector' }
+    const wantGone = spec.type === 'dom_text_gone'
     try {
-      const r = await this.browser.getByText(spec.sessionId, spec.expected)
+      // Path 1: CSS selector provided — evaluate textContent directly.
+      // This works for hidden elements that getByText cannot find.
+      if (spec.selector) {
+        const r = await this.browser.evaluate(
+          spec.sessionId,
+          `(function(){
+            var el = document.querySelector(${JSON.stringify(spec.selector)});
+            if (!el) return null;
+            return el.textContent || el.value || '';
+          })()`
+        )
+        const text = r.result == null ? null : String(r.result)
+        if (text === null) {
+          return { outcome: wantGone ? 'passed' : 'failed', method: 'dom',
+            detail: `selector="${spec.selector}" element not found` }
+        }
+        const matches = spec.expected ? text.includes(spec.expected) : text.length > 0
+        return {
+          outcome: (wantGone ? !matches : matches) ? 'passed' : 'failed',
+          method: 'dom',
+          detail: `selector="${spec.selector}" text="${text.slice(0,80)}" expected="${spec.expected ?? '(any)'}" matches=${matches}`
+        }
+      }
+      // Path 2: No selector — use getByText (visible text only).
+      const r = await this.browser.getByText(spec.sessionId, spec.expected!)
       const found = r.found && r.count > 0
-      const wantGone = spec.type === 'dom_text_gone'
       return {
         outcome: (wantGone ? !found : found) ? 'passed' : 'failed',
         method: 'dom',

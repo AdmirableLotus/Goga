@@ -1,0 +1,59 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Production-Path Tests                                ║
+║  Entry: OrchestratorService.process() → AgentLoop.run()      ║
+║  → AuthorizationService → ToolRegistry → VerificationEngine  ║
+╚══════════════════════════════════════════════════════════════╝
+
+
+── P1: Notepad — production path ────────────────────────────────
+       baseline hwnd count=32
+       process.start pid=24732
+  [✓] P1a: process.start launched Notepad, returned PID  [PASS]
+       pid=24732 step.success=true
+  [✓] P1b: AuthorizationService allowed process.start  [PASS]
+       allowed=true requiresApproval=false reason="risk medium within auto-approve threshold medium"
+       windowByTitleDiff hwnd=0x50a34 realPid=21660
+  [✓] P1c: computer.type step succeeded  [PASS]
+       success=true error=none
+  [✗] P1d: UIAutomation readback contains marker  [FAIL]
+       marker="GogaVerification_1787000698916" readBack=""
+  [✓] P1e: VerificationEngine reports window_exists=passed  [PASS]
+       outcome=passed detail="window "Notepad" found in 10 windows"
+  [✓] P1f: Notepad cleanup: exact HWND closed (gone=True)  [PASS]
+       hwnd=0x50a34 gone=true
+
+── P2: Brave — production path ──────────────────────────────────
+       browser.open sessionId=browser-1
+  [✓] P2a: browser.open returned sessionId  [PASS]
+       sessionId=browser-1 success=true
+  [✓] P2b: browser.type filled #input-username  [PASS]
+       success=true error=none
+  [✓] P2c: browser.click clicked #btn-submit  [PASS]
+       success=true error=none
+  [✓] P2d: VerificationEngine DOM verify passed  [PASS]
+       outcome=passed detail="selector="#btn-result" text="submit-clicked" expected="submit-clicked" matches=true"
+
+── P3: Cancellation — real AbortController path ─────────────────
+       cancellation notepadPid=29764
+       cancellation hwnd=0x1708e4 realPid=21660
+       mutation1Logged=true
+  [✓] P3a: Mutation 1 (MARKER_1) executed before stop()  [PASS]
+       mutation1Logged=true
+  [✓] P3b: AgentLoop.stop() halted the loop  [PASS]
+       status=stopped isRunning=false
+  [✓] P3c: MARKER_2 absent — second mutation never executed  [PASS]
+       marker2="MutationTwo_17870007…" absent=true readBack="MutationOne_1787000715663Muta"
+  [✓] P3d: LogService records cancellation  [PASS]
+       entry="Agent stopped: test cancellation after mutation 1"
+  [✓] P3e: mutationsAfterCancel=0  [PASS]
+       stepsAfterStop=0
+  [✓] P3f: Notepad cleanup: exact HWND closed (gone=True)  [PASS]
+       hwnd=0x1708e4 gone=true
+
+══════════════════════════════════════════════════════════════════════
+F0.3 PRODUCTION-PATH TEST RESULTS
+══════════════════════════════════════════════════════════════════════
+Total: 15 PASS  1 FAIL  0 SKIP
+
+F0.3 NOT READY — production-path tests failed.

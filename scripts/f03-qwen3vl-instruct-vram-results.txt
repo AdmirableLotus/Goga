@@ -1,0 +1,64 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  F0.3 — Qwen3-VL 2B  VRAM Co-residence Test  (3A)           ║
+╚══════════════════════════════════════════════════════════════╝
+
+  Model: qwen3-vl-2b-instruct-lowctx
+
+── Step 1: stopping qwen3-vl:2b-instruct ────────────────────────
+  ollama ps after stop:
+NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL
+
+── Step 2: baseline VRAM ────────────────────────────────────────
+  GPU:          NVIDIA GeForce RTX 3080
+  Total VRAM:   10240 MiB
+  Baseline used: 6023 MiB
+  Baseline free: 4031 MiB
+
+── Step 3: generating mock-desktop PNG (Playwright, 1280×720) ───
+  Dimensions:   1280×720
+  PNG bytes:    9108
+  Base64 len:   12144 chars
+  SHA-256:      74d24bbdd43858689ef4fbc3ad72b390e975e17e1c570431849445073ec0e5d4
+
+── Step 4: inference + VRAM sampling ───────────────────────────
+
+── Step 5: inference result ─────────────────────────────────────
+  thinking (0 chars)
+  answer (73 chars): "Application: Notepad
+Main text: Hello Goga test 123
+Buttons: Save, Cancel"
+  Load duration:   24486 ms
+  Prompt eval:     20031 ms
+  Generation:      94 ms
+  Total duration:  44638 ms
+  Wall elapsed:    44650 ms
+  Gen speed:       245.3 t/s
+
+── Step 6: VRAM samples during inference ────────────────────────
+  Samples collected: 190
+  Peak used:  9001 MiB
+  Peak free:  1053 MiB
+  Qwen delta: +2978 MiB from baseline
+
+── Step 7: resident VRAM after inference ────────────────────────
+  Resident used: 9001 MiB
+  Resident free: 1053 MiB
+  Delta from baseline: +2978 MiB
+
+── Step 8: ollama ps (post-inference) ───────────────────────────
+NAME                                  ID              SIZE      PROCESSOR    CONTEXT    UNTIL              
+qwen3-vl-2b-instruct-lowctx:latest    d72dd17137fa    1.7 GB    100% GPU     2048       4 minutes from now
+
+── Step 9: unloading qwen3-vl:2b-instruct ───────────────────────
+  Post-unload used: 5992 MiB
+  Post-unload free: 4062 MiB
+  Return delta from baseline: 31 MiB
+
+── Step 10: co-residence verdict ────────────────────────────────
+  Vision answer:       PASS ✓
+  No CUDA/OOM error:   PASS ✓
+  Peak free ≥ 1000 MiB: PASS ✓  (1053 MiB)
+  Post-unload ≤ 250 MiB drift: PASS ✓  (31 MiB)
+
+  CO-RESIDENCE: PASS ✓

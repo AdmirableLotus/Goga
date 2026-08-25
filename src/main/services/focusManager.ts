@@ -393,40 +393,89 @@ export class FocusManager {
   ): Promise<{ allowed: boolean; reason?: string }> {
     throwIfAborted(signal)
 
+    // Both pid AND a nonzero hwnd are mandatory.
+    // A process can own multiple windows; PID alone cannot identify which one.
+    if (!targetWindow.pid) {
+      this.emitTelemetry('focus.type_guard', '', targetWindow, 0, 0, 0, [], 'focus_lost',
+        'target_required: pid is mandatory for focusGuardedType')
+      return { allowed: false, reason: 'target_required: pid is mandatory — title-only targeting is forbidden' }
+    }
+    if (!targetWindow.hwnd) {
+      this.emitTelemetry('focus.type_guard', '', targetWindow, 0, 0, 0, [], 'focus_lost',
+        'target_required: hwnd is mandatory — pid-only targeting is forbidden (a process can own multiple windows)')
+      return { allowed: false, reason: 'target_required: hwnd is mandatory — pid-only targeting is forbidden' }
+    }
+
+    // Use active-win (in-process, no subprocess) to check the foreground window PID.
+    // Spawning a PS subprocess to call GetForegroundWindow would itself steal focus.
+    // active-win doesn't expose HWND, so we verify PID only here; HWND was already
+    // verified by the computer.focus.window plan step that preceded this call.
     const active = await this.desktop.activeWindow().catch(() => null)
     throwIfAborted(signal)
 
-    if (!active) {
-      this.emitTelemetry('focus.type_guard', '', targetWindow, 0, 0, 0, [], 'focus_lost',
-        'No active window detected')
-      return { allowed: false, reason: 'No active window detected' }
+    const fgPid    = active?.pid ?? 0
+    const fgHwndVal = 0   // active-win doesn't expose HWND
+    const fgTitle   = active?.title ?? ''
+
+    // Inner helper: check foreground window against target, attempt one re-focus if drifted.
+    const checkFg = async (hwndVal: number, pid: number, title: string): Promise<{ ok: boolean; reason?: string }> => {
+      if (!pid) {
+        const active = await this.desktop.activeWindow().catch(() => null)
+        throwIfAborted(signal)
+        if (!active) return { ok: false, reason: 'No active window detected' }
+        if (active.pid !== targetWindow.pid) return { ok: false, reason: `focus_lost: foreground PID ${active.pid} !== expected PID ${targetWindow.pid} (window: "${active.title}")` }
+        return { ok: true }
+      }
+      if (pid !== targetWindow.pid) return { ok: false, reason: `focus_lost: foreground PID ${pid} !== expected PID ${targetWindow.pid} (window: "${title}")` }
+      if (hwndVal && hwndVal !== targetWindow.hwnd) return { ok: false, reason: `focus_lost: foreground HWND 0x${hwndVal.toString(16)} !== expected HWND 0x${targetWindow.hwnd!.toString(16)} (PID ${pid} matched but wrong window)` }
+      return { ok: true }
     }
 
-    const matches = this.windowMatchesTarget(active.title, targetWindow)
-    if (!matches) {
-      this.emitTelemetry('focus.type_guard', active.title, targetWindow, 0, 0, 0, [], 'focus_lost',
-        `Active window "${active.title}" does not match target`)
+    let activeFgHwnd = fgHwndVal
+    let activeFgTitle = fgTitle
+    let check = await checkFg(fgHwndVal, fgPid, fgTitle)
+    if (!check.ok) {
+      // One recovery attempt: re-focus the target window then re-verify.
+      throwIfAborted(signal)
+      await this.focusWindow(targetWindow, signal).catch(() => null)
+      throwIfAborted(signal)
+      await new Promise(r => setTimeout(r, 200))
+      throwIfAborted(signal)
+      const fg2 = await this.desktop.activeWindow().catch(() => ({ title: '', owner: '', pid: 0 }))
+      throwIfAborted(signal)
+      activeFgHwnd = 0
+      activeFgTitle = fg2.title
+      check = await checkFg(0, fg2.pid, fg2.title)
+      if (!check.ok) {
+        this.emitTelemetry('focus.type_guard', fgTitle, targetWindow, 0, 0, 0, [], 'focus_lost', check.reason)
+        return { allowed: false, reason: check.reason }
+      }
+    }
+
+    // Title check as secondary evidence (when supplied)
+    const activeTitle = activeFgTitle || ''
+    if (targetWindow.title && activeTitle && !this.windowMatchesTarget(activeTitle, targetWindow)) {
+      this.emitTelemetry('focus.type_guard', activeTitle, targetWindow, 0, 0, 0, [], 'focus_lost',
+        `focus_lost: PID matched but title "${activeTitle}" does not match expected "${targetWindow.title}"`)
       return {
         allowed: false,
-        reason: `focus_lost: active window is "${active.title}", expected "${targetWindow.title ?? targetWindow.pid}"`
+        reason: `focus_lost: PID ${targetWindow.pid} matched but title "${activeTitle}" does not match expected "${targetWindow.title}"`
       }
     }
 
     // Build verified-by set
-    const verifiedBy: VerificationSource[] = ['foreground-window']
-    if (targetWindow.pid && active.pid === targetWindow.pid) verifiedBy.push('pid-match')
-    if (targetWindow.hwnd && targetWindow.pid && active.pid === targetWindow.pid) verifiedBy.push('hwnd-match')
+    const verifiedBy: VerificationSource[] = ['foreground-window', 'pid-match']
+    if (targetWindow.hwnd && activeFgHwnd && activeFgHwnd === targetWindow.hwnd) verifiedBy.push('hwnd-match')
     const conf = this.confidence(verifiedBy)
 
-    // Action-specific minimum — coordinate clicks require stronger identity than plain typing
+    // Action-specific minimum
     const required = minConfidenceFor(actionClass)
     if (conf < required) {
-      this.emitTelemetry('focus.type_guard', active.title, targetWindow, 0, 0, conf, verifiedBy, 'focus_lost',
+      this.emitTelemetry('focus.type_guard', activeTitle, targetWindow, 0, 0, conf, verifiedBy, 'focus_lost',
         `Confidence ${conf.toFixed(2)} below threshold ${required} for action class "${actionClass}"`)
       return {
         allowed: false,
-        reason: `focus confidence ${conf.toFixed(2)} below minimum ${required} for ${actionClass} action. ` +
-          `Provide pid or hwnd for stronger identity.`
+        reason: `focus confidence ${conf.toFixed(2)} below minimum ${required} for ${actionClass} action.`
       }
     }
 

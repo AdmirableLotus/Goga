@@ -12,8 +12,12 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build --config vite.config.ts",
     "start": "npm run build && npx electron .",
+    "test:m2": "vitest run --config vitest.config.mts src/renderer/components/__tests__/MissionMode.m2.test.tsx",
     "gen-icon": "node scripts/gen-icon.js",
-    "pack": "npm run build && electron-builder --win"
+    "pack": "npm run build && electron-builder --win",
+    "test:f03-adapters": "npm run build:main && node scripts/f03-adapter-tests.js",
+    "test:f03-production": "npm run build:main && node scripts/f03-production-tests.js",
+    "benchmark:f03-moondream": "node scripts/f03-moondream-benchmark.js"
   },
   "build": {
     "appId": "com.goga.desktop",
@@ -55,24 +59,29 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "@types/screenshot-desktop": "^1.15.0",
     "@vitejs/plugin-react": "^4.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "concurrently": "^8.0.0",
     "cross-env": "^10.1.0",
     "electron": "^32.3.3",
     "electron-builder": "^24.0.0",
+    "jsdom": "^30.0.1",
     "png-to-ico": "^3.0.2",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
     "typescript": "^5.0.0",
     "vite": "^5.0.0",
+    "vitest": "2.1.9",
     "wait-on": "^7.0.0"
   },
   "allowScripts": {
-    "electron@28.3.3": true,
+    "electron@32.3.3": true,
     "esbuild@0.21.5": true,
     "active-win@8.2.1": true,
     "electron-store@8.2.0": true,

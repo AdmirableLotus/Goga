@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { ChatMessage, AgentStep, AgentState } from '@shared/types'
 import type { ScreenshotResult } from '@shared/ipc'
-import type { VoiceStatus } from '../../main/services/voiceOrchestrator'
 import { useGogaVisual } from '../context/GogaVisualContext'
 import { agentStateToVisual } from '../components/GogaCore/GogaVisualState'
 import GogaTriangleScene from '../components/GogaCore/GogaTriangleScene'
+import ChatComposer from '../components/ChatComposer'
 
 interface DisplayMessage extends ChatMessage { screenshot?: ScreenshotResult }
 
@@ -12,48 +12,23 @@ function hasConversation(msgs: DisplayMessage[]): boolean {
   return msgs.some(m => m.role === 'user' || (m.role === 'assistant' && m.id !== '0'))
 }
 
-// Map voice status → triangle visual state
-function voiceToVisual(vs: VoiceStatus): import('../components/GogaCore/GogaVisualState').GogaVisualState | null {
-  if (vs === 'listening' || vs === 'wake_listening') return 'listening'
-  if (vs === 'transcribing') return 'transcribing'
-  if (vs === 'speaking') return 'speaking'
-  return null
-}
-
-const MIC_LABEL: Record<VoiceStatus, string> = {
-  idle:           '🎤',
-  wake_listening: '👂',
-  listening:      '⏹',
-  transcribing:   '⋯',
-  speaking:       '🔇',
-  disabled:       '🎤',
-}
-
 export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>([
     { id: '0', role: 'system', content: 'Goga is ready. Type or speak to me.', timestamp: Date.now() }
   ])
-  const [input, setInput]             = useState('')
-  const [loading, setLoading]         = useState(false)
+  const [loading, setLoading]             = useState(false)
   const [streamingText, setStreamingText] = useState('')
-  const [agentState, setAgentState]   = useState<AgentState | null>(null)
-  const [agentSteps, setAgentSteps]   = useState<AgentStep[]>([])
-  const [showSteps, setShowSteps]     = useState(true)
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle')
+  const [agentState, setAgentState]       = useState<AgentState | null>(null)
+  const [agentSteps, setAgentSteps]       = useState<AgentStep[]>([])
+  const [showSteps, setShowSteps]         = useState(true)
   const bottomRef      = useRef<HTMLDivElement>(null)
   const stepsBottomRef = useRef<HTMLDivElement>(null)
-  const { setVisualState, setAudioAmplitude } = useGogaVisual()
+  const { setVisualState } = useGogaVisual()
 
   const inConversation = hasConversation(messages)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => { stepsBottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [agentSteps])
-
-  // Sync voice status → triangle
-  useEffect(() => {
-    const v = voiceToVisual(voiceStatus)
-    if (v) setVisualState(v)
-  }, [voiceStatus, setVisualState])
 
   useEffect(() => {
     const unsubs = [
@@ -71,7 +46,6 @@ export default function ChatPage() {
       }),
       window.goga.on('chat:message', msg => {
         setMessages(prev => {
-          // Deduplicate — voice handler and chat handler may both send
           if (prev.some(m => m.id === msg.id)) return prev
           return [...prev, msg]
         })
@@ -86,28 +60,16 @@ export default function ChatPage() {
           timestamp: Date.now()
         }])
       }),
-      // Voice status from VoiceOrchestrator
-      window.goga.on('voice:status', ({ status }) => {
-        setVoiceStatus(status)
-        if (status === 'idle' || status === 'disabled') {
-          if (!agentState || ['idle', 'done', 'stopped', 'error'].includes(agentState.status)) {
-            setVisualState('idle')
-          }
-        }
-      }),
-      // Voice transcript echoed — already added as chat:message, just set loading
+      // voice:transcript — set loading; voice:status/amplitude handled by ChatComposer
       window.goga.on('voice:transcript', () => {
         setLoading(true)
         setAgentSteps([])
         setStreamingText('')
         setVisualState('thinking')
       }),
-      window.goga.on('voice:amplitude', ({ value }) => {
-        setAudioAmplitude(value)
-      }),
     ]
     return () => unsubs.forEach(u => u())
-  }, [agentState, setVisualState])
+  }, [setVisualState])
 
   // Emergency stop
   useEffect(() => {
@@ -126,33 +88,19 @@ export default function ChatPage() {
     return () => window.removeEventListener('keydown', h)
   }, [setVisualState])
 
-  // ── Mic button ────────────────────────────────────────────────────────────
-  const handleMic = useCallback(async () => {
-    if (voiceStatus === 'listening') {
-      window.goga.invoke('voice:stopListening')
-    } else if (voiceStatus === 'speaking') {
-      window.goga.invoke('voice:stopSpeaking')
-    } else {
-      // Start listening — non-blocking, result comes back via voice:transcript + chat:message
-      window.goga.invoke('voice:listenOnce')
-    }
-  }, [voiceStatus])
-
-  // ── Typed send ────────────────────────────────────────────────────────────
+  // ── Send ──────────────────────────────────────────────────────────────────
   const sendText = async (text: string) => {
-    const trimmed = text.trim()
-    if (!trimmed || loading) return
-    setInput('')
+    if (!text || loading) return
     setLoading(true)
     setAgentSteps([])
     setStreamingText('')
     setVisualState('thinking')
 
-    const userMsg: DisplayMessage = { id: Date.now().toString(), role: 'user', content: trimmed, timestamp: Date.now() }
+    const userMsg: DisplayMessage = { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }
     setMessages(prev => [...prev, userMsg])
 
     try {
-      const reply = await window.goga.invoke('chat:send', trimmed)
+      const reply = await window.goga.invoke('chat:send', text)
       if (!messages.some(m => m.id === reply.id)) {
         let dm: DisplayMessage = reply
         if (reply.content === '__screenshot__') {
@@ -173,8 +121,6 @@ export default function ChatPage() {
 
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
   const coreH = inConversation ? 180 : 500
-  const micActive = voiceStatus === 'listening' || voiceStatus === 'transcribing'
-  const micLabel = MIC_LABEL[voiceStatus] ?? '🎤'
 
   return (
     <div style={S.page}>
@@ -252,37 +198,12 @@ export default function ChatPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input row */}
-      <div style={S.inputRow}>
-        <button
-          onClick={handleMic}
-          disabled={loading && voiceStatus === 'idle'}
-          style={{
-            ...S.iconBtn,
-            background: micActive ? '#1a0a2e' : voiceStatus === 'speaking' ? '#aa6600' : '#13101f',
-            color: micActive ? '#29d9ff' : voiceStatus === 'speaking' ? '#fff' : '#554477',
-            border: micActive ? '1px solid #29d9ff55' : '1px solid transparent',
-            animation: micActive ? 'pulse 1s infinite' : 'none',
-          }}
-          title={voiceStatus === 'listening' ? 'Stop listening' : voiceStatus === 'speaking' ? 'Stop speaking' : 'Voice input'}
-        >{micLabel}</button>
-
-        <input
-          style={{ flex: 1, background: '#0e0c18', border: '1px solid #2a1f4a', color: '#e8d8ff' }}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendText(input)}
-          placeholder={
-            voiceStatus === 'listening'    ? '🎤 Listening…' :
-            voiceStatus === 'transcribing' ? '⋯ Transcribing…' :
-            voiceStatus === 'speaking'     ? '🔊 Speaking… (click mic to interrupt)' :
-            isAgentRunning                 ? '⚡ Running… (Ctrl+Shift+Esc to stop)' :
-            'Type a message or task…'
-          }
-          disabled={loading && !isAgentRunning && voiceStatus === 'idle'}
-        />
-        <button onClick={() => sendText(input)} disabled={(loading && !isAgentRunning) || !input.trim()} style={S.sendBtn}>Send</button>
-      </div>
+      {/* Composer — mic + input + send (shared with MissionMode) */}
+      <ChatComposer
+        onSend={sendText}
+        loading={loading}
+        isAgentRunning={isAgentRunning}
+      />
 
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </div>
@@ -307,7 +228,4 @@ const S: Record<string, React.CSSProperties> = {
   system:      { background: 'transparent', border: '1px solid #1a1428', alignSelf: 'center', color: '#3d2d55', fontSize: 11 },
   role:        { display: 'block', fontSize: 9, opacity: 0.45, marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.8 },
   screenshot:  { display: 'block', marginTop: 10, maxWidth: '100%', borderRadius: 6, border: '1px solid #2a1f4a' },
-  inputRow:    { display: 'flex', gap: 8, padding: '10px 20px', borderTop: '1px solid #1a1428', background: '#0a0816', alignItems: 'center' },
-  iconBtn:     { width: 36, height: 36, borderRadius: '50%', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0, cursor: 'pointer', border: '1px solid transparent' },
-  sendBtn:     { background: '#5b21ff', color: '#fff', fontWeight: 600, padding: '8px 18px' },
 }

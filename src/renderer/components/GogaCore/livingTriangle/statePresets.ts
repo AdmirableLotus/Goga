@@ -13,9 +13,9 @@ const C = {
 
 export const STATE_PRESETS: Record<GogaVisualState, LTStatePreset> = {
   idle: {
-    bloomStrength: 1.7, outerScale: 1.0, edgeTurbulence: 0.04,
+    bloomStrength: 1.1, outerScale: 1.0, edgeTurbulence: 0.04,
     rotSpeed: 0.0008, particleSpeed: 0.00025,
-    coreOpacity: 0.97, haloOpacity: 0.12,
+    coreOpacity: 0.82, haloOpacity: 0.12,
     outerColor: C.deepViolet, innerColor: C.lavender,
     coreColor: C.coreWhite, particleColor: C.elecPurple,
     zSpread: 2.2,

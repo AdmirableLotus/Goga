@@ -1,4 +1,4 @@
-import type { ChatMessage, Action } from '../../shared/types'
+import type { ChatMessage, Action, AgentState } from '../../shared/types'
 import { ActionStore } from './actionStore'
 import { LogService } from './logs'
 import { BrainService } from './brain'
@@ -23,6 +23,7 @@ const AGENT_TRIGGERS = [
   /\b(help|assist).{0,30}\b(bounty|bug\s*bounty|pentest|hack|ctf|exploit|vuln|recon|security)\b/i,
   /\b(help me with|work on|complete|finish|do)\b.{0,60}\b(task|project|bounty|workflow)\b/i,
   /\b(run|execute|install|build|compile)\b/i,
+  /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i,
   /\bdo (this|that|it)\b/i,
   /\b(what is|what are|how (do|does|to)|tell me about|explain|show me).{0,60}\b(hackerone|bugcrowd|intigriti|synack|bounty|cve|exploit|payload|xss|sqli|rce|ssrf|lfi|idor)\b/i,
 ]
@@ -48,7 +49,7 @@ export class OrchestratorService {
   private agent    = AgentLoop.getInstance()
   private registry = ToolRegistry.getInstance()
 
-  async process(userMessage: ChatMessage, onToken?: (token: string) => void): Promise<ChatMessage> {
+  async process(userMessage: ChatMessage, onToken?: (token: string) => void, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void): Promise<ChatMessage> {
     this.log.info(`Processing: ${userMessage.content.slice(0, 80)}`)
     this.brain.addMessage(userMessage)
 
@@ -61,7 +62,7 @@ export class OrchestratorService {
       const task = CONFIRM_TRIGGERS.test(content.trim()) && lastAssistant
         ? `${lastAssistant.slice(0, 200)} — User confirmed: proceed.`
         : content
-      return this.startAgentTask(task)
+      return this.startAgentTask(task, onTaskComplete)
     }
 
     const settings = SettingsService.getInstance().get()
@@ -143,18 +144,37 @@ export class OrchestratorService {
     })
   }
 
-  private startAgentTask(task: string): ChatMessage {
+  private startAgentTask(task: string, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void): ChatMessage {
+    let finished = false
+    const finishOnce = (r: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => {
+      if (finished) return
+      finished = true
+      try { onTaskComplete?.(r) } catch (cbErr) {
+        this.log.warn(`onTaskComplete callback threw: ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`)
+      }
+    }
+
     this.agent.run(task).then((reply) => {
       const msg: ChatMessage = { id: nanoid(), role: 'assistant', content: reply, timestamp: Date.now() }
       this.brain.addMessage(msg)
       getMainWindow()?.webContents.send('chat:message', msg)
-    }).catch((err) => {
+      const agentState = this.agent.getState()
+      finishOnce({ status: agentState.status === 'stopped' ? 'cancelled' : 'success', reply, state: agentState })
+    }, (err) => {
+      const errMsg = err instanceof Error ? err.message : String(err)
       const msg: ChatMessage = {
         id: nanoid(), role: 'assistant',
-        content: `Agent error: ${err instanceof Error ? err.message : String(err)}`,
+        content: `Agent error: ${errMsg}`,
         timestamp: Date.now()
       }
       getMainWindow()?.webContents.send('chat:message', msg)
+      finishOnce({ status: 'error', reply: msg.content, state: this.agent.getState(), error: errMsg })
+    }).catch((unexpected) => {
+      // Guards against synchronous throws inside the fulfilled handler leaking out unhandled.
+      // finishOnce's boolean guard prevents double-completion if the fulfilled path already fired.
+      const msg = unexpected instanceof Error ? unexpected.message : String(unexpected)
+      this.log.warn(`startAgentTask: unexpected error in fulfilled handler: ${msg}`)
+      finishOnce({ status: 'error', reply: `Agent error: ${msg}`, state: this.agent.getState(), error: msg })
     })
 
     const settings = SettingsService.getInstance().get()
