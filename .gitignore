@@ -2,5 +2,7 @@ node_modules/
 dist/
 *.log
 .env
+.env.*
+.env.local
 scripts/f02-screenshots/
 scripts/f03-screenshots/

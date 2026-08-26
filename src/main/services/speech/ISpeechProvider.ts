@@ -26,4 +26,8 @@ export interface ITtsProvider {
   stop(): void
   getVoices(): Promise<string[]>
   readonly name: string
+  /** Optional callback invoked when audio playback has genuinely started (not just buffered). */
+  onPlaybackStart?: () => void
+  /** Optional callback invoked with amplitude values during playback (0–1). */
+  onAmplitude?: (amp: number) => void
 }

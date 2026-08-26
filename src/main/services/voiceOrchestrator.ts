@@ -19,6 +19,7 @@ import { EventEmitter } from 'events'
 import { WindowsSttProvider } from './speech/WindowsSpeechProvider'
 import { WindowsTtsProvider } from './speech/WindowsSpeechProvider'
 import { WhisperSttProvider } from './speech/WhisperSttProvider'
+import { ElevenLabsTtsProvider } from './speech/ElevenLabsTtsProvider'
 import type { ISttProvider, ITtsProvider } from './speech/ISpeechProvider'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
@@ -44,6 +45,7 @@ export class VoiceOrchestrator extends EventEmitter {
 
   private stt: ISttProvider = new WindowsSttProvider()
   private tts: ITtsProvider = new WindowsTtsProvider()
+  private fallbackTts: ITtsProvider = new WindowsTtsProvider()
   private log = LogService.getInstance()
 
   private status: VoiceStatus = 'disabled'
@@ -64,8 +66,23 @@ export class VoiceOrchestrator extends EventEmitter {
   private ttsSpeakingUntil = 0   // epoch ms when TTS is expected to finish + grace
 
   static getInstance() {
-    if (!VoiceOrchestrator.instance) VoiceOrchestrator.instance = new VoiceOrchestrator()
+    if (!VoiceOrchestrator.instance) {
+      VoiceOrchestrator.instance = new VoiceOrchestrator()
+      VoiceOrchestrator.instance.initTtsProvider()
+    }
     return VoiceOrchestrator.instance
+  }
+
+  /** Select TTS provider: ElevenLabs if key+voiceId present, else SAPI. */
+  private initTtsProvider() {
+    if (ElevenLabsTtsProvider.isConfigured()) {
+      this.tts = new ElevenLabsTtsProvider()
+      this.log.info('VoiceOrchestrator: TTS provider → ElevenLabs')
+    } else {
+      this.tts = new WindowsTtsProvider()
+      this.log.info('VoiceOrchestrator: TTS provider → WindowsSpeech (SAPI)')
+    }
+    this.fallbackTts = new WindowsTtsProvider()
   }
 
   // ── Providers ─────────────────────────────────────────────────────────────
@@ -80,7 +97,10 @@ export class VoiceOrchestrator extends EventEmitter {
     this.log.info(`VoiceOrchestrator: STT provider → ${p.name}`)
   }
 
-  setTtsProvider(p: ITtsProvider) { this.tts = p }
+  setTtsProvider(p: ITtsProvider) {
+    this.tts = p
+    this.log.info(`VoiceOrchestrator: TTS provider → ${p.name}`)
+  }
 
   /** Re-read sttProvider from settings and swap if needed. */
   reloadSttProvider() {
@@ -305,6 +325,23 @@ export class VoiceOrchestrator extends EventEmitter {
 
   // ── TTS ───────────────────────────────────────────────────────────────────
 
+  private static readonly TTS_OVERALL_TIMEOUT_MS = 75_000
+  private static readonly SAPI_TIMEOUT_MS = 30_000
+
+  /** Race a promise against a timeout. Rejects with a timeout error if exceeded. */
+  private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.log.info(`VoiceOrchestrator: ${label} timeout (${ms}ms)`)
+        reject(new Error(`TTS timeout: ${label}`))
+      }, ms)
+      promise.then(
+        v => { clearTimeout(timer); resolve(v) },
+        e => { clearTimeout(timer); reject(e) }
+      )
+    })
+  }
+
   async speak(text: string): Promise<void> {
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled || !settings.autoSpeakResponses) return
@@ -317,28 +354,64 @@ export class VoiceOrchestrator extends EventEmitter {
     const estimatedMs = (words / wpm) * 60000
 
     this.markTtsSpeaking(clean, estimatedMs)
-    this.setStatus('speaking')
+    this.log.info('VoiceOrchestrator: speak started')
 
-    // Hook amplitude from TTS provider
-    const prevAmp = (this.tts as { onAmplitude?: (v: number) => void }).onAmplitude
-    ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = (v: number) => {
-      this.emit('amplitude', v)
+    let playbackStarted = false
+    const provider = this.tts
+    let userStopped = false
+
+    provider.onAmplitude = (v: number) => { this.emit('amplitude', v) }
+    provider.onPlaybackStart = () => {
+      playbackStarted = true
+      this.setStatus('speaking')
     }
+
     try {
-      await this.tts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName)
-    } catch { }
-    finally {
-      ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = prevAmp
+      await this.withTimeout(
+        provider.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName),
+        VoiceOrchestrator.TTS_OVERALL_TIMEOUT_MS,
+        'overall speak'
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      userStopped = this.status === 'idle'
+
+      if (!playbackStarted && !userStopped && provider.name === 'ElevenLabs') {
+        const reason = msg.includes('timeout') ? 'timeout' : 'error'
+        this.log.info(`VoiceOrchestrator: ElevenLabs failed (${reason}), falling back to SAPI`)
+        provider.stop()
+        try {
+          this.fallbackTts.onAmplitude = (v: number) => { this.emit('amplitude', v) }
+          this.fallbackTts.onPlaybackStart = () => { playbackStarted = true; this.setStatus('speaking') }
+          this.setStatus('speaking')
+          await this.withTimeout(
+            this.fallbackTts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName),
+            VoiceOrchestrator.SAPI_TIMEOUT_MS,
+            'SAPI fallback'
+          )
+        } catch {
+          this.log.info('VoiceOrchestrator: SAPI fallback also failed')
+        } finally {
+          this.fallbackTts.onAmplitude = undefined
+          this.fallbackTts.onPlaybackStart = undefined
+        }
+      }
+    } finally {
+      provider.onAmplitude = undefined
+      provider.onPlaybackStart = undefined
       this.emit('amplitude', 0)
       this.clearTtsSuppression()
       this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      this.log.info('VoiceOrchestrator: speak completed, status → idle')
     }
   }
 
   stopSpeaking() {
     this.tts.stop()
+    this.fallbackTts.stop()
     this.clearTtsSuppression()
     this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+    this.log.info('VoiceOrchestrator: stopSpeaking called')
   }
 
   async narrate(text: string): Promise<void> {
@@ -351,16 +424,37 @@ export class VoiceOrchestrator extends EventEmitter {
     const words = clean.split(/\s+/).length
     const wpm = 130 * (settings.voiceRate ?? 1.0)
     this.markTtsSpeaking(clean, (words / wpm) * 60000)
-    this.setStatus('speaking')
-    const prevAmp = (this.tts as { onAmplitude?: (v: number) => void }).onAmplitude
-    ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = (v: number) => {
-      this.emit('amplitude', v)
-    }
+
+    let playbackStarted = false
+    const provider = this.tts
+
+    provider.onAmplitude = (v: number) => { this.emit('amplitude', v) }
+    provider.onPlaybackStart = () => { playbackStarted = true; this.setStatus('speaking') }
+
     try {
-      await this.tts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName)
-    } catch { }
-    finally {
-      ;(this.tts as { onAmplitude?: (v: number) => void }).onAmplitude = prevAmp
+      await this.withTimeout(
+        provider.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName),
+        VoiceOrchestrator.TTS_OVERALL_TIMEOUT_MS,
+        'narrate'
+      )
+    } catch {
+      if (!playbackStarted && provider.name === 'ElevenLabs' && this.status !== 'idle') {
+        this.log.info('VoiceOrchestrator: ElevenLabs narrate failed, falling back to SAPI')
+        provider.stop()
+        try {
+          this.setStatus('speaking')
+          this.fallbackTts.onAmplitude = (v: number) => { this.emit('amplitude', v) }
+          await this.withTimeout(
+            this.fallbackTts.speak(clean, settings.voiceRate, settings.voiceVolume, settings.voiceName),
+            VoiceOrchestrator.SAPI_TIMEOUT_MS,
+            'SAPI narrate fallback'
+          )
+        } catch { }
+        finally { this.fallbackTts.onAmplitude = undefined }
+      }
+    } finally {
+      provider.onAmplitude = undefined
+      provider.onPlaybackStart = undefined
       this.emit('amplitude', 0)
       this.clearTtsSuppression()
       if (this.status === 'speaking') this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
@@ -376,7 +470,7 @@ export class VoiceOrchestrator extends EventEmitter {
   // ── Speech cleaning ───────────────────────────────────────────────────────
 
   cleanForSpeech(text: string): string {
-    return text
+    let cleaned = text
       .replace(/```[\s\S]*?```/g, '')
       .replace(/`[^`]+`/g, '')
       .replace(/\*\*/g, '').replace(/\*/g, '')
@@ -388,7 +482,24 @@ export class VoiceOrchestrator extends EventEmitter {
       .replace(/\d+,\d+/g, '')
       .replace(/\s{2,}/g, ' ')
       .trim()
-      .slice(0, 400)
+
+    // For text over 400 chars, truncate at the last sentence or word boundary before 400
+    if (cleaned.length > 400) {
+      const window = cleaned.slice(0, 400)
+      const lastSentence = window.lastIndexOf('. ')
+      const lastQuestion = window.lastIndexOf('? ')
+      const lastExclaim = window.lastIndexOf('! ')
+      const breakPoint = Math.max(lastSentence, lastQuestion, lastExclaim)
+      if (breakPoint > 50) {
+        cleaned = cleaned.slice(0, breakPoint + 1)
+      } else {
+        // No sentence boundary — break at last word boundary
+        const lastSpace = window.lastIndexOf(' ')
+        cleaned = lastSpace > 50 ? cleaned.slice(0, lastSpace) : window
+      }
+    }
+
+    return cleaned
   }
 
   async getVoices(): Promise<string[]> {

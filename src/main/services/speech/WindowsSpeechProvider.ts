@@ -124,6 +124,7 @@ export class WindowsTtsProvider implements ITtsProvider {
   readonly name = 'WindowsSpeech'
   private proc: ChildProcess | null = null
   onAmplitude?: (amp: number) => void
+  onPlaybackStart?: () => void
 
   speak(text: string, rate: number, volume: number, voiceName: string): Promise<void> {
     this.stop()
@@ -193,6 +194,7 @@ try {
     return new Promise((resolve, reject) => {
       this.proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true })
       let buf = ''
+      let playbackFired = false
       this.proc.stdout?.on('data', (d: Buffer) => {
         buf += d.toString()
         const lines = buf.split('\n')
@@ -200,6 +202,7 @@ try {
         for (const line of lines) {
           const t = line.trim()
           if (t.startsWith('AMP:')) {
+            if (!playbackFired) { playbackFired = true; this.onPlaybackStart?.() }
             const v = parseFloat(t.slice(4))
             if (!isNaN(v)) this.onAmplitude?.(Math.min(1, v * 3.5)) // boost for visibility
           }
