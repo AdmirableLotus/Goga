@@ -14,6 +14,7 @@
     "start": "npm run build && npx electron .",
     "test:m2": "vitest run --config vitest.config.mts src/renderer/components/__tests__/MissionMode.m2.test.tsx",
     "test:m4": "vitest run src/main/services/__tests__/m4-elevenlabs.test.ts",
+    "test:m41": "vitest run src/main/services/__tests__/m41-stt.test.ts src/main/services/__tests__/m41-agent-resilience.test.ts src/main/services/__tests__/m41-agent-timeout.test.ts",
     "gen-icon": "node scripts/gen-icon.js",
     "pack": "npm run build && electron-builder --win",
     "test:f03-adapters": "npm run build:main && node scripts/f03-adapter-tests.js",
@@ -58,7 +59,8 @@
     "playwright": "^1.62.1",
     "postprocessing": "^6.39.4",
     "screenshot-desktop": "^1.15.4",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "ws": "8.18.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
@@ -67,6 +69,7 @@
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "@types/screenshot-desktop": "^1.15.0",
+    "@types/ws": "8.5.13",
     "@vitejs/plugin-react": "^4.0.0",
     "@vitest/coverage-v8": "^2.1.9",
     "concurrently": "^8.0.0",

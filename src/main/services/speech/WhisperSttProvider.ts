@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
+import fs from 'fs'
 import type { ISttProvider, SpeechRecognitionResult } from './ISpeechProvider'
 import { LogService } from '../logs'
 import { SettingsService } from '../settings'
@@ -19,6 +20,11 @@ const READY_TIMEOUT_MS = 60_000  // model download can take a while on first run
 
 export class WhisperSttProvider implements ISttProvider {
   readonly name = 'Whisper'
+
+  /** True only when the Whisper Python script is present on disk. */
+  static scriptExists(): boolean {
+    try { return fs.existsSync(SCRIPT_PATH) } catch { return false }
+  }
 
   private log = LogService.getInstance()
   private proc: ChildProcess | null = null

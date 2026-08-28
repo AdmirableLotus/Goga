@@ -26,6 +26,7 @@ export default function ChatPage() {
   const { setVisualState } = useGogaVisual()
 
   const inConversation = hasConversation(messages)
+  const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => { stepsBottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [agentSteps])
@@ -67,6 +68,16 @@ export default function ChatPage() {
         setStreamingText('')
         setVisualState('thinking')
       }),
+      // Safety net: if voice returns to idle/speaking (response done or errored)
+      // ensure the streaming cursor and loading are cleared independently of TTS.
+      window.goga.on('voice:status', ({ status }) => {
+        if (status === 'speaking' || status === 'idle') {
+          // The final chat:message clears loading; this guards the error path
+          // where no message arrives. Clearing the cursor here never waits on TTS.
+          setStreamingText('')
+          setLoading(prev => (status === 'idle' ? false : prev))
+        }
+      }),
     ]
     return () => unsubs.forEach(u => u())
   }, [setVisualState])
@@ -90,7 +101,12 @@ export default function ChatPage() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
   const sendText = async (text: string) => {
-    if (!text || loading) return
+    // Allow sending during TTS/agent runs; only block during pure LLM generation.
+    if (!text || (loading && !isAgentRunning)) return
+
+    // A new typed request stops any current speech immediately.
+    window.goga.invoke('voice:stopSpeaking')
+
     setLoading(true)
     setAgentSteps([])
     setStreamingText('')
@@ -119,7 +135,6 @@ export default function ChatPage() {
     }
   }
 
-  const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
   const coreH = inConversation ? 180 : 500
 
   return (

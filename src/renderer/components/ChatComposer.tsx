@@ -44,6 +44,7 @@ interface Props {
 export default function ChatComposer({ onSend, loading = false, isAgentRunning = false, compact = false }: Props) {
   const [input, setInput] = useState('')
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle')
+  const [partialText, setPartialText] = useState('')
   const { setVisualState, setAudioAmplitude } = useGogaVisual()
 
   // Voice status → visual state + amplitude
@@ -54,16 +55,26 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
         if (status === 'listening' || status === 'wake_listening') setVisualState('listening')
         else if (status === 'transcribing') setVisualState('transcribing')
         else if (status === 'speaking') setVisualState('speaking')
+        // Clear stale partial text once we leave the listening/transcribing phase
+        if (status !== 'listening' && status !== 'transcribing') setPartialText('')
       }),
       window.goga.on('voice:amplitude', ({ value }) => setAudioAmplitude(value)),
+      // Partial STT transcript is DISPLAY ONLY — it is never submitted.
+      window.goga.on('voice:partial', ({ text }) => setPartialText(text)),
     ]
     return () => unsubs.forEach(u => u())
   }, [setVisualState, setAudioAmplitude])
 
   const handleMic = useCallback(async () => {
-    if (voiceStatus === 'listening') window.goga.invoke('voice:stopListening')
-    else if (voiceStatus === 'speaking') window.goga.invoke('voice:stopSpeaking')
-    else window.goga.invoke('voice:listenOnce')
+    if (voiceStatus === 'listening') {
+      window.goga.invoke('voice:stopListening')
+    } else if (voiceStatus === 'speaking') {
+      // Barge-in: stop playback, then immediately begin listening
+      await window.goga.invoke('voice:stopSpeaking')
+      window.goga.invoke('voice:listenOnce')
+    } else {
+      window.goga.invoke('voice:listenOnce')
+    }
   }, [voiceStatus])
 
   const handleSend = () => {
@@ -82,6 +93,8 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
                        'Voice input'
 
   const placeholder =
+    (voiceStatus === 'listening' || voiceStatus === 'transcribing') && partialText
+                                   ? `🎤 ${partialText}` :
     voiceStatus === 'listening'    ? '🎤 Listening…' :
     voiceStatus === 'transcribing' ? '⋯ Transcribing…' :
     voiceStatus === 'speaking'     ? '🔊 Speaking…' :
@@ -93,7 +106,9 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
     <div style={{ ...S.row, ...(compact ? S.rowCompact : {}) }}>
       <button
         onClick={handleMic}
-        disabled={loading && voiceStatus === 'idle'}
+        /* Mic always usable during speaking/listening (for barge-in/stop);
+           only disabled during pure LLM generation. */
+        disabled={loading && voiceStatus === 'idle' && !isAgentRunning}
         title={micAriaLabel}
         aria-label={micAriaLabel}
         style={{
@@ -111,12 +126,16 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
         onChange={e => setInput(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
         placeholder={placeholder}
-        disabled={loading && !isAgentRunning && voiceStatus === 'idle'}
+        /* Input stays usable during TTS (speaking) and listening — only the
+           LLM generation window (loading, non-agent) disables it. */
+        disabled={loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening'}
       />
 
       <button
         onClick={handleSend}
-        disabled={(loading && !isAgentRunning) || !input.trim()}
+        /* Send stays clickable during TTS/listening; only blocked while the
+           LLM is actively generating (and only if agent isn't multi-step). */
+        disabled={!input.trim() || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
         style={S.sendBtn}
       >Send</button>
     </div>

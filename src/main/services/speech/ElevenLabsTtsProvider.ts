@@ -88,6 +88,39 @@ export class ElevenLabsTtsProvider implements ITtsProvider {
     this.log.info('TTS:ElevenLabs: stopped/cancelled')
   }
 
+  /** True while a playback process is alive. */
+  isPlaying(): boolean {
+    return this.playbackProc !== null && !this.stopped
+  }
+
+  /**
+   * Stop and wait until the playback process has truly exited. This guarantees
+   * the audio output has stopped before the caller opens the microphone.
+   */
+  async stopAndWait(): Promise<void> {
+    this.stopped = true
+    if (this.currentReq) {
+      try { this.currentReq.destroy() } catch { }
+      this.currentReq = null
+    }
+    const proc = this.playbackProc
+    if (proc) {
+      await new Promise<void>((resolve) => {
+        let done = false
+        const finish = () => { if (!done) { done = true; resolve() } }
+        proc.once('close', finish)
+        proc.once('exit', finish)
+        try { proc.kill() } catch { finish() }
+        // Safety: never hang if the process refuses to die
+        setTimeout(finish, 1500)
+      })
+      this.playbackProc = null
+    }
+    this.onAmplitude?.(0)
+    this.cleanup()
+    this.log.info('TTS:ElevenLabs: stopAndWait — playback terminated')
+  }
+
   async getVoices(): Promise<string[]> {
     return ['ElevenLabs (configured via ELEVENLABS_VOICE_ID)']
   }

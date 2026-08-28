@@ -79,27 +79,29 @@ export class OllamaClient {
     })
   }
 
-  async chat(messages: OllamaMessage[], onToken?: (token: string) => void): Promise<string> {
+  async chat(messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model: this.model, messages, stream: !!onToken })
-    return this.postJson(url, '/api/chat', body, onToken)
+    return this.postJson(url, '/api/chat', body, onToken, signal)
   }
 
-  async chatWith(model: string, messages: OllamaMessage[], onToken?: (token: string) => void): Promise<string> {
+  async chatWith(model: string, messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model, messages, stream: !!onToken })
-    return this.postJson(url, '/api/chat', body, onToken)
+    return this.postJson(url, '/api/chat', body, onToken, signal)
   }
 
   /** Send messages with native Ollama tool definitions. Returns either a text reply
    *  or a parsed tool call. stream=false is required for tool calls. */
   async chatWithTools(
     messages: OllamaMessage[],
-    tools: OllamaTool[]
+    tools: OllamaTool[],
+    signal?: AbortSignal
   ): Promise<{ text: string; toolCall?: OllamaToolCall }> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model: this.model, messages, tools, stream: false })
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error('aborted')); return }
       const req = http.request({
         hostname: url.hostname,
         port: this.getPort(url),
@@ -118,14 +120,18 @@ export class OllamaClient {
         })
         res.on('error', reject)
       })
+      const onAbort = () => { try { req.destroy(new Error('aborted')) } catch { } }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      req.on('close', () => signal?.removeEventListener('abort', onAbort))
       req.on('error', reject)
       req.write(body)
       req.end()
     })
   }
 
-  private postJson(url: URL, path: string, body: string, onToken?: (token: string) => void): Promise<string> {
+  private postJson(url: URL, path: string, body: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error('aborted')); return }
       const req = http.request({
         hostname: url.hostname,
         port: this.getPort(url),
@@ -148,6 +154,9 @@ export class OllamaClient {
         res.on('end', () => resolve(full))
         res.on('error', reject)
       })
+      const onAbort = () => { try { req.destroy(new Error('aborted')) } catch { } }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      req.on('close', () => signal?.removeEventListener('abort', onAbort))
       req.on('error', reject)
       req.write(body)
       req.end()

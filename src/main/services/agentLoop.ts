@@ -10,6 +10,7 @@ import { OllamaClient } from './ollamaClient'
 import { LocalLlamaService } from './localLlama'
 import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
+import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
 import type { AgentState, AgentStep, AgentStatus, ToolResult } from '../../shared/types'
 
@@ -96,11 +97,31 @@ export class AgentLoop {
     const completedSteps: AgentStep[] = []
     let finalReply = ''
     let recoveryAttempts = 0
-    const MAX_RECOVERY = 3
+
+    // ── Resilience guards (shared pure helpers) ─────────────────────────────
+    const taskStart = Date.now()
+    const cycleTracker = new FailureCycleTracker(MAX_EQUIVALENT_FAILURES)
+
+    // HARD overall timeout: actively abort any in-flight model/tool call at the
+    // budget, not just between iterations. The abort propagates through the
+    // shared signal to the Ollama request and the tool context.
+    const timeoutCtl = new TaskTimeoutController(() => {
+      this.log.warn(`Agent hard timeout (${Math.round(OVERALL_TASK_TIMEOUT_MS / 1000)}s) — aborting in-flight operation`)
+      try { this.abortController?.abort() } catch { }
+    })
+    timeoutCtl.start()
 
     try {
       for (let i = 0; i < maxSteps; i++) {
         if (signal.aborted) break
+
+        // ── OVERALL TIMEOUT ───────────────────────────────────────────────────
+        if (isTaskTimedOut(taskStart, Date.now())) {
+          finalReply = `This task took too long and was stopped after ${Math.round(OVERALL_TASK_TIMEOUT_MS / 1000)}s without completing.`
+          this.log.warn(`Agent overall timeout after ${completedSteps.length} steps`)
+          this.setState({ status: 'error', error: 'task_timeout' })
+          break
+        }
 
         // ── OBSERVE ──────────────────────────────────────────────────────────
         let screenshotB64: string | undefined
@@ -128,16 +149,13 @@ export class AgentLoop {
         }
 
         // ── CHOOSE TOOL ───────────────────────────────────────────────────────
+        // Unregistered tool names are rejected IMMEDIATELY — no retry loop.
         const toolDef = this.registry.get(toolCall.tool)?.definition
         if (!toolDef) {
-          this.log.warn(`Agent requested unknown tool: ${toolCall.tool}`)
-          recoveryAttempts++
-          if (recoveryAttempts >= MAX_RECOVERY) {
-            finalReply = `I couldn't find the right tool to complete this task (unknown: ${toolCall.tool}).`
-            this.setState({ status: 'error', error: finalReply })
-            break
-          }
-          continue
+          this.log.warn(`Agent requested unregistered tool: ${toolCall.tool} — rejecting immediately`)
+          finalReply = `I tried to use a capability I don't have ("${toolCall.tool}"), so I stopped. Could you rephrase the request as a concrete action?`
+          this.setState({ status: 'error', error: `unknown_tool: ${toolCall.tool}` })
+          break
         }
 
         // ── RISK CHECK ────────────────────────────────────────────────────────
@@ -197,7 +215,18 @@ export class AgentLoop {
         // ── RECOVER ───────────────────────────────────────────────────────────
         if (!verified && !result.success) {
           recoveryAttempts++
-          this.log.warn(`Step ${i + 1} failed/unverified (attempt ${recoveryAttempts}/${MAX_RECOVERY})`)
+          // Cycle detection: count identical tool+params+error signatures. This
+          // catches loops that would otherwise reset recoveryAttempts by
+          // interleaving nominally-different steps (e.g. web.search/web.fetch
+          // repeatedly failing on the same bad URL).
+          const cycled = cycleTracker.record(toolCall.tool, toolCall.params, result.error)
+          this.log.warn(`Step ${i + 1} failed/unverified (attempt ${recoveryAttempts}/${MAX_RECOVERY}, cycle ${cycleTracker.count(toolCall.tool, toolCall.params, result.error)}/${MAX_EQUIVALENT_FAILURES})`)
+
+          if (cycled) {
+            finalReply = `I kept hitting the same failure (${toolCall.tool}: ${result.error ?? 'error'}) and stopped instead of looping. Try giving me a more specific instruction.`
+            this.setState({ status: 'error', error: 'repeated_failure_cycle' })
+            break
+          }
           if (recoveryAttempts >= MAX_RECOVERY) {
             finalReply = `I tried ${MAX_RECOVERY} times but couldn't complete: ${result.error ?? 'unknown error'}`
             this.setState({ status: 'error', error: finalReply })
@@ -233,18 +262,44 @@ export class AgentLoop {
       }
 
       if (!finalReply) {
-        finalReply = this.state.status === 'stopped'
-          ? 'Task stopped.'
-          : `Completed ${completedSteps.length} steps.`
+        if (this.state.status === 'stopped') {
+          finalReply = 'Task stopped.'
+        } else if (completedSteps.length === 0) {
+          // Zero executable steps for an action-shaped request is a
+          // planning/routing failure — NOT success. Report it explicitly.
+          this.log.info(`Agent produced zero executable steps for task: "${task.slice(0, 80)}"`)
+          finalReply = `I couldn't turn that into any executable actions — the request didn't map to an available tool. Try rephrasing it as a concrete step (for example, "open Notepad").`
+          this.setState({ status: 'error', error: 'planning_failed: zero executable steps' })
+        } else {
+          finalReply = `Completed ${completedSteps.length} steps.`
+        }
       }
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      this.log.error(`Agent error: ${msg}`)
-      finalReply = `Agent encountered an error: ${msg}`
-      this.setState({ status: 'error', error: msg })
+      if (timeoutCtl.timedOut) {
+        finalReply = `This task took too long and was stopped after ${Math.round(OVERALL_TASK_TIMEOUT_MS / 1000)}s.`
+        this.log.warn('Agent aborted by hard timeout')
+        this.setState({ status: 'error', error: 'task_timeout' })
+      } else if (this.state.status === 'stopped' || /abort/i.test(msg)) {
+        // User Stop or abort — controls return to Ready without an error banner.
+        finalReply = finalReply || 'Stopped.'
+        if (this.state.status === 'running') this.setState({ status: 'stopped' })
+      } else {
+        this.log.error(`Agent error: ${msg}`)
+        finalReply = `Agent encountered an error: ${msg}`
+        this.setState({ status: 'error', error: msg })
+      }
+    } finally {
+      // Clear the hard-timeout timer on EVERY exit path.
+      timeoutCtl.clear()
     }
 
+    // If the hard timeout fired, reflect it even if the loop exited cleanly.
+    if (timeoutCtl.timedOut && this.state.status !== 'error') {
+      finalReply = `This task took too long and was stopped after ${Math.round(OVERALL_TASK_TIMEOUT_MS / 1000)}s.`
+      this.setState({ status: 'error', error: 'task_timeout' })
+    }
     if (this.state.status === 'running') this.setState({ status: 'done' })
     return finalReply
   }
@@ -315,7 +370,7 @@ What is the next single action to take?`
         const useNativeTools = settings.primaryModel === 'ollama'
         if (useNativeTools) {
           const ollamaTools = this.registry.toOllamaTools()
-          const { text, toolCall } = await this.ollama.chatWithTools(messages, ollamaTools)
+          const { text, toolCall } = await this.ollama.chatWithTools(messages, ollamaTools, signal)
           if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
           if (toolCall) {
             return {
@@ -328,7 +383,7 @@ What is the next single action to take?`
           // Model returned text instead of tool call — parse as JSON
           raw = text
         } else {
-          raw = await this.ollama.chat(messages)
+          raw = await this.ollama.chat(messages, undefined, signal)
         }
       }
       if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }

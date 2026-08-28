@@ -24,6 +24,11 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     getWindow()?.webContents.send('voice:amplitude', { value })
   })
 
+  // ── Partial STT transcript → renderer (display only, never processed) ─────
+  voice.on('partial', (text: string) => {
+    getWindow()?.webContents.send('voice:partial', { text })
+  })
+
   // ── Transcript → conversation pipeline ───────────────────────────────────
   voice.on('transcript', async (text: string) => {
     const win = getWindow()
@@ -62,7 +67,7 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
         try {
           const reply = await chat.process(userMsg, onToken)
           win.webContents.send('chat:message', reply)
-          await voice.speak(reply.content)
+          voice.speak(reply.content).catch(() => {})
         } catch { }
         return
       }
@@ -77,8 +82,11 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     const onToken = (token: string) => win.webContents.send('chat:token', { token })
     try {
       const reply = await chat.process(userMsg, onToken)
+      // Send the final message FIRST so the renderer clears loading/cursor
+      // immediately — chat completion never waits for TTS.
       win.webContents.send('chat:message', reply)
-      await voice.speak(reply.content)
+      // Speak asynchronously (fire-and-forget). A hung/failed TTS never blocks.
+      voice.speak(reply.content).catch(() => {})
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const errMsg: ChatMessage = { id: nanoid(), role: 'assistant', content: `Error: ${msg}`, timestamp: Date.now() }

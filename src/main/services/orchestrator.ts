@@ -12,31 +12,7 @@ import { nanoid } from '../utils/nanoid'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-// Phrases that clearly signal an autonomous multi-step task
-const AGENT_TRIGGERS = [
-  /\b(open|launch|start)\b.{0,40}\b(and|then|to)\b/i,
-  /\b(open|launch|start)\b.{0,40}\b(browser|brave|chrome|firefox|edge|app|terminal|notepad|explorer|spotify|discord|slack|vscode|code)\b/i,
-  /\b(go to|navigate to|browse to)\b/i,
-  /\b(find|search for|look up|research)\b/i,
-  /\b(organize|sort|move|rename|delete)\b.{0,30}\b(files?|folders?)\b/i,
-  /\b(fix|debug|edit|update|modify)\b.{0,40}\b(code|file|project)\b/i,
-  /\b(help|assist).{0,30}\b(bounty|bug\s*bounty|pentest|hack|ctf|exploit|vuln|recon|security)\b/i,
-  /\b(help me with|work on|complete|finish|do)\b.{0,60}\b(task|project|bounty|workflow)\b/i,
-  /\b(run|execute|install|build|compile)\b/i,
-  /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i,
-  /\bdo (this|that|it)\b/i,
-  /\b(what is|what are|how (do|does|to)|tell me about|explain|show me).{0,60}\b(hackerone|bugcrowd|intigriti|synack|bounty|cve|exploit|payload|xss|sqli|rce|ssrf|lfi|idor)\b/i,
-]
-
-const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
-
-function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
-  if (AGENT_TRIGGERS.some(r => r.test(message))) return true
-  if (CONFIRM_TRIGGERS.test(message.trim()) && lastAssistantMsg) {
-    return /\b(search|look|find|open|navigate|run|execute|install|shall i|want me|would you like|should i|can i)\b/i.test(lastAssistantMsg)
-  }
-  return false
-}
+import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS } from './agentRouting'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -56,6 +32,18 @@ export class OrchestratorService {
     const content = userMessage.content.trim()
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
+
+    // "Open a website" with no named site/URL → ask which one instead of
+    // starting an agent loop that would flail on an unknown target.
+    if (isVagueOpenWebsite(content)) {
+      const reply = {
+        id: nanoid(), role: 'assistant' as const,
+        content: 'Which website would you like me to open? Tell me the site name or URL (for example, "open youtube.com").',
+        timestamp: Date.now()
+      }
+      this.brain.addMessage(reply)
+      return reply
+    }
 
     // Route to agent loop for multi-step tasks
     if (looksLikeAgentTask(content, lastAssistant)) {

@@ -30,4 +30,12 @@ export interface ITtsProvider {
   onPlaybackStart?: () => void
   /** Optional callback invoked with amplitude values during playback (0–1). */
   onAmplitude?: (amp: number) => void
+  /** True while an audio playback process is alive. */
+  isPlaying?(): boolean
+  /**
+   * Stop playback AND resolve only after the underlying playback process has
+   * genuinely terminated (so the speakers are silent before the mic opens).
+   * Providers without a separate process may resolve immediately.
+   */
+  stopAndWait?(): Promise<void>
 }

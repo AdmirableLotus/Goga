@@ -222,6 +222,26 @@ try {
     this.onAmplitude?.(0)
   }
 
+  isPlaying(): boolean {
+    return this.proc !== null
+  }
+
+  async stopAndWait(): Promise<void> {
+    const proc = this.proc
+    if (proc) {
+      await new Promise<void>((resolve) => {
+        let done = false
+        const finish = () => { if (!done) { done = true; resolve() } }
+        proc.once('close', finish)
+        proc.once('exit', finish)
+        try { proc.kill() } catch { finish() }
+        setTimeout(finish, 1500)
+      })
+      this.proc = null
+    }
+    this.onAmplitude?.(0)
+  }
+
   getVoices(): Promise<string[]> {
     return new Promise(resolve => {
       const script = `Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }; $s.Dispose()`

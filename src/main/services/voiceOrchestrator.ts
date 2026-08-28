@@ -20,6 +20,7 @@ import { WindowsSttProvider } from './speech/WindowsSpeechProvider'
 import { WindowsTtsProvider } from './speech/WindowsSpeechProvider'
 import { WhisperSttProvider } from './speech/WhisperSttProvider'
 import { ElevenLabsTtsProvider } from './speech/ElevenLabsTtsProvider'
+import { ElevenLabsSttProvider } from './speech/ElevenLabsSttProvider'
 import type { ISttProvider, ITtsProvider } from './speech/ISpeechProvider'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
@@ -65,10 +66,25 @@ export class VoiceOrchestrator extends EventEmitter {
   private currentTtsText = ''
   private ttsSpeakingUntil = 0   // epoch ms when TTS is expected to finish + grace
 
+  // ── Echo-tail guard ────────────────────────────────────────────────────────
+  // After TTS ends, block recognition briefly so Goga's own tail audio (still
+  // decaying through speakers) is not transcribed as user speech.
+  private static readonly ECHO_TAIL_GUARD_MS = 1200
+  // After confirming playback termination, wait this long for the audio output
+  // buffer to drain before opening the mic, so no residual TTS audio is heard.
+  private static readonly OUTPUT_DRAIN_MS = 400
+  private echoGuardUntil = 0
+  // Rolling record of recent spoken assistant text (with expiry) for self-echo
+  // rejection. Bounded to a short window so legitimate later follow-ups that
+  // happen to repeat Goga's wording are NOT wrongly rejected.
+  private static readonly ECHO_MEMORY_WINDOW_MS = 10_000
+  private recentSpoken: Array<{ text: string; expiresAt: number }> = []
+
   static getInstance() {
     if (!VoiceOrchestrator.instance) {
       VoiceOrchestrator.instance = new VoiceOrchestrator()
       VoiceOrchestrator.instance.initTtsProvider()
+      VoiceOrchestrator.instance.initSttProvider()
     }
     return VoiceOrchestrator.instance
   }
@@ -83,6 +99,83 @@ export class VoiceOrchestrator extends EventEmitter {
       this.log.info('VoiceOrchestrator: TTS provider → WindowsSpeech (SAPI)')
     }
     this.fallbackTts = new WindowsTtsProvider()
+  }
+
+  // ── Authoritative STT selection ────────────────────────────────────────────
+  // A SINGLE serialized selection promise decides the STT provider. Every
+  // listening entry point awaits it before touching any provider, so no
+  // recognizer (especially the broken Whisper) can be spawned during the
+  // ElevenLabs availability probe. `selectionGen` guards against stale
+  // selections when settings change mid-probe.
+  private elSttPreferred = false
+  private selectionGen = 0
+  private sttSelection: Promise<void> | null = null
+
+  /** Kick off the authoritative selection (idempotent-ish; supersedes prior). */
+  private initSttProvider(): void {
+    this.selectStt()
+  }
+
+  /** Ensure a selection is in progress and return the promise to await. */
+  private ensureSttSelected(): Promise<void> {
+    if (!this.sttSelection) this.selectStt()
+    return this.sttSelection ?? Promise.resolve()
+  }
+
+  /**
+   * The one authoritative selector. Preference order:
+   *   1. ElevenLabs realtime STT — when key carries speech_to_text permission
+   *   2. Settings-driven Whisper — ONLY if the Python script exists on disk
+   *   3. Windows STT — safe offline fallback
+   * Runs under a generation guard so a superseding call wins.
+   */
+  private selectStt(): Promise<void> {
+    const gen = ++this.selectionGen
+    this.sttSelection = (async () => {
+      // 1. ElevenLabs (preferred)
+      if (ElevenLabsSttProvider.isConfigured()) {
+        let ok = false
+        try { ok = await ElevenLabsSttProvider.isAvailable() } catch { ok = false }
+        if (gen !== this.selectionGen) return  // superseded
+        if (ok) {
+          this.elSttPreferred = true
+          if (this.stt.name !== 'ElevenLabsSTT') {
+            const el = new ElevenLabsSttProvider()
+            el.onPartial = (text: string) => this.emit('partial', text)
+            this.setSttProvider(el)
+          }
+          this.log.info(`VoiceOrchestrator: effective STT provider → ElevenLabs (realtime)`)
+          return
+        }
+      }
+      if (gen !== this.selectionGen) return
+      this.elSttPreferred = false
+
+      // 2. Whisper — only when explicitly selected AND its script exists
+      const settings = SettingsService.getInstance().get()
+      const want = settings.sttProvider ?? 'windows'
+      if (want === 'whisper') {
+        if (WhisperSttProvider.scriptExists()) {
+          if (this.stt.name !== 'Whisper') {
+            this.setSttProvider(new WhisperSttProvider({
+              model: settings.whisperModel,
+              device: settings.whisperDevice,
+              language: settings.whisperLanguage || undefined
+            }))
+          }
+          this.log.info('VoiceOrchestrator: effective STT provider → Whisper')
+          return
+        }
+        this.log.info('VoiceOrchestrator: Whisper script missing — falling back to WindowsSpeech')
+      }
+
+      // 3. Windows STT (safe fallback)
+      if (this.stt.name !== 'WindowsSpeech') {
+        this.setSttProvider(new WindowsSttProvider())
+      }
+      this.log.info('VoiceOrchestrator: effective STT provider → WindowsSpeech')
+    })()
+    return this.sttSelection
   }
 
   // ── Providers ─────────────────────────────────────────────────────────────
@@ -102,20 +195,13 @@ export class VoiceOrchestrator extends EventEmitter {
     this.log.info(`VoiceOrchestrator: TTS provider → ${p.name}`)
   }
 
-  /** Re-read sttProvider from settings and swap if needed. */
-  reloadSttProvider() {
-    const settings = SettingsService.getInstance().get()
-    const want = settings.sttProvider ?? 'windows'
-    const current = this.stt.name
-    if (want === 'whisper' && current !== 'Whisper') {
-      this.setSttProvider(new WhisperSttProvider({
-        model:   settings.whisperModel,
-        device:  settings.whisperDevice,
-        language: settings.whisperLanguage || undefined
-      }))
-    } else if (want === 'windows' && current !== 'WindowsSpeech') {
-      this.setSttProvider(new WindowsSttProvider())
-    }
+  /**
+   * Re-run the authoritative selector (e.g. after settings change). Uses the
+   * same serialized path + generation guard, so it can never start Whisper
+   * while ElevenLabs is preferred, nor spawn a broken Whisper.
+   */
+  reloadSttProvider(): Promise<void> {
+    return this.selectStt()
   }
 
   // ── Status ────────────────────────────────────────────────────────────────
@@ -149,14 +235,20 @@ export class VoiceOrchestrator extends EventEmitter {
 
   // ── Wake word loop (continuous) ───────────────────────────────────────────
 
-  startWakeLoop() {
+  async startWakeLoop(): Promise<void> {
     if (this.wakeLoopActive) return
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled) return
     this.wakeLoopActive = true
     this.abortWake = false
     this.setStatus('wake_listening')
-    this.log.info('VoiceOrchestrator: wake loop started (continuous)')
+
+    // Wait for the authoritative STT selection before touching any provider,
+    // so we never start a recognizer mid-probe.
+    await this.ensureSttSelected()
+    if (!this.wakeLoopActive || this.abortWake) return
+
+    this.log.info(`VoiceOrchestrator: wake loop started (continuous, provider=${this.stt.name})`)
 
     // Use continuous recognition — no repeated PS startup cost
     this.stt.startContinuous(
@@ -183,7 +275,11 @@ export class VoiceOrchestrator extends EventEmitter {
 
   private onContinuousResult(text: string) {
     if (!text) return
-    if (this.isSelfTts(text)) {
+    if (this.inEchoGuard()) {
+      this.log.info('VoiceOrchestrator: suppressed transcript during echo-tail guard')
+      return
+    }
+    if (this.isSelfTts(text) || this.isRecentSpokenEcho(text)) {
       this.log.info(`VoiceOrchestrator: suppressed self-TTS echo: "${text.slice(0, 40)}"`)
       return
     }
@@ -225,22 +321,49 @@ export class VoiceOrchestrator extends EventEmitter {
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled) return
 
-    // Barge-in: stop TTS if allowBargeIn is on, or always allow explicit mic press
-    if (this.status === 'speaking') {
-      this.tts.stop()
+    // ── Self-echo prevention: fully stop TTS before opening the mic ──────────
+    // On a mic press during (or right after) TTS, we must NOT begin capture
+    // until the playback process has genuinely terminated and the output has
+    // had a moment to drain. Otherwise the mic hears Goga's own voice.
+    const wasSpeaking = this.status === 'speaking' || (this.tts.isPlaying?.() ?? false)
+    if (wasSpeaking) {
+      if (this.tts.stopAndWait) {
+        await this.tts.stopAndWait()
+      } else {
+        this.tts.stop()
+      }
+      // Arm the echo-tail guard and drain the audio output buffer.
+      this.echoGuardUntil = Date.now() + VoiceOrchestrator.ECHO_TAIL_GUARD_MS
+      await new Promise(r => setTimeout(r, VoiceOrchestrator.OUTPUT_DRAIN_MS))
     }
 
+    // Wait for the authoritative STT selection before invoking any provider,
+    // so an immediate mic click during the probe uses the correct recognizer
+    // (never a transient/broken Whisper).
+    await this.ensureSttSelected()
+
+    // If any playback somehow resumed, do not open the mic.
+    if (this.tts.isPlaying?.()) {
+      this.log.info('VoiceOrchestrator: listenOnce aborted — TTS still playing')
+      this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      return
+    }
+
+    // Only now is capture genuinely ready — show Listening.
     this.setStatus('listening')
     try {
       const result = await this.stt.recognize(12000)
-      if (!result.transcript) { this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle'); return }
-      if (this.isSelfTts(result.transcript)) {
-        this.log.info(`VoiceOrchestrator: suppressed self-TTS in listenOnce: "${result.transcript.slice(0, 40)}"`)
+      const transcript = result.transcript?.trim() ?? ''
+      if (!transcript) { this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle'); return }
+      // Reject self-echo by BOTH the timed window and the timing-independent
+      // recent-spoken-text overlap check.
+      if (this.isSelfTts(transcript) || this.isRecentSpokenEcho(transcript)) {
+        this.log.info(`VoiceOrchestrator: rejected self-echo transcript: "${transcript.slice(0, 48)}"`)
         this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
         return
       }
       this.activateConversation()
-      await this.handleTranscript(result.transcript)
+      await this.handleTranscript(transcript)
     } catch {
       this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
     }
@@ -273,14 +396,67 @@ export class VoiceOrchestrator extends EventEmitter {
   private markTtsSpeaking(text: string, estimatedDurationMs: number) {
     this.currentTtsText = text
     this.ttsSpeakingUntil = Date.now() + estimatedDurationMs + TTS_SUPPRESS_GRACE_MS
+    // Remember this spoken phrase only for a short window after playback is
+    // expected to end. Acoustic echo only occurs shortly after speaking, so a
+    // bounded window avoids rejecting genuine later follow-ups.
+    const norm = this.normalizeForEcho(text)
+    if (norm) {
+      const expiresAt = this.ttsSpeakingUntil + VoiceOrchestrator.ECHO_MEMORY_WINDOW_MS
+      this.recentSpoken.push({ text: norm, expiresAt })
+      if (this.recentSpoken.length > 4) this.recentSpoken.shift()
+    }
+  }
+
+  /** Normalize text for echo comparison: lowercase, strip punctuation, collapse spaces. */
+  private normalizeForEcho(text: string): string {
+    return text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  }
+
+  /**
+   * Reject a transcript that strongly overlaps recent spoken assistant text,
+   * but ONLY within a bounded window after that TTS ended (acoustic echo is a
+   * short-lived phenomenon). Legitimate follow-ups repeating Goga's wording
+   * later are NOT rejected. Uses normalized token overlap ≥50% with ≥3 words.
+   */
+  private isRecentSpokenEcho(transcript: string): boolean {
+    const t = this.normalizeForEcho(transcript)
+    if (!t) return false
+    const tWords = t.split(' ').filter(Boolean)
+    if (tWords.length === 0) return false
+    const tSet = new Set(tWords)
+    const now = Date.now()
+    for (const entry of this.recentSpoken) {
+      if (now > entry.expiresAt) continue  // outside the echo window — ignore
+      const spoken = entry.text
+      const sWords = spoken.split(' ').filter(Boolean)
+      if (sWords.length === 0) continue
+      // Substring containment (STT often captures a contiguous slice of TTS)
+      if (spoken.includes(t) || t.includes(spoken.slice(0, Math.min(spoken.length, 24)))) return true
+      // Token overlap ratio relative to the (shorter) transcript
+      const overlap = tWords.filter(w => new Set(sWords).has(w)).length
+      const ratio = overlap / tWords.length
+      if (ratio >= 0.5 && overlap >= 3) return true
+      // Also guard the reverse (long transcript, short spoken phrase)
+      const sOverlap = sWords.filter(w => tSet.has(w)).length
+      if (sWords.length > 0 && sOverlap / sWords.length >= 0.6 && sOverlap >= 3) return true
+    }
+    return false
   }
 
   private clearTtsSuppression() {
+    // Echo-tail guard: block recognition for a short window after TTS ends so
+    // Goga's own decaying audio is not picked up as user speech.
+    this.echoGuardUntil = Date.now() + VoiceOrchestrator.ECHO_TAIL_GUARD_MS
     // Keep suppression active for grace period after TTS ends
     setTimeout(() => {
       this.currentTtsText = ''
       this.ttsSpeakingUntil = 0
     }, TTS_SUPPRESS_GRACE_MS)
+  }
+
+  /** True while the post-TTS echo-tail guard is active. */
+  private inEchoGuard(): boolean {
+    return Date.now() < this.echoGuardUntil
   }
 
   // ── Transcript routing ────────────────────────────────────────────────────
