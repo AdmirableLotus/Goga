@@ -63,8 +63,8 @@ export class LocalLlamaService {
     try {
       const { getLlama } = await esmImport('node-llama-cpp')
 
-      this.log.info('LocalLlama: getLlama() — requesting CUDA backend')
-      this.llama = await getLlama({ gpu: 'cuda' })
+      this.log.info('LocalLlama: getLlama() — requesting best available GPU backend (auto)')
+      this.llama = await getLlama({ gpu: 'auto' })
       this.log.info(`LocalLlama: backend=${this.llama.gpu ?? 'cpu'}`)
 
       this.log.info('LocalLlama: loading model weights…')
