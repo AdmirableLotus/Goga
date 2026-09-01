@@ -1,3 +1,0 @@
-﻿count-m2 : total=37 passed=37 failed=0
-count-m41 : total=62 passed=62 failed=0
-count-m4 : total=21 passed=21 failed=0
