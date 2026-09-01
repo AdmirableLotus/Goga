@@ -163,6 +163,27 @@ export function applySend(state: ActivityState, text: string): ActivityState {
   }
 }
 
+// ── applyVoiceIdle ────────────────────────────────────────────────────────────
+// voice:status → 'idle' handler. The voice/chat pipeline has gone idle on the
+// backend (response generated + TTS finished). A simple chat/voice turn does
+// not emit a terminal agent:state, and a trailing self-echo transcript or a
+// deduped completion message can leave activityStatus stuck at 'running'. When
+// voice is idle and no genuine multi-step agent run is in flight, reconcile a
+// stuck 'running'/'approval' status to a terminal state so the RUNNING badge
+// and Stop button clear. Never overrides a 'stopped' status.
+export function applyVoiceIdle(state: ActivityState, agentRunning: boolean): ActivityState {
+  if (agentRunning) return state
+  if (state.activityStatus !== 'running' && state.activityStatus !== 'approval') return state
+  return {
+    ...state,
+    loading: false,
+    currentStep: null,
+    // If a response was produced, the turn completed; otherwise there is
+    // nothing to show, so drop the panel back to idle.
+    activityStatus: state.finalResponse ? 'completed' : 'none',
+  }
+}
+
 // ── applyDismiss ──────────────────────────────────────────────────────────────
 // handleDismiss — clears display state only, does not touch stopped ref.
 export function applyDismiss(state: ActivityState): ActivityState {
@@ -190,6 +211,7 @@ export interface GogaEventBus {
   on(channel: 'chat:token',             cb: (p: { token: string }) => void): () => void
   on(channel: 'chat:message',           cb: (p: { id: string; role: string; content: string }) => void): () => void
   on(channel: 'voice:transcript',       cb: (p: { text: string }) => void): () => void
+  on(channel: 'voice:status',           cb: (p: { status: string }) => void): () => void
   on(channel: 'mission:state',          cb: (m: Mission) => void): () => void
   on(channel: 'action:approval-required', cb: (a: Action) => void): () => void
   on(channel: 'action:update',          cb: (a: Action) => void): () => void
@@ -205,6 +227,9 @@ export interface ActivityCallbacks {
   lastMsgIdRef:    { current: string | null }
   lastTranscript:  { current: string }
   streamingRef:    { current: string }
+  // Tracks whether a genuine multi-step agent run is in flight, so the
+  // voice:status→idle reconciliation never clears a real running agent.
+  agentRunningRef: { current: boolean }
   agentStateToVisual: (s: AgentState) => GogaVisualState
 }
 
@@ -214,6 +239,7 @@ export function subscribeActivityEvents(
 ): () => void {
   const unsubs = [
     bus.on('agent:state', (s) => {
+      cb.agentRunningRef.current = s.status === 'running' || s.status === 'waiting-approval'
       cb.setAgentState(() => s)
       cb.setVisualState(cb.agentStateToVisual(s))
       cb.setActivity(prev => applyAgentState(prev, s))
@@ -225,6 +251,7 @@ export function subscribeActivityEvents(
 
     bus.on('agent:stopped', ({ reason }) => {
       cb.stoppedRef.current = true
+      cb.agentRunningRef.current = false
       cb.setAgentState(s => s ? { ...s, status: 'stopped' } : null)
       cb.setVisualState('stopped')
       cb.setActivity(prev => applyStopped(prev, reason))
@@ -254,6 +281,15 @@ export function subscribeActivityEvents(
       cb.lastMsgIdRef.current = null
       cb.setActivity(prev => applyTranscript(prev, text, text, false).state)
       cb.setVisualState('thinking')
+    }),
+
+    bus.on('voice:status', ({ status }) => {
+      // When the voice pipeline returns to idle, reconcile a stuck RUNNING
+      // activity left by a simple chat/voice turn (which emits no terminal
+      // agent:state). Guarded so a genuine agent run is never cleared.
+      if (status === 'idle') {
+        cb.setActivity(prev => applyVoiceIdle(prev, cb.agentRunningRef.current))
+      }
     }),
 
     bus.on('mission:state', (m) => {

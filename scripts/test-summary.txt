@@ -1,0 +1,4 @@
+﻿[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m37 passed[39m[22m[90m (37)[39m
+[2m   Duration [22m 913ms[2m (transform 45ms, setup 0ms, collect 60ms, tests 8ms, environment 0ms, prepare 469ms)[22m
+TEST_EXIT=0

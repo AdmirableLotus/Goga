@@ -76,6 +76,7 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
   const lastMsgIdRef   = useRef<string | null>(null)  // dedup chat:message
   const lastTranscript = useRef<string>('')           // dedup voice:transcript
   const streamingRef   = useRef('')                   // mirror of streamingText for stable closure
+  const agentRunningRef = useRef(false)               // true while a real multi-step agent run is in flight
 
   // ── IPC subscriptions ─────────────────────────────────────────────────────
   // voice:status and voice:amplitude are handled by ChatComposer.
@@ -85,6 +86,7 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
     const callbacks: ActivityCallbacks = {
       setActivity, setAgentState, setMission, setPendingAction, setVisualState,
       stoppedRef, lastMsgIdRef, lastTranscript, streamingRef,
+      agentRunningRef,
       agentStateToVisual,
     }
     return subscribeActivityEvents(window.goga, callbacks)
@@ -106,6 +108,7 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
   const handleSend = useCallback(async (text: string) => {
     stoppedRef.current = false
     lastMsgIdRef.current = null
+    agentRunningRef.current = false
     setActivity(prev => applySend(prev, text))
     setVisualState('thinking')
     try {

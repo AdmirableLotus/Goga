@@ -12,6 +12,7 @@ import {
   applyTranscript,
   applySend,
   applyDismiss,
+  applyVoiceIdle,
   subscribeActivityEvents,
   INITIAL_ACTIVITY,
 } from '../missionUtils'
@@ -62,6 +63,7 @@ function makeCallbacks() {
     lastMsgIdRef:  { current: null },
     lastTranscript:{ current: '' },
     streamingRef:  { current: '' },
+    agentRunningRef: { current: false },
     agentStateToVisual: () => 'idle',
   }
   return { callbacks, getActivity: () => activity }
@@ -71,7 +73,7 @@ function makeCallbacks() {
 describe('subscribeActivityEvents — registration', () => {
   const ACTIVITY_CHANNELS = [
     'agent:state', 'agent:step', 'agent:stopped',
-    'chat:token', 'chat:message', 'voice:transcript',
+    'chat:token', 'chat:message', 'voice:transcript', 'voice:status',
     'mission:state', 'action:approval-required', 'action:update',
   ] as const
 
@@ -334,5 +336,49 @@ describe('applyDismiss', () => {
     const s = { ...base(), loading: true }
     const next = applyDismiss(s)
     expect(next.loading).toBe(true)
+  })
+})
+
+// ── applyVoiceIdle ────────────────────────────────────────────────────────────
+describe('applyVoiceIdle', () => {
+  it('running with a response → completed, loading cleared', () => {
+    const s = { ...base(), activityStatus: 'running' as const, loading: true,
+                finalResponse: 'Hello Boss.', currentStep: 'Web: search' }
+    const next = applyVoiceIdle(s, false)
+    expect(next.activityStatus).toBe('completed')
+    expect(next.loading).toBe(false)
+    expect(next.currentStep).toBeNull()
+  })
+
+  it('running with no response → none', () => {
+    const s = { ...base(), activityStatus: 'running' as const, loading: true, finalResponse: null }
+    const next = applyVoiceIdle(s, false)
+    expect(next.activityStatus).toBe('none')
+    expect(next.loading).toBe(false)
+  })
+
+  it('approval status is also reconciled', () => {
+    const s = { ...base(), activityStatus: 'approval' as const, finalResponse: 'done' }
+    const next = applyVoiceIdle(s, false)
+    expect(next.activityStatus).toBe('completed')
+  })
+
+  it('does NOT clear when a genuine agent run is active', () => {
+    const s = { ...base(), activityStatus: 'running' as const, loading: true }
+    const next = applyVoiceIdle(s, true)
+    expect(next).toBe(s)
+    expect(next.activityStatus).toBe('running')
+  })
+
+  it('leaves a stopped status untouched', () => {
+    const s = { ...base(), activityStatus: 'stopped' as const }
+    const next = applyVoiceIdle(s, false)
+    expect(next.activityStatus).toBe('stopped')
+  })
+
+  it('leaves a completed status untouched', () => {
+    const s = { ...base(), activityStatus: 'completed' as const }
+    const next = applyVoiceIdle(s, false)
+    expect(next).toBe(s)
   })
 })
