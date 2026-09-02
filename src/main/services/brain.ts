@@ -1,9 +1,11 @@
+import path from 'path'
+import { app } from 'electron'
 import type { GogaFact, ChatMessage } from '../../shared/types'
 import { nanoid } from '../utils/nanoid'
 import { LogService } from './logs'
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const Store = require('electron-store')
+// Use a simple JSON file for persistence — no extra deps beyond what's built in
+import fs from 'fs'
 
 interface BrainStore {
   facts: GogaFact[]
@@ -11,13 +13,13 @@ interface BrainStore {
   learnedTopics: string[]
 }
 
-const DEFAULTS: BrainStore = { facts: [], conversationHistory: [], learnedTopics: [] }
-const HISTORY_LIMIT = 40
-const FACTS_IN_PROMPT = 12
+const HISTORY_LIMIT = 40   // messages kept in rolling context
+const FACTS_IN_PROMPT = 12 // max facts injected per request
 
 export class BrainService {
   private static instance: BrainService
-  private store: ReturnType<typeof Store>
+  private store: BrainStore = { facts: [], conversationHistory: [], learnedTopics: [] }
+  private filePath: string
   private log = LogService.getInstance()
 
   static getInstance() {
@@ -26,46 +28,69 @@ export class BrainService {
   }
 
   constructor() {
-    this.store = new Store({ name: 'brain', defaults: DEFAULTS })
-    this.log.info(`Brain loaded: ${this.getFacts().length} facts, ${this.getHistory().length} messages`)
+    const dataDir = app.getPath('userData')
+    this.filePath = path.join(dataDir, 'goga-brain.json')
+    this.load()
   }
 
+  private load() {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        this.store = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
+        this.log.info(`Brain loaded: ${this.store.facts.length} facts, ${this.store.conversationHistory.length} messages`)
+      }
+    } catch { this.store = { facts: [], conversationHistory: [], learnedTopics: [] } }
+  }
+
+  private save() {
+    try { fs.writeFileSync(this.filePath, JSON.stringify(this.store, null, 2)) }
+    catch (e) { this.log.error(`Brain save failed: ${e}`) }
+  }
+
+  // Add a message to rolling conversation history
   addMessage(msg: ChatMessage) {
-    let history: ChatMessage[] = this.store.get('conversationHistory')
-    history.push(msg)
-    if (history.length > HISTORY_LIMIT) history = history.slice(-HISTORY_LIMIT)
-    this.store.set('conversationHistory', history)
+    this.store.conversationHistory.push(msg)
+    if (this.store.conversationHistory.length > HISTORY_LIMIT) {
+      this.store.conversationHistory = this.store.conversationHistory.slice(-HISTORY_LIMIT)
+    }
+    this.save()
   }
 
+  // Store a fact Goga learned
   addFact(content: string, category: GogaFact['category'], source: GogaFact['source'] = 'conversation') {
-    const facts: GogaFact[] = this.store.get('facts')
-    if (facts.some(f => f.content.toLowerCase() === content.toLowerCase())) return
+    // Avoid exact duplicates
+    if (this.store.facts.some(f => f.content.toLowerCase() === content.toLowerCase())) return
     const fact: GogaFact = { id: nanoid(), category, content, source, createdAt: Date.now() }
-    this.store.set('facts', [...facts, fact])
+    this.store.facts.push(fact)
+    this.save()
     this.log.info(`Brain learned: [${category}] ${content.slice(0, 80)}`)
   }
 
+  // Mark a topic as learned from a book
   addLearnedTopic(topic: string) {
-    const topics: string[] = this.store.get('learnedTopics')
-    if (!topics.includes(topic)) this.store.set('learnedTopics', [...topics, topic])
+    if (!this.store.learnedTopics.includes(topic)) {
+      this.store.learnedTopics.push(topic)
+      this.save()
+    }
   }
 
-  getHistory(): ChatMessage[]  { return this.store.get('conversationHistory') }
-  getFacts(): GogaFact[]       { return this.store.get('facts') }
-  getLearnedTopics(): string[] { return this.store.get('learnedTopics') }
+  getHistory() { return [...this.store.conversationHistory] }
+  getFacts() { return [...this.store.facts] }
+  getLearnedTopics() { return [...this.store.learnedTopics] }
 
+  // Get the most relevant facts for a given message (simple keyword match)
   getRelevantFacts(query: string): GogaFact[] {
     const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2)
-    const facts = this.getFacts()
-    const scored = facts.map(f => ({
+    const scored = this.store.facts.map(f => ({
       fact: f,
       score: terms.filter(t => f.content.toLowerCase().includes(t)).length
     }))
     const relevant = scored.filter(s => s.score > 0).sort((a, b) => b.score - a.score).map(s => s.fact)
-    const aboutUser = facts.filter(f => f.category === 'about_user' && !relevant.includes(f))
+    // Always include about_user facts
+    const aboutUser = this.store.facts.filter(f => f.category === 'about_user' && !relevant.includes(f))
     return [...aboutUser, ...relevant].slice(0, FACTS_IN_PROMPT)
   }
 
-  clearHistory() { this.store.set('conversationHistory', []) }
-  deleteFact(id: string) { this.store.set('facts', this.getFacts().filter(f => f.id !== id)) }
+  clearHistory() { this.store.conversationHistory = []; this.save() }
+  deleteFact(id: string) { this.store.facts = this.store.facts.filter(f => f.id !== id); this.save() }
 }

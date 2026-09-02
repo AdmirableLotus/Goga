@@ -1,0 +1,95 @@
+{
+  "name": "goga",
+  "version": "0.1.0",
+  "description": "Local-first AI desktop operator",
+  "main": "dist/main/main/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:main\" \"npm run dev:electron\"",
+    "dev:main": "tsc -p tsconfig.main.json --watch",
+    "dev:renderer": "vite --config vite.config.ts",
+    "dev:electron": "wait-on http://localhost:5173 dist/main/index.js && cross-env VITE_DEV=1 electron .",
+    "build": "npm run build:renderer && npm run build:main",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build --config vite.config.ts",
+    "start": "npm run build && npx electron .",
+    "test:m2": "vitest run --config vitest.config.mts src/renderer/components/__tests__/MissionMode.m2.test.tsx",
+    "test:m4": "vitest run src/main/services/__tests__/m4-elevenlabs.test.ts",
+    "test:m41": "vitest run src/main/services/__tests__/m41-stt.test.ts src/main/services/__tests__/m41-agent-resilience.test.ts src/main/services/__tests__/m41-agent-timeout.test.ts",
+    "gen-icon": "node scripts/gen-icon.js",
+    "pack": "npm run build && electron-builder --win",
+    "test:f03-adapters": "npm run build:main && node scripts/f03-adapter-tests.js",
+    "test:f03-production": "npm run build:main && node scripts/f03-production-tests.js",
+    "benchmark:f03-moondream": "node scripts/f03-moondream-benchmark.js"
+  },
+  "build": {
+    "appId": "com.goga.desktop",
+    "productName": "Goga",
+    "icon": "assets/icon.ico",
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Goga"
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "@types/three": "^0.185.4",
+    "active-win": "^8.2.1",
+    "dotenv": "16.4.7",
+    "electron-store": "^8.2.0",
+    "epub2": "^3.0.2",
+    "node-llama-cpp": "^3.19.1",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.62.1",
+    "postprocessing": "^6.39.4",
+    "screenshot-desktop": "^1.15.4",
+    "three": "^0.185.1",
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "@types/screenshot-desktop": "^1.15.0",
+    "@types/ws": "8.5.13",
+    "@vitejs/plugin-react": "^4.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "concurrently": "^8.0.0",
+    "cross-env": "^10.1.0",
+    "electron": "^32.3.3",
+    "electron-builder": "^24.0.0",
+    "jsdom": "^30.0.1",
+    "png-to-ico": "^3.0.2",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0",
+    "vitest": "2.1.9",
+    "wait-on": "^7.0.0"
+  },
+  "allowScripts": {
+    "electron@32.3.3": true,
+    "esbuild@0.21.5": true,
+    "active-win@8.2.1": true,
+    "electron-store@8.2.0": true,
+    "node-llama-cpp@3.19.1": true
+  }
+}

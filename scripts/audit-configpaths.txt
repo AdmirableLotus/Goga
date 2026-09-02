@@ -1,0 +1,6 @@
+﻿PATH=C:\Users\redre\AppData\Roaming\Code\User\settings.json EXISTS=True
+PATH=C:\Users\redre\AppData\Roaming\Kiro\User\settings.json EXISTS=True
+PATH=C:\Users\redre\.kiro\settings\settings.json EXISTS=False
+PATH=C:\Users\redre\.kiro EXISTS=True
+APPDATA_DIR=Code
+APPDATA_DIR=Kiro

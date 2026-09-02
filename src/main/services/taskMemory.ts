@@ -1,8 +1,8 @@
+import fs from 'fs'
+import path from 'path'
+import { app } from 'electron'
 import { nanoid } from '../utils/nanoid'
 import { LogService } from './logs'
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const Store = require('electron-store')
 
 export interface TaskPattern {
   id: string
@@ -23,7 +23,8 @@ export interface PatternStep {
 
 export class TaskMemoryService {
   private static instance: TaskMemoryService
-  private store: ReturnType<typeof Store>
+  private patterns: TaskPattern[] = []
+  private filePath: string
   private log = LogService.getInstance()
 
   static getInstance() {
@@ -32,17 +33,27 @@ export class TaskMemoryService {
   }
 
   constructor() {
-    this.store = new Store({ name: 'tasks', defaults: { patterns: [] } })
-    this.log.info(`Task memory loaded: ${this.list().length} patterns`)
+    this.filePath = path.join(app.getPath('userData'), 'goga-tasks.json')
+    this.load()
   }
 
-  private getPatterns(): TaskPattern[] { return this.store.get('patterns') }
-  private setPatterns(p: TaskPattern[]) { this.store.set('patterns', p) }
+  private load() {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        this.patterns = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
+        this.log.info(`Task memory loaded: ${this.patterns.length} patterns`)
+      }
+    } catch { this.patterns = [] }
+  }
 
+  private save() {
+    try { fs.writeFileSync(this.filePath, JSON.stringify(this.patterns, null, 2)) } catch { /* ignore */ }
+  }
+
+  // Find patterns relevant to a goal using keyword overlap
   findRelevant(goal: string, limit = 3): TaskPattern[] {
     const terms = goal.toLowerCase().split(/\s+/).filter(t => t.length > 3)
-    const patterns = this.getPatterns()
-    const scored = patterns.map(p => ({
+    const scored = this.patterns.map(p => ({
       pattern: p,
       score: terms.filter(t =>
         p.goal.toLowerCase().includes(t) ||
@@ -57,30 +68,32 @@ export class TaskMemoryService {
   }
 
   save_pattern(goal: string, appContext: string, steps: PatternStep[]): TaskPattern {
-    const patterns = this.getPatterns()
-    const existing = patterns.find(p =>
+    // Update existing if same goal, otherwise create new
+    const existing = this.patterns.find(p =>
       p.goal.toLowerCase() === goal.toLowerCase() && p.appContext === appContext
     )
     if (existing) {
       existing.steps = steps
       existing.successCount++
       existing.lastUsed = Date.now()
-      this.setPatterns(patterns)
+      this.save()
       return existing
     }
     const pattern: TaskPattern = {
       id: nanoid(), goal, appContext, steps,
       successCount: 1, lastUsed: Date.now(), createdAt: Date.now()
     }
-    let updated = [...patterns, pattern]
-    if (updated.length > 200) {
-      updated = updated.sort((a, b) => b.lastUsed - a.lastUsed).slice(0, 200)
+    this.patterns.push(pattern)
+    // Keep bounded
+    if (this.patterns.length > 200) {
+      this.patterns.sort((a, b) => b.lastUsed - a.lastUsed)
+      this.patterns = this.patterns.slice(0, 200)
     }
-    this.setPatterns(updated)
+    this.save()
     this.log.info(`Task pattern saved: "${goal}"`)
     return pattern
   }
 
-  list() { return this.getPatterns() }
-  delete(id: string) { this.setPatterns(this.getPatterns().filter(p => p.id !== id)) }
+  list() { return [...this.patterns] }
+  delete(id: string) { this.patterns = this.patterns.filter(p => p.id !== id); this.save() }
 }

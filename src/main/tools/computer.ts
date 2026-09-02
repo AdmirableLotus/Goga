@@ -1,7 +1,6 @@
 import { ToolRegistry } from './registry'
 import type { ToolResult } from './registry'
 import { DesktopAdapter } from '../adapters/desktop'
-import { FocusManager } from '../services/focusManager'
 
 const desktop = new DesktopAdapter()
 const reg = ToolRegistry.getInstance()
@@ -152,131 +151,17 @@ reg.register({
 })
 
 reg.register({
-  name: 'computer.windowsByPid',
-  description: 'List all visible top-level windows owned by a specific PID using Win32 EnumWindows. ' +
-    'NOTE: on Windows 11, single-instance apps (e.g. Notepad) route new windows to an existing host process. ' +
-    'The launcher PID from process.start may own zero windows. ' +
-    'Use computer.windowByTitleDiff instead when the launcher PID is unknown or may differ from the window owner.',
-  parameters: {
-    type: 'object',
-    properties: {
-      pid: { type: 'number', description: 'Process ID to enumerate windows for.' }
-    },
-    required: ['pid']
-  },
-  riskLevel: 'low', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.windowsByPid(p.pid as number)
-  return { success: true, data: r }
-})
-
-reg.register({
-  name: 'computer.windowByTitleDiff',
-  description: 'Find a newly appeared visible window by title substring using Win32 EnumWindows, ' +
-    'excluding a baseline set of HWNDs captured before launch. ' +
-    'Returns the real owner PID and HWND regardless of which process launched the app. ' +
-    'Use after process.start when the launcher PID may differ from the window-owner PID (e.g. Windows 11 Notepad). ' +
-    'Call computer.snapshotHwnds before launching to get the baseline, then call this after launch.',
-  parameters: {
-    type: 'object',
-    properties: {
-      titleSubstring:  { type: 'string',  description: 'Title substring to match (regex-safe).' },
-      baselineHwnds:   { type: 'array', items: { type: 'number' }, description: 'Array of HWND integers present before launch. Exclude these from results.' }
-    },
-    required: ['titleSubstring']
-  },
-  riskLevel: 'low', reversible: true, category: 'computer'
-}, async (p) => {
-  const baseline = new Set<number>((p.baselineHwnds as number[] | undefined) ?? [])
-  const r = await desktop.windowByTitleDiff(p.titleSubstring as string, baseline)
-  return { success: r !== null, data: r }
-})
-
-reg.register({
-  name: 'computer.snapshotHwnds',
-  description: 'Snapshot all current visible top-level window HWNDs using Win32 EnumWindows. ' +
-    'Call before launching a process, then pass the result as baselineHwnds to computer.windowByTitleDiff.',
-  parameters: { type: 'object', properties: {} },
-  riskLevel: 'low', reversible: true, category: 'computer'
-}, async () => {
-  // windowByTitleDiff with empty string matches all visible windows; we just want their HWNDs
-  const all = await desktop.windowByTitleDiff('', new Set())
-  // That only returns the first match — use windowsByPid with a broad approach:
-  // call the underlying Win32 snapshot by querying all windows via windowList
-  // windowList uses UIAutomation which may miss some; use a dedicated PS call instead.
-  const { spawn: sp } = require('child_process') as typeof import('child_process')
-  const os2 = require('os') as typeof import('os')
-  const fs2 = require('fs') as typeof import('fs')
-  const path2 = require('path') as typeof import('path')
-  const script = `
-    Add-Type @"
-      using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
-      public static class SNPH {
-        public delegate bool EWP(IntPtr h, IntPtr l);
-        [DllImport("user32.dll")] public static extern bool EnumWindows(EWP cb, IntPtr l);
-        [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-        [DllImport("user32.dll")] public static extern int  GetWindowThreadProcessId(IntPtr h, out int p);
-        public static List<long> All() {
-          var r = new List<long>();
-          EnumWindows((h, l) => { if (IsWindowVisible(h)) { int p2=0; GetWindowThreadProcessId(h,out p2); r.Add(h.ToInt64()); } return true; }, IntPtr.Zero);
-          return r;
-        }
-      }
-"@
-    $hwnds = [SNPH]::All()
-    $hwnds -join ','
-  `
-  const tmp = path2.join(os2.tmpdir(), 'goga-snap-' + Date.now() + '.ps1')
-  fs2.writeFileSync(tmp, script, 'utf8')
-  const hwnds: number[] = await new Promise((resolve) => {
-    let out = ''
-    const proc = sp('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp], { windowsHide: true })
-    proc.stdout.on('data', (d: Buffer) => { out += d.toString() })
-    proc.on('close', () => { try { fs2.unlinkSync(tmp) } catch {} ; resolve(out.trim().split(',').map(Number).filter(n => !isNaN(n) && n !== 0)) })
-    proc.on('error', () => { try { fs2.unlinkSync(tmp) } catch {}; resolve([]) })
-  })
-  return { success: true, data: { hwnds } }
-})
-
-reg.register({
   name: 'computer.type',
-  description: 'Type text into a specific window. REQUIRES both pid (process ID) and hwnd (native window handle). ' +
-    'Before any keystroke, verifies the foreground window matches both pid and hwnd exactly. ' +
-    'Use computer.windowsByPid after launching a process to obtain the exact hwnd. ' +
-    'If pid or hwnd is absent/zero, returns target_required and sends zero keystrokes. ' +
-    'If the foreground pid or hwnd does not match, returns focus_lost and sends zero keystrokes. ' +
-    'Never falls back to typing into the current foreground window.',
+  description: 'Type a string of text using the keyboard.',
   parameters: {
     type: 'object',
-    properties: {
-      text:        { type: 'string', description: 'Text to type.' },
-      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
-      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle (HWND). Obtain via computer.windowsByPid. Must match the foreground window exactly.' },
-      windowTitle: { type: 'string', description: 'Optional secondary evidence. Title substring of the target window.' }
-    },
-    required: ['text', 'pid', 'hwnd']
+    properties: { text: { type: 'string', description: 'Text to type.' } },
+    required: ['text']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p, ctx) => {
-  const pid  = p.pid  as number | undefined
-  const hwnd = p.hwnd as number | undefined
-  if (!pid) {
-    return { success: false, error: 'computer.type: target_required — pid is mandatory.' }
-  }
-  if (!hwnd) {
-    return { success: false, error: 'computer.type: target_required — hwnd is mandatory. Use computer.windowsByPid to obtain it.' }
-  }
-  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
-  const guard = await focus.focusGuardedType(
-    target,
-    () => desktop.typeText(p.text as string).then(() => {}),
-    ctx.abortSignal,
-    'input'
-  )
-  if (!guard.allowed) {
-    return { success: false, error: `computer.type blocked: ${guard.reason}` }
-  }
-  return { success: true, data: { typed: p.text } }
+}, async (p) => {
+  const r = await desktop.typeText(p.text as string)
+  return { success: true, data: r }
 })
 
 reg.register({
@@ -331,121 +216,6 @@ reg.register({
 }, async (p) => {
   const r = await desktop.clipboardWrite(p.text as string)
   return { success: true, data: r }
-})
-
-const focus = FocusManager.getInstance()
-
-reg.register({
-  name: 'computer.wait',
-  description: 'Wait for a window or UI element to appear or disappear. Polls at 400ms intervals. Respects AbortSignal for immediate cancellation. Max duration 60s.',
-  parameters: {
-    type: 'object',
-    properties: {
-      type:         { type: 'string', enum: ['window', 'element', 'element_gone'], description: 'What to wait for.' },
-      windowTitle:  { type: 'string', description: 'Window title substring to match.' },
-      name:         { type: 'string', description: 'UI element name substring.' },
-      role:         { type: 'string', description: 'UI element role (e.g. Button, Edit).' },
-      automationId: { type: 'string', description: 'UIAutomation AutomationId.' },
-      timeoutMs:    { type: 'number', description: 'Max wait in ms. Default: 10000. Max: 60000.' }
-    },
-    required: ['type']
-  },
-  riskLevel: 'low', reversible: true, category: 'computer'
-}, async (p, ctx) => {
-  const timeoutMs = Math.min(Number(p.timeoutMs ?? 10_000), 60_000)
-  if (!['window', 'element', 'element_gone'].includes(p.type as string)) {
-    return { success: false, error: `computer.wait: invalid type "${p.type}". Must be window|element|element_gone` }
-  }
-  const log = (await import('../services/logs')).LogService.getInstance()
-  log.info(`computer.wait: type=${p.type} windowTitle=${p.windowTitle ?? ''} name=${p.name ?? ''} timeout=${timeoutMs}ms`)
-  const r = await desktop.wait(
-    {
-      type: p.type as 'window' | 'element' | 'element_gone',
-      windowTitle:  p.windowTitle  as string | undefined,
-      name:         p.name         as string | undefined,
-      role:         p.role         as string | undefined,
-      automationId: p.automationId as string | undefined,
-      timeoutMs
-    },
-    ctx.abortSignal
-  )
-  log.info(`computer.wait: result found=${r.found} timedOut=${r.timedOut}`)
-  return { success: r.found, data: r, error: r.timedOut ? `Timed out after ${timeoutMs}ms` : undefined }
-})
-
-reg.register({
-  name: 'computer.focus.state',
-  description: 'Read current focus state: active window title/PID and focused accessibility element. No side effects.',
-  parameters: { type: 'object', properties: {} },
-  riskLevel: 'low', reversible: true, category: 'computer'
-}, async (_p, ctx) => {
-  const r = await focus.getFocusState()
-  return { success: true, data: r }
-})
-
-reg.register({
-  name: 'computer.focus.window',
-  description: 'Bring a window to the foreground by title substring or PID. Handles minimized windows. Verifies via active-window state — does not trust SetForegroundWindow return value alone. Returns confidence score and verifiedBy sources.',
-  parameters: {
-    type: 'object',
-    properties: {
-      title: { type: 'string', description: 'Partial window title to match.' },
-      pid:   { type: 'number', description: 'Process ID.' }
-    }
-  },
-  riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p, ctx) => {
-  const r = await focus.focusWindow(
-    { title: p.title as string | undefined, pid: p.pid as number | undefined },
-    ctx.abortSignal
-  )
-  return { success: r.success, data: r, error: r.error }
-})
-
-reg.register({
-  name: 'computer.focus.element',
-  description: 'Focus a specific accessibility element inside a window. Uses UIAutomation InvokePattern — no coordinate clicks. Verifies via accessibility tree focused node. Returns confidence score and verifiedBy sources.',
-  parameters: {
-    type: 'object',
-    properties: {
-      windowTitle:  { type: 'string', description: 'Partial title of the host window.' },
-      name:         { type: 'string', description: 'Partial element name.' },
-      role:         { type: 'string', description: 'Element role (e.g. Edit, Button).' },
-      automationId: { type: 'string', description: 'UIAutomation AutomationId.' }
-    }
-  },
-  riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p, ctx) => {
-  const r = await focus.focusElement({
-    windowTitle:  p.windowTitle as string | undefined,
-    name:         p.name as string | undefined,
-    role:         p.role as string | undefined,
-    automationId: p.automationId as string | undefined
-  }, ctx.abortSignal)
-  return { success: r.success, data: r, error: r.error }
-})
-
-reg.register({
-  name: 'computer.focus.ensure',
-  description: 'Inspect current focus and act only if needed. Least-invasive: checks first, restores window if drifted, invokes element if required. Use this before any keyboard/input action. Returns confidence score and verifiedBy sources.',
-  parameters: {
-    type: 'object',
-    properties: {
-      windowTitle:  { type: 'string', description: 'Expected active window (partial title).' },
-      name:         { type: 'string', description: 'Expected focused element name.' },
-      role:         { type: 'string', description: 'Expected focused element role.' },
-      automationId: { type: 'string', description: 'Expected focused element AutomationId.' }
-    }
-  },
-  riskLevel: 'low', reversible: true, category: 'computer'
-}, async (p, ctx) => {
-  const r = await focus.ensureFocus({
-    windowTitle:  p.windowTitle as string | undefined,
-    name:         p.name as string | undefined,
-    role:         p.role as string | undefined,
-    automationId: p.automationId as string | undefined
-  }, ctx.abortSignal)
-  return { success: r.success, data: r, error: r.error }
 })
 
 export function registerComputerTools() {

@@ -50,12 +50,10 @@ export class LibraryService {
     }
 
     if (format === 'pdf') {
-      const { PDFParse } = require('pdf-parse')
+      const pdfParse = require('pdf-parse')
       const buffer = fs.readFileSync(filePath)
-      const pdf = new PDFParse({ data: new Uint8Array(buffer), verbosity: 0 })
-      await pdf.load()
-      const result = await pdf.getText()
-      return result.text
+      const data = await pdfParse(buffer)
+      return data.text
     }
 
     if (format === 'epub') {

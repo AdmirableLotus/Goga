@@ -1,0 +1,30 @@
+﻿[main e22025da] chore(repo): stop tracking runtime evidence artifacts
+ 27 files changed, 27 deletions(-)
+ delete mode 100644 scripts/build-summary.txt
+ delete mode 100644 scripts/count-m2.json
+ delete mode 100644 scripts/count-m4.json
+ delete mode 100644 scripts/count-m41.json
+ delete mode 100644 scripts/counts-done.txt
+ delete mode 100644 scripts/counts-final.txt
+ delete mode 100644 scripts/diff-components.txt
+ delete mode 100644 scripts/diff-main.txt
+ delete mode 100644 scripts/diff-pages.txt
+ delete mode 100644 scripts/electron-procs.txt
+ delete mode 100644 scripts/gate-m2.txt
+ delete mode 100644 scripts/gate-m4.txt
+ delete mode 100644 scripts/gate-m41.txt
+ delete mode 100644 scripts/gate-main.txt
+ delete mode 100644 scripts/gate-rend.txt
+ delete mode 100644 scripts/m41-gui-marker.txt
+ delete mode 100644 scripts/pc5.txt
+ delete mode 100644 scripts/pre-launch.txt
+ delete mode 100644 scripts/proc-check2.txt
+ delete mode 100644 scripts/proc-check3.txt
+ delete mode 100644 scripts/proc-check4.txt
+ delete mode 100644 scripts/proc-probe.txt
+ delete mode 100644 scripts/ready-check.txt
+ delete mode 100644 scripts/ready-check2.txt
+ delete mode 100644 scripts/relaunch.txt
+ delete mode 100644 scripts/test-summary.txt
+ delete mode 100644 scripts/vitest-procs.txt
+COMMIT_EXIT=0

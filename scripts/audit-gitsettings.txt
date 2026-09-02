@@ -1,0 +1,1 @@
+﻿settings.json:5: "git.autofetch": true
