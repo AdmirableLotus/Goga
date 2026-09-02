@@ -130,87 +130,167 @@ async function run() {
   }
 
   // ── A5: Notepad launch via spawn (adapter-level, not via tool) ────────────
+  // SAFETY: Windows 11 single-instance Notepad routes new windows into a shared
+  // host process, so the launcher PID is NOT reliably the window owner. We must
+  // identify the EXACT new top-level HWND (baseline EnumWindows diff) and operate
+  // on that handle only. Cleanup sends WM_CLOSE to that exact HWND — never
+  // Stop-Process by PID, which could kill a shared Notepad host and destroy
+  // unrelated user windows. Mirrors scripts/diag-notepad-hwnd.ps1.
   w('\n── A5: Notepad launch + UIAutomation read (adapter-level) ───────')
-  let notepadPid = null
+  let testHwnd = null
+  let baselineHwnds = []   // exact baseline HWND list captured before launch; verified to survive cleanup
   try {
-    // Launch Notepad and capture PID
-    const psLaunch = await runPS(`
-      $p = Start-Process notepad.exe -PassThru
-      Write-Output $p.Id
-    `)
-    notepadPid = parseInt(psLaunch.trim(), 10)
-    if (isNaN(notepadPid)) throw new Error(`Bad PID: "${psLaunch.trim()}"`)
-    await sleep(1500)
-
-    // Focus and type via SendKeys
-    await runPS(`
-      Add-Type -AssemblyName UIAutomationClient
-      $root = [System.Windows.Automation.AutomationElement]::RootElement
-      $win = $null
-      foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
-        if ($w.Current.ProcessId -eq ${notepadPid} -and $w.Current.BoundingRectangle.Width -gt 0) { $win = $w; break }
-      }
-      if ($win) {
-        Add-Type @"
-          using System; using System.Runtime.InteropServices;
-          public class WF { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }
+    // Capture baseline HWNDs, launch Notepad, then isolate the exact new window.
+    // The baseline list is emitted (BASELINE=csv) so cleanup can prove every
+    // pre-existing window still exists afterward.
+    const launchOut = await runPS(`
+      Add-Type @"
+        using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+        public static class NPEnum {
+          public delegate bool EnumProc(IntPtr h, IntPtr l);
+          [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+          [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+          [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+          public static List<IntPtr> Visible() {
+            var r = new List<IntPtr>();
+            EnumWindows((h,l) => { if (IsWindowVisible(h)) r.Add(h); return true; }, IntPtr.Zero);
+            return r;
+          }
+          public static string Title(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, 512); return sb.ToString(); }
+        }
 "@
-        [WF]::SetForegroundWindow([IntPtr]$win.Current.NativeWindowHandle) | Out-Null
-        Start-Sleep -Milliseconds 300
-        Add-Type -AssemblyName System.Windows.Forms
-        [System.Windows.Forms.SendKeys]::SendWait('Adapter test text')
+      $baseline = @{}
+      $baselineList = @()
+      foreach ($h in [NPEnum]::Visible()) { $baseline[[int64]$h] = $true; $baselineList += [int64]$h }
+      Write-Output ("BASELINE=" + ($baselineList -join ','))
+      Start-Process notepad.exe | Out-Null
+      $new = @()
+      $deadline = (Get-Date).AddSeconds(10)
+      while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 400
+        $new = @()
+        foreach ($h in [NPEnum]::Visible()) {
+          if (-not $baseline.ContainsKey([int64]$h)) {
+            $t = [NPEnum]::Title($h)
+            if ($t -match 'Notepad') { $new += $h }
+          }
+        }
+        if ($new.Count -ge 1) { break }
       }
+      if ($new.Count -eq 0) { Write-Output 'HWND=0'; exit }
+      if ($new.Count -gt 1) { Write-Output 'HWND=AMBIGUOUS'; exit }
+      Write-Output ("HWND=" + [int64]$new[0])
+    `)
+    const baseM = launchOut.match(/BASELINE=([\d,]*)/)
+    baselineHwnds = baseM && baseM[1] ? baseM[1].split(',').filter(Boolean) : []
+    const m = launchOut.trim().match(/HWND=(\d+)/)
+    if (!m || launchOut.includes('AMBIGUOUS')) {
+      throw new Error(`Could not isolate exactly one new Notepad HWND: "${launchOut.trim()}"`)
+    }
+    testHwnd = m[1]
+    if (testHwnd === '0') throw new Error('Zero new Notepad windows appeared')
+
+    // Focus and type into the EXACT test HWND (never PID-based).
+    await runPS(`
+      Add-Type @"
+        using System; using System.Runtime.InteropServices;
+        public class WF { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }
+"@
+      [WF]::SetForegroundWindow([IntPtr]${testHwnd}) | Out-Null
+      Start-Sleep -Milliseconds 300
+      Add-Type -AssemblyName System.Windows.Forms
+      [System.Windows.Forms.SendKeys]::SendWait('Adapter test text')
     `)
     await sleep(300)
 
-    // Read back via UIAutomation ValuePattern
+    // Read back via UIAutomation anchored to the EXACT test HWND.
     const readBack = await runPS(`
       Add-Type -AssemblyName UIAutomationClient
       Add-Type -AssemblyName UIAutomationTypes
-      $root = [System.Windows.Automation.AutomationElement]::RootElement
-      $win = $null
-      foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
-        if ($w.Current.ProcessId -eq ${notepadPid} -and $w.Current.BoundingRectangle.Width -gt 0) { $win = $w; break }
-      }
-      if (-not $win) { Write-Output ''; exit }
-      foreach ($el in $win.FindAll([System.Windows.Automation.TreeScope]::Subtree, [System.Windows.Automation.Condition]::TrueCondition)) {
-        $ct = $el.Current.ControlType.ProgrammaticName
+      $el = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]${testHwnd})
+      if (-not $el) { Write-Output ''; exit }
+      foreach ($e in $el.FindAll([System.Windows.Automation.TreeScope]::Subtree, [System.Windows.Automation.Condition]::TrueCondition)) {
+        $ct = $e.Current.ControlType.ProgrammaticName
         if ($ct -like '*Edit*' -or $ct -like '*Document*') {
           try {
-            $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            $vp = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
             Write-Output $vp.Current.Value; exit
           } catch {}
         }
       }
     `)
     const ok = readBack.includes('Adapter test text')
-    result('A5', 'Notepad launch + UIAutomation type+readback (adapter)', ok, `readBack="${readBack.slice(0, 80)}"`)
+    result('A5', 'Notepad launch + UIAutomation type+readback (adapter)', ok, `hwnd=${testHwnd} readBack="${readBack.slice(0, 80)}"`)
   } catch (e) {
     result('A5', 'Notepad launch + UIAutomation type+readback (adapter)', false, `ERROR: ${e.message}`)
   } finally {
-    // Close only the Notepad we launched (by PID)
-    if (notepadPid) {
-      await runPS(`
-        $p = Get-Process -Id ${notepadPid} -ErrorAction SilentlyContinue
-        if ($p) {
-          $p.CloseMainWindow() | Out-Null
-          Start-Sleep -Milliseconds 600
-          # Dismiss Save dialog if present
-          Add-Type -AssemblyName UIAutomationClient
-          $root = [System.Windows.Automation.AutomationElement]::RootElement
-          foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
-            if ($w.Current.ProcessId -eq ${notepadPid}) {
-              foreach ($btn in $w.FindAll([System.Windows.Automation.TreeScope]::Subtree, [System.Windows.Automation.Condition]::TrueCondition)) {
-                if ($btn.Current.Name -eq "Don't Save" -or $btn.Current.Name -eq "No") {
-                  try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
-                }
-              }
+    // Close ONLY the exact test HWND via WM_CLOSE. No Stop-Process, no PID kill,
+    // no name-wide taskkill. If the host process exits naturally because this was
+    // its only window, that is acceptable — we never terminate it ourselves.
+    //
+    // This block proves two safety guarantees and records A5-cleanup PASS/FAIL:
+    //   1. The test HWND is gone (IsWindow==false) within a bounded 5s poll.
+    //      If it never closes, that is a FAIL (no process-kill fallback exists).
+    //   2. Every baseline HWND captured before launch still exists afterward.
+    //      If any baseline window disappeared, that is a FAIL.
+    if (testHwnd && testHwnd !== '0') {
+      const baseCsv = baselineHwnds.join(',')
+      const cleanupOut = await runPS(`
+        Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class NPClose {
+            [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+            [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+          }
+"@
+        $testHwnd = [IntPtr]${testHwnd}
+        # WM_CLOSE to the exact test HWND only.
+        [NPClose]::PostMessage($testHwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+        # Poll IsWindow(testHwnd) until false, bounded to 5s.
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline) {
+          Start-Sleep -Milliseconds 200
+          if (-not [NPClose]::IsWindow($testHwnd)) { break }
+        }
+        # Save-dialog handling scoped to dialogs OWNED by the exact test HWND
+        # (GW_OWNER = 4). InvokePattern only — no keystrokes, no PID filter.
+        Add-Type -AssemblyName UIAutomationClient
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+        foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.Condition]::TrueCondition)) {
+          $wHwnd = [IntPtr]$w.Current.NativeWindowHandle
+          if ([NPClose]::GetWindow($wHwnd, 4) -ne $testHwnd) { continue }
+          foreach ($btn in $w.FindAll([System.Windows.Automation.TreeScope]::Subtree,
+              [System.Windows.Automation.Condition]::TrueCondition)) {
+            $n = $btn.Current.Name
+            if ($n -eq "Don't Save" -or $n -eq "No" -or $n -eq "Don't save") {
+              try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
             }
           }
-          Start-Sleep -Milliseconds 400
-          Stop-Process -Id ${notepadPid} -Force -ErrorAction SilentlyContinue
         }
-      `).catch(() => {})
+        # Final bounded re-poll after any save-dialog dismissal.
+        $deadline2 = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline2) {
+          if (-not [NPClose]::IsWindow($testHwnd)) { break }
+          Start-Sleep -Milliseconds 200
+        }
+        $gone = -not [NPClose]::IsWindow($testHwnd)
+        # Baseline survival: every pre-launch HWND must still exist.
+        $missing = 0
+        $baseArr = @(${baseCsv ? baseCsv.split(',').map(h => `[int64]${h}`).join(',') : ''})
+        foreach ($b in $baseArr) { if (-not [NPClose]::IsWindow([IntPtr]$b)) { $missing++ } }
+        Write-Output ("gone=" + $gone + " baselineMissing=" + $missing + " baselineTotal=" + $baseArr.Count)
+      `).catch(() => 'gone=unknown baselineMissing=unknown baselineTotal=unknown')
+
+      const goneOk = /gone=True/i.test(cleanupOut)
+      const missingM = cleanupOut.match(/baselineMissing=(\d+)/)
+      const totalM = cleanupOut.match(/baselineTotal=(\d+)/)
+      const baselineIntact = missingM ? missingM[1] === '0' : false
+      const cleanupOk = goneOk && baselineIntact
+      result('A5-cleanup', 'Notepad cleanup: exact HWND closed + baseline intact', cleanupOk,
+        `${cleanupOut.trim()} baselineCaptured=${baselineHwnds.length}` +
+        (missingM && totalM ? ` (survived ${Number(totalM[1]) - Number(missingM[1])}/${totalM[1]})` : ''))
     }
   }
 
