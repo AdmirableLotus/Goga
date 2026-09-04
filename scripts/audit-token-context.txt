@@ -1,4 +1,0 @@
-﻿=== count-m2.json TOKEN context (matched words only) ===
-token, applyToken, tokens
-=== count-m2.json real-secret token patterns (ghp_/eyJ/sk-) ===
-none

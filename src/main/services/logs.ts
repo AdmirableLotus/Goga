@@ -1,16 +1,17 @@
-import fs from 'fs'
-import path from 'path'
-import { app } from 'electron'
 import type { LogEntry } from '../../shared/types'
 import { nanoid } from '../utils/nanoid'
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Store = require('electron-store')
 
 const MAX_ENTRIES = 2000
 
 export class LogService {
   private static instance: LogService
-  private entries: LogEntry[] = []
-  private filePath: string
+  private store: ReturnType<typeof Store>
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  // In-memory buffer — flushed to store on debounced timer
+  private buffer: LogEntry[] = []
 
   static getInstance() {
     if (!LogService.instance) LogService.instance = new LogService()
@@ -18,42 +19,33 @@ export class LogService {
   }
 
   constructor() {
-    this.filePath = path.join(app.getPath('userData'), 'goga-logs.json')
-    this.load()
+    this.store = new Store({ name: 'logs', defaults: { entries: [] } })
+    this.buffer = this.store.get('entries') as LogEntry[]
   }
 
-  private load() {
-    try {
-      if (fs.existsSync(this.filePath)) {
-        this.entries = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
-      }
-    } catch { this.entries = [] }
-  }
-
-  // Debounced save — logs can be high-frequency, avoid hammering disk
   private scheduleSave() {
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => {
-      try { fs.writeFileSync(this.filePath, JSON.stringify(this.entries, null, 2)) } catch { /* ignore */ }
+      this.store.set('entries', this.buffer)
     }, 2000)
   }
 
-  private add(level: LogEntry['level'], message: string, meta?: Record<string, unknown>, actionId?: string) {
+  private add(level: LogEntry['level'], message: string, meta?: Record<string, unknown>, actionId?: string): LogEntry {
     const entry: LogEntry = { id: nanoid(), level, message, timestamp: Date.now(), actionId, meta }
-    this.entries.unshift(entry)
-    if (this.entries.length > MAX_ENTRIES) this.entries.length = MAX_ENTRIES
+    this.buffer.unshift(entry)
+    if (this.buffer.length > MAX_ENTRIES) this.buffer.length = MAX_ENTRIES
     this.scheduleSave()
     return entry
   }
 
-  info(message: string, meta?: Record<string, unknown>, actionId?: string) { return this.add('info', message, meta, actionId) }
-  warn(message: string, meta?: Record<string, unknown>, actionId?: string) { return this.add('warn', message, meta, actionId) }
+  info(message: string, meta?: Record<string, unknown>, actionId?: string)  { return this.add('info',  message, meta, actionId) }
+  warn(message: string, meta?: Record<string, unknown>, actionId?: string)  { return this.add('warn',  message, meta, actionId) }
   error(message: string, meta?: Record<string, unknown>, actionId?: string) { return this.add('error', message, meta, actionId) }
 
-  list() { return [...this.entries] }
+  list() { return [...this.buffer] }
 
   clear() {
-    this.entries = []
-    try { fs.writeFileSync(this.filePath, '[]') } catch { /* ignore */ }
+    this.buffer = []
+    this.store.set('entries', [])
   }
 }

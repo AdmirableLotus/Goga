@@ -1,49 +1,32 @@
 import { useState, useRef, useCallback } from 'react'
 
-// Extend window type for webkit speech
-declare global {
-  interface Window {
-    webkitSpeechRecognition: new () => SpeechRecognition
-    SpeechRecognition: new () => SpeechRecognition
-  }
-}
-
 export function useSpeech(onTranscript: (text: string) => void) {
-  const [listening, setListening] = useState(false)
-  const [speaking, setSpeaking] = useState(false)
-  const recogRef = useRef<SpeechRecognition | null>(null)
+  const [listening, setListening]   = useState(false)
+  const [speaking, setSpeaking]     = useState(false)
+  const abortedRef = useRef(false)
 
-  const startListening = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) { alert('Speech recognition not supported in this browser.'); return }
-
-    // Stop any ongoing speech before listening
-    window.goga.invoke('tts:stop')
-
-    const recog = new SR()
-    recog.lang = 'en-US'
-    recog.interimResults = false
-    recog.maxAlternatives = 1
-    recogRef.current = recog
-
-    recog.onresult = (e) => {
-      const transcript = e.results[0][0].transcript.trim()
-      if (transcript) onTranscript(transcript)
-    }
-    recog.onend = () => setListening(false)
-    recog.onerror = () => setListening(false)
-
-    recog.start()
+  const startListening = useCallback(async () => {
+    if (listening) return
+    abortedRef.current = false
     setListening(true)
-  }, [onTranscript])
+    window.goga.invoke('tts:stop')
+    try {
+      const { transcript } = await window.goga.invoke('stt:start')
+      if (!abortedRef.current && transcript) onTranscript(transcript)
+    } catch {
+      // ignore — user stopped or no mic
+    } finally {
+      setListening(false)
+    }
+  }, [listening, onTranscript])
 
   const stopListening = useCallback(() => {
-    recogRef.current?.stop()
+    abortedRef.current = true
     setListening(false)
+    window.goga.invoke('stt:stop').catch(() => {})
   }, [])
 
   const speak = useCallback(async (text: string) => {
-    // Strip markdown bold/italic markers for cleaner speech
     const clean = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').trim()
     if (!clean) return
     setSpeaking(true)

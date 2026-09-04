@@ -1,9 +1,0 @@
-﻿?? scripts/commit-result.txt
-?? scripts/exclude-log.txt
-?? scripts/pre-commit-check.txt
-?? scripts/pre-commit-localexist.txt
-?? scripts/pre-commit-namestatus.txt
-?? scripts/pre-commit-src.txt
-?? scripts/r-head.txt
-?? scripts/r-status.txt
-?? scripts/rmcached-log.txt

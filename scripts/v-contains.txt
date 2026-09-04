@@ -1,6 +1,0 @@
-﻿  origin/HEAD -> origin/main
-  origin/main
----f3e58b73 remote branches---
-  origin/HEAD -> origin/main
-  origin/main
----END---

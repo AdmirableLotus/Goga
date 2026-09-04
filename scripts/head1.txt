@@ -1,6 +1,0 @@
-﻿f3e58b73 	modified:   scripts/m41-gui-marker.txt 	new file:   scripts/pre-launch.txt 	new file:   scripts/ready-check.txt 	new file:   scripts/ready-check2.txt
- scripts/m41-gui-marker.txt | 2 +-
- scripts/pre-launch.txt     | 1 +
- scripts/ready-check.txt    | 1 +
- scripts/ready-check2.txt   | 1 +
- 4 files changed, 4 insertions(+), 1 deletion(-)

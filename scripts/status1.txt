@@ -1,7 +1,0 @@
-﻿?? scripts/cached-check.txt
-?? scripts/cached-names.txt
-?? scripts/cached-stat.txt
-?? scripts/cached-stat2.txt
-?? scripts/diffcheck.txt
-?? scripts/goga-elec2.txt
-?? scripts/status1.txt

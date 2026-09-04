@@ -2,9 +2,8 @@ import type { IpcMain } from 'electron'
 import { SecurityWorkspaceService } from '../services/securityWorkspace'
 import type { SecurityFinding, EvidenceEntry, SecurityWorkspace } from '../../shared/types'
 
-const svc = SecurityWorkspaceService.getInstance()
-
 export function registerSecurityHandlers(ipcMain: IpcMain) {
+  const svc = SecurityWorkspaceService.getInstance()
   ipcMain.handle('security:list', () => svc.list())
   ipcMain.handle('security:get', (_e, id: string) => svc.get(id))
   ipcMain.handle('security:getActive', () => svc.getActive())

@@ -1,6 +1,0 @@
-﻿=== scripts/count-m2.json ===
-only identifier/word 'transcript' — no real utterance text
-=== scripts/count-m41.json ===
-only identifier/word 'transcript' — no real utterance text
-=== scripts/diff-components.txt ===
-REAL_TRANSCRIPT_CONTENT: Hello Boss

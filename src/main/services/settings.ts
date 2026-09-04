@@ -1,13 +1,12 @@
-import fs from 'fs'
-import path from 'path'
-import { app } from 'electron'
 import type { AppSettings } from '../../shared/types'
 import { DEFAULT_SETTINGS } from '../../shared/types'
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Store = require('electron-store')
+
 export class SettingsService {
   private static instance: SettingsService
-  private current: AppSettings = { ...DEFAULT_SETTINGS }
-  private filePath: string
+  private store: ReturnType<typeof Store>
 
   static getInstance() {
     if (!SettingsService.instance) SettingsService.instance = new SettingsService()
@@ -15,29 +14,19 @@ export class SettingsService {
   }
 
   constructor() {
-    this.filePath = path.join(app.getPath('userData'), 'goga-settings.json')
-    this.load()
+    this.store = new Store({
+      name: 'settings',
+      defaults: DEFAULT_SETTINGS
+    })
   }
 
-  private load() {
-    try {
-      if (fs.existsSync(this.filePath)) {
-        const saved = JSON.parse(fs.readFileSync(this.filePath, 'utf-8')) as Partial<AppSettings>
-        // Merge with defaults so new fields added to DEFAULT_SETTINGS are picked up
-        this.current = { ...DEFAULT_SETTINGS, ...saved }
-      }
-    } catch { this.current = { ...DEFAULT_SETTINGS } }
+  get(): AppSettings {
+    // Merge with defaults so new fields added to DEFAULT_SETTINGS are always present
+    return { ...DEFAULT_SETTINGS, ...this.store.store } as AppSettings
   }
 
-  private save() {
-    try { fs.writeFileSync(this.filePath, JSON.stringify(this.current, null, 2)) } catch { /* ignore */ }
-  }
-
-  get() { return { ...this.current } }
-
-  set(patch: Partial<AppSettings>) {
-    this.current = { ...this.current, ...patch }
-    this.save()
-    return { ...this.current }
+  set(patch: Partial<AppSettings>): AppSettings {
+    this.store.set(patch)
+    return this.get()
   }
 }

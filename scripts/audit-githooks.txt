@@ -1,4 +1,0 @@
-﻿core.hooksPath=
-global.hooksPath=
-alias.push=
---- global post/pre commit hooks ---

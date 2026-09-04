@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolResult, RiskLevel } from '../../shared/types'
+import type { OllamaTool } from '../services/ollamaClient'
 
 export type { ToolDefinition, ToolResult }
 
@@ -74,5 +75,13 @@ export class ToolRegistry {
     return this.list()
       .map(t => `- ${t.name}(${Object.keys(t.parameters.properties).join(', ')}): ${t.description} [risk:${t.riskLevel}]`)
       .join('\n')
+  }
+
+  // Returns Ollama-compatible tool definitions for native tool-call support
+  toOllamaTools(): OllamaTool[] {
+    return this.list().map(t => ({
+      type: 'function' as const,
+      function: { name: t.name, description: t.description, parameters: t.parameters }
+    }))
   }
 }
