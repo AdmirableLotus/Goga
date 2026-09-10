@@ -23,6 +23,11 @@ import './tools/index'
 
 let mainWindow: BrowserWindow | null = null
 
+// One-time shutdown guard. app.exit(0) fires will-quit again; without this
+// guard the handler would re-enter, call preventDefault() a second time, and
+// loop until the OS kills the process.
+let quitting = false
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -88,12 +93,18 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('will-quit', () => {
+app.on('will-quit', async (event) => {
+  // Synchronous guard — must be checked and set before any await.
+  if (quitting) return   // second entry from app.exit(0): let Electron proceed
+  quitting = true
+  // preventDefault() must remain here, before any await, because Electron does
+  // not await the async callback. Moving it below an await would let the quit
+  // proceed before cleanup finishes.
+  event.preventDefault()
   globalShortcut.unregisterAll()
-  // Dispose Whisper Python process if running
-  const voice = VoiceOrchestrator.getInstance()
-  const stt = (voice as unknown as { stt: { dispose?: () => void; name: string } }).stt
-  if (stt?.name === 'Whisper' && typeof stt.dispose === 'function') stt.dispose()
+  // Stop all TTS/STT child processes through the typed public shutdown() method.
+  try { await VoiceOrchestrator.getInstance().shutdown() } catch { }
+  app.exit(0)
 })
 
 app.on('window-all-closed', () => {
