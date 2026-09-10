@@ -34,8 +34,11 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     const win = getWindow()
     if (!win) return
 
-    // Echo transcript as user message
-    const userMsg: ChatMessage = { id: nanoid(), role: 'user', content: text, timestamp: Date.now() }
+    // One stable turnId for this entire voice turn
+    const turnId = nanoid()
+
+    // Echo transcript as user message (stamped with turnId)
+    const userMsg: ChatMessage = { id: nanoid(), role: 'user', content: text, timestamp: Date.now(), turnId }
     win.webContents.send('chat:message', userMsg)
     win.webContents.send('voice:transcript', { text })
 
@@ -62,12 +65,12 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
       }
 
       if (classification === 'question') {
-        // Answer the question about progress without interrupting the mission
-        const onToken = (token: string) => win.webContents.send('chat:token', { token })
+        const onToken = (token: string) => win.webContents.send('chat:token', { token, turnId })
         try {
           const reply = await chat.process(userMsg, onToken)
-          win.webContents.send('chat:message', reply)
-          voice.speak(reply.content).catch(() => {})
+          const stamped: ChatMessage = { ...reply, turnId }
+          win.webContents.send('chat:message', stamped)
+          voice.speak(stamped.content).catch(() => {})
         } catch { }
         return
       }
@@ -79,17 +82,18 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     }
 
     // ── Normal conversation ───────────────────────────────────────────────
-    const onToken = (token: string) => win.webContents.send('chat:token', { token })
+    const onToken = (token: string) => win.webContents.send('chat:token', { token, turnId })
     try {
       const reply = await chat.process(userMsg, onToken)
+      const stamped: ChatMessage = { ...reply, turnId }
       // Send the final message FIRST so the renderer clears loading/cursor
       // immediately — chat completion never waits for TTS.
-      win.webContents.send('chat:message', reply)
+      win.webContents.send('chat:message', stamped)
       // Speak asynchronously (fire-and-forget). A hung/failed TTS never blocks.
-      voice.speak(reply.content).catch(() => {})
+      voice.speak(stamped.content).catch(() => {})
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      const errMsg: ChatMessage = { id: nanoid(), role: 'assistant', content: `Error: ${msg}`, timestamp: Date.now() }
+      const errMsg: ChatMessage = { id: nanoid(), role: 'assistant', content: `Error: ${msg}`, timestamp: Date.now(), turnId }
       win.webContents.send('chat:message', errMsg)
     }
   })

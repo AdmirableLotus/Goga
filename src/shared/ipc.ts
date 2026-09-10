@@ -92,7 +92,7 @@ export interface MainHandlers {
 // Channels: main -> renderer (on)
 export interface RendererEvents {
   'chat:message': ChatMessage
-  'chat:token': { token: string }
+  'chat:token': { token: string; turnId: string }
   'action:update': Action
   'action:approval-required': Action
   'log:entry': LogEntry

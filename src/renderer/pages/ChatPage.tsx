@@ -17,7 +17,8 @@ export default function ChatPage() {
     { id: '0', role: 'system', content: 'Goga is ready. Type or speak to me.', timestamp: Date.now() }
   ])
   const [loading, setLoading]             = useState(false)
-  const [streamingText, setStreamingText] = useState('')
+  // Per-turn streaming text: turnId → accumulated tokens
+  const [streamingTurns, setStreamingTurns] = useState<Map<string, string>>(new Map())
   const [agentState, setAgentState]       = useState<AgentState | null>(null)
   const [agentSteps, setAgentSteps]       = useState<AgentStep[]>([])
   const [showSteps, setShowSteps]         = useState(true)
@@ -25,34 +26,73 @@ export default function ChatPage() {
   const stepsBottomRef = useRef<HTMLDivElement>(null)
   const { setVisualState } = useGogaVisual()
 
+  // Track which message IDs have already been committed (exactly-once guard)
+  const committedMsgIds = useRef<Set<string>>(new Set())
+  // Track which turnIds have been finalised by a canonical chat:message
+  const finalisedTurnIds = useRef<Set<string>>(new Set())
+
   const inConversation = hasConversation(messages)
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
+
+  // Derive a single streaming text for display: the most-recently-active turn
+  // that has not yet been finalised. In practice at most one turn streams at a time.
+  const activeStreamingText = (() => {
+    for (const [, text] of streamingTurns) {
+      if (text !== '') return text
+    }
+    return ''
+  })()
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => { stepsBottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [agentSteps])
 
   useEffect(() => {
     const unsubs = [
-      window.goga.on('chat:token', ({ token }) => setStreamingText(prev => prev + token)),
+      window.goga.on('chat:token', ({ token, turnId }) => {
+        // Ignore tokens for a turn that already has a canonical message
+        if (finalisedTurnIds.current.has(turnId)) return
+        setStreamingTurns(prev => {
+          const next = new Map(prev)
+          next.set(turnId, (next.get(turnId) ?? '') + token)
+          return next
+        })
+      }),
+
       window.goga.on('agent:step', step => setAgentSteps(prev => [...prev, step])),
+
       window.goga.on('agent:state', state => {
         setAgentState(state)
         setVisualState(agentStateToVisual(state))
         if (['idle', 'done', 'stopped'].includes(state.status)) setLoading(false)
       }),
+
       window.goga.on('agent:stopped', () => {
         setLoading(false)
         setAgentState(s => s ? { ...s, status: 'stopped' } : null)
         setVisualState('stopped')
       }),
+
+      // chat:message is the ONLY path that commits a final assistant response.
+      // It clears the streaming slot for this turn and marks the turn finalised.
       window.goga.on('chat:message', msg => {
-        setMessages(prev => {
-          if (prev.some(m => m.id === msg.id)) return prev
-          return [...prev, msg]
-        })
+        // Exactly-once guard by message id
+        if (committedMsgIds.current.has(msg.id)) return
+        committedMsgIds.current.add(msg.id)
+
+        // Mark this turn finalised so late tokens are dropped
+        if (msg.turnId) {
+          finalisedTurnIds.current.add(msg.turnId)
+          setStreamingTurns(prev => {
+            const next = new Map(prev)
+            next.delete(msg.turnId!)
+            return next
+          })
+        }
+
+        setMessages(prev => [...prev, msg])
         setLoading(false)
-        setStreamingText('')
       }),
+
       window.goga.on('action:approval-required', action => {
         setVisualState('waitingApproval')
         setMessages(prev => [...prev, {
@@ -61,21 +101,21 @@ export default function ChatPage() {
           timestamp: Date.now()
         }])
       }),
-      // voice:transcript — set loading; voice:status/amplitude handled by ChatComposer
+
+      // voice:transcript — set loading; resets streaming for this new turn
       window.goga.on('voice:transcript', () => {
         setLoading(true)
         setAgentSteps([])
-        setStreamingText('')
+        setStreamingTurns(new Map())
         setVisualState('thinking')
       }),
-      // Safety net: if voice returns to idle/speaking (response done or errored)
-      // ensure the streaming cursor and loading are cleared independently of TTS.
+
+      // voice:status → idle: audio pipeline done.
+      // ONLY updates loading/visual state. Never creates, erases, or finalises
+      // a chat message. The canonical chat:message is the sole commit path.
       window.goga.on('voice:status', ({ status }) => {
-        if (status === 'speaking' || status === 'idle') {
-          // The final chat:message clears loading; this guards the error path
-          // where no message arrives. Clearing the cursor here never waits on TTS.
-          setStreamingText('')
-          setLoading(prev => (status === 'idle' ? false : prev))
+        if (status === 'idle') {
+          setLoading(false)
         }
       }),
     ]
@@ -109,7 +149,7 @@ export default function ChatPage() {
 
     setLoading(true)
     setAgentSteps([])
-    setStreamingText('')
+    setStreamingTurns(new Map())
     setVisualState('thinking')
 
     const userMsg: DisplayMessage = { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }
@@ -117,18 +157,26 @@ export default function ChatPage() {
 
     try {
       const reply = await window.goga.invoke('chat:send', text)
-      if (!messages.some(m => m.id === reply.id)) {
+      // Exactly-once guard: the chat:message event may have already committed this
+      if (!committedMsgIds.current.has(reply.id)) {
+        committedMsgIds.current.add(reply.id)
+        if (reply.turnId) {
+          finalisedTurnIds.current.add(reply.turnId)
+          setStreamingTurns(prev => {
+            const next = new Map(prev)
+            next.delete(reply.turnId!)
+            return next
+          })
+        }
         let dm: DisplayMessage = reply
         if (reply.content === '__screenshot__') {
           const actions = await window.goga.invoke('actions:list')
           const last = actions.find(a => reply.actionIds?.includes(a.id))
           dm = { ...reply, content: 'Screenshot captured:', screenshot: last?.result as ScreenshotResult }
         }
-        setMessages(prev => prev.some(m => m.id === dm.id) ? prev : [...prev, dm])
+        setMessages(prev => [...prev, dm])
       }
-      setStreamingText('')
     } catch (e) {
-      setStreamingText('')
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${e}`, timestamp: Date.now() }])
     } finally {
       setLoading(false)
@@ -197,16 +245,16 @@ export default function ChatPage() {
             {m.screenshot && <img src={`data:image/png;base64,${m.screenshot.base64}`} alt="Screenshot" style={S.screenshot} />}
           </div>
         ))}
-        {loading && !isAgentRunning && streamingText === '' && (
+        {loading && !isAgentRunning && activeStreamingText === '' && (
           <div style={{ ...S.bubble, ...S.assistant, color: '#554477' }}>
             <span style={S.role}>assistant</span>Thinking…
           </div>
         )}
-        {streamingText !== '' && (
+        {activeStreamingText !== '' && (
           <div style={{ ...S.bubble, ...S.assistant }}>
             <span style={S.role}>assistant</span>
             <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-              {streamingText}<span style={{ opacity: 0.5, animation: 'pulse 1s infinite' }}>▍</span>
+              {activeStreamingText}<span style={{ opacity: 0.5, animation: 'pulse 1s infinite' }}>▍</span>
             </p>
           </div>
         )}

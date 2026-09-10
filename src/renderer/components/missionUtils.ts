@@ -11,6 +11,9 @@ export interface ActivityState {
   activityStatus: ActivityStatus
   stopReason: string | null
   loading: boolean
+  // Stable ID for the current turn — set when a transcript or send begins.
+  // Tokens and canonical messages are only accepted when their turnId matches.
+  activeTurnId: string | null
 }
 
 export const INITIAL_ACTIVITY: ActivityState = {
@@ -21,6 +24,7 @@ export const INITIAL_ACTIVITY: ActivityState = {
   activityStatus: 'none',
   stopReason: null,
   loading: false,
+  activeTurnId: null,
 }
 
 // ── safeToolLabel ─────────────────────────────────────────────────────────────
@@ -39,27 +43,34 @@ export function safeToolLabel(tool: string): string {
 }
 
 // ── applyToken ────────────────────────────────────────────────────────────────
-// chat:token handler — appends token to streamingText unless stopped.
+// chat:token handler — appends token only when turnId matches the active turn.
 export function applyToken(
   state: ActivityState,
   token: string,
   stopped: boolean,
+  turnId: string,
 ): ActivityState {
   if (stopped) return state
+  if (state.activeTurnId !== null && state.activeTurnId !== turnId) return state
   return { ...state, streamingText: state.streamingText + token }
 }
 
 // ── applyMessage ──────────────────────────────────────────────────────────────
-// chat:message handler — accepts final assistant message, deduplicates by id.
+// chat:message handler — accepts final assistant message, deduplicates by id,
+// and rejects messages whose turnId does not match the active turn.
 export function applyMessage(
   state: ActivityState,
-  msg: { id: string; role: string; content: string },
+  msg: { id: string; role: string; content: string; turnId?: string },
   stopped: boolean,
   lastMsgId: string | null,
 ): { state: ActivityState; lastMsgId: string | null } {
   if (stopped) return { state, lastMsgId }
   if (msg.role !== 'assistant') return { state, lastMsgId }
   if (lastMsgId === msg.id) return { state, lastMsgId }
+  // Reject tokens from a different turn (stale or overlapping)
+  if (msg.turnId !== undefined && state.activeTurnId !== null && msg.turnId !== state.activeTurnId) {
+    return { state, lastMsgId }
+  }
   return {
     state: {
       ...state,
@@ -128,6 +139,7 @@ export function applyTranscript(
   text: string,
   lastTranscript: string,
   streamingActive: boolean,
+  turnId: string,
 ): { state: ActivityState; lastTranscript: string; accepted: boolean } {
   if (text === lastTranscript && streamingActive) {
     return { state, lastTranscript, accepted: false }
@@ -142,6 +154,7 @@ export function applyTranscript(
       activityStatus: 'running',
       stopReason: null,
       loading: true,
+      activeTurnId: turnId,
     },
     lastTranscript: text,
     accepted: true,
@@ -150,7 +163,7 @@ export function applyTranscript(
 
 // ── applySend ─────────────────────────────────────────────────────────────────
 // handleSend state resets — clears all activity and lifts stop guard.
-export function applySend(state: ActivityState, text: string): ActivityState {
+export function applySend(state: ActivityState, text: string, turnId: string): ActivityState {
   return {
     ...state,
     userRequest: text,
@@ -160,17 +173,16 @@ export function applySend(state: ActivityState, text: string): ActivityState {
     activityStatus: 'running',
     stopReason: null,
     loading: true,
+    activeTurnId: turnId,
   }
 }
 
 // ── applyVoiceIdle ────────────────────────────────────────────────────────────
-// voice:status → 'idle' handler. The voice/chat pipeline has gone idle on the
-// backend (response generated + TTS finished). A simple chat/voice turn does
-// not emit a terminal agent:state, and a trailing self-echo transcript or a
-// deduped completion message can leave activityStatus stuck at 'running'. When
-// voice is idle and no genuine multi-step agent run is in flight, reconcile a
-// stuck 'running'/'approval' status to a terminal state so the RUNNING badge
-// and Stop button clear. Never overrides a 'stopped' status.
+// voice:status → 'idle' handler. The audio pipeline has gone idle on the
+// backend (TTS finished). Reconciles a stuck 'running'/'approval' status to a
+// terminal state so the RUNNING badge and Stop button clear.
+// NEVER creates, erases, or finalises a chat message — that is exclusively
+// the job of chat:message. Never overrides a 'stopped' status.
 export function applyVoiceIdle(state: ActivityState, agentRunning: boolean): ActivityState {
   if (agentRunning) return state
   if (state.activityStatus !== 'running' && state.activityStatus !== 'approval') return state
@@ -178,8 +190,6 @@ export function applyVoiceIdle(state: ActivityState, agentRunning: boolean): Act
     ...state,
     loading: false,
     currentStep: null,
-    // If a response was produced, the turn completed; otherwise there is
-    // nothing to show, so drop the panel back to idle.
     activityStatus: state.finalResponse ? 'completed' : 'none',
   }
 }
@@ -208,8 +218,8 @@ export interface GogaEventBus {
   on(channel: 'agent:state',            cb: (s: AgentState) => void): () => void
   on(channel: 'agent:step',             cb: (s: AgentStep)  => void): () => void
   on(channel: 'agent:stopped',          cb: (p: { reason: string }) => void): () => void
-  on(channel: 'chat:token',             cb: (p: { token: string }) => void): () => void
-  on(channel: 'chat:message',           cb: (p: { id: string; role: string; content: string }) => void): () => void
+  on(channel: 'chat:token',             cb: (p: { token: string; turnId: string }) => void): () => void
+  on(channel: 'chat:message',           cb: (p: { id: string; role: string; content: string; turnId?: string }) => void): () => void
   on(channel: 'voice:transcript',       cb: (p: { text: string }) => void): () => void
   on(channel: 'voice:status',           cb: (p: { status: string }) => void): () => void
   on(channel: 'mission:state',          cb: (m: Mission) => void): () => void
@@ -231,6 +241,8 @@ export interface ActivityCallbacks {
   // voice:status→idle reconciliation never clears a real running agent.
   agentRunningRef: { current: boolean }
   agentStateToVisual: (s: AgentState) => GogaVisualState
+  // Stable turn correlation ID for the current turn
+  activeTurnIdRef: { current: string | null }
 }
 
 export function subscribeActivityEvents(
@@ -257,9 +269,9 @@ export function subscribeActivityEvents(
       cb.setActivity(prev => applyStopped(prev, reason))
     }),
 
-    bus.on('chat:token', ({ token }) => {
+    bus.on('chat:token', ({ token, turnId }) => {
       cb.setActivity(prev => {
-        const next = applyToken(prev, token, cb.stoppedRef.current)
+        const next = applyToken(prev, token, cb.stoppedRef.current, turnId)
         cb.streamingRef.current = next.streamingText
         return next
       })
@@ -276,10 +288,13 @@ export function subscribeActivityEvents(
     bus.on('voice:transcript', ({ text }) => {
       const accepted = !(text === cb.lastTranscript.current && cb.streamingRef.current !== '')
       if (!accepted) return
+      // Generate a new turnId for this voice turn
+      const turnId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      cb.activeTurnIdRef.current = turnId
       cb.lastTranscript.current = text
       cb.stoppedRef.current = false
       cb.lastMsgIdRef.current = null
-      cb.setActivity(prev => applyTranscript(prev, text, text, false).state)
+      cb.setActivity(prev => applyTranscript(prev, text, text, false, turnId).state)
       cb.setVisualState('thinking')
     }),
 
@@ -287,6 +302,7 @@ export function subscribeActivityEvents(
       // When the voice pipeline returns to idle, reconcile a stuck RUNNING
       // activity left by a simple chat/voice turn (which emits no terminal
       // agent:state). Guarded so a genuine agent run is never cleared.
+      // Does NOT create, erase, or finalise any chat message.
       if (status === 'idle') {
         cb.setActivity(prev => applyVoiceIdle(prev, cb.agentRunningRef.current))
       }
