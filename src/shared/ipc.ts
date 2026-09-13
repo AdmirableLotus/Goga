@@ -76,6 +76,20 @@ export interface MainHandlers {
   'ollama:models': () => Promise<string[]>
   'localModel:status': () => Promise<import('../main/services/localLlama').LocalModelState>
 
+  // Kokoro model management
+  'model:kokoro-status': () => Promise<{ installed: boolean; downloading: boolean }>
+  'model:kokoro-preflight': () => Promise<{
+    commit: string
+    manifestVersion: string
+    totalSize: string
+    destination: string
+    artifacts: Array<{ filename: string; sha256: string; sizeMB: string }>
+  }>
+  'model:kokoro-download': () => Promise<void>
+
+  // Reload TTS provider after settings change — returns error string or null
+  'voice:reload-tts': () => Promise<string | null>
+
   // Security workspace
   'security:list': () => Promise<SecurityWorkspace[]>
   'security:get': (id: string) => Promise<SecurityWorkspace | null>
@@ -104,6 +118,8 @@ export interface RendererEvents {
   'mission:state': import('./types').Mission
   // Voice
   'voice:status': { status: import('../main/services/voiceOrchestrator').VoiceStatus }
+  // Kokoro download progress
+  'model:kokoro-progress': import('../main/services/modelManager').DownloadProgress
   'voice:transcript': { text: string }
   'voice:partial': { text: string }
   'voice:amplitude': { value: number }

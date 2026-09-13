@@ -33,6 +33,9 @@
       "node_modules/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/kokoro-js/voices/**"
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"

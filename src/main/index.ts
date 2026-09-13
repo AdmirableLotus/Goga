@@ -14,6 +14,7 @@ import { registerAgentHandlers } from './handlers/agent'
 import { registerMissionHandlers } from './handlers/mission'
 import { registerSttHandlers } from './handlers/stt'
 import { registerVoiceHandlers } from './handlers/voice'
+import { registerModelHandlers } from './handlers/model'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -80,6 +81,7 @@ app.whenReady().then(() => {
   registerAgentHandlers(ipcMain)
   registerMissionHandlers(ipcMain)
   registerVoiceHandlers(ipcMain, getMainWindow)
+  registerModelHandlers(ipcMain, getMainWindow)
   createWindow()
 
   // Start loading the primary local model immediately (non-blocking)

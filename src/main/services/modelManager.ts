@@ -39,7 +39,7 @@ import { KOKORO_MODEL_DIR } from './speech/KokoroTtsProvider'
 // Replace with the exact commit SHA from:
 //   https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/commits/main
 // Using /resolve/main/ is NOT immutable. Use /resolve/<COMMIT_SHA>/ instead.
-const HF_COMMIT = '1939ad2a8e416c0acfeecc08a694d14ef25f2231'
+export const HF_COMMIT = '1939ad2a8e416c0acfeecc08a694d14ef25f2231'
 const HF_BASE = `https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/${HF_COMMIT}`
 
 // Redirect allowlist: only follow redirects to these HTTPS host prefixes.
@@ -95,13 +95,11 @@ export const KOKORO_ARTIFACTS: ArtifactEntry[] = [
     sha256: 'be1cb066d6ef6b074b3f15e6a6dd21ac88ff3cdaedf325f0aaed686c70f75d20',
     sizeBytes: 113,
   },
-  {
-    // Default voice embedding used by the synthesis child script
-    filename: path.join('voices', 'af_heart.bin'),
-    urlPath: '/voices/af_heart.bin',
-    sha256: 'd583ccff3cdca2f7fae535cb998ac07e9fcb90f09737b9a41fa2734ec44a8f0b',
-    sizeBytes: 522_240,
-  },
+  // voices/af_heart.bin is intentionally NOT listed here.
+  // kokoro-js ships all voice embeddings inside its own npm package at
+  // node_modules/kokoro-js/voices/*.bin and loads them via fs/promises from
+  // __dirname/../voices/<name>.bin — it never reads from the model directory.
+  // electron-builder's asarUnpack ensures those files survive packaging.
 ]
 
 // Manifest identity hash — written into .verified so stale sentinels are rejected.
@@ -109,7 +107,7 @@ export const KOKORO_ARTIFACTS: ArtifactEntry[] = [
 //   node -e "const c=require('crypto');const h=c.createHash('sha256');
 //     [list artifact sha256s].forEach(s=>h.update(s));h.update(version);console.log(h.digest('hex'))"
 // For now this is a placeholder that will be replaced when real SHA-256s are pinned.
-export const MANIFEST_HASH = '4441fe7d665e5a390f139ababe584650fda7fbbc699be8d1cb917dec9252b8f3'
+export const MANIFEST_HASH = '06dae02dc4fb512ec5fa6b1378a1d51e050e092fa01cb9d9fde03b7420645c6f'
 
 export const TOTAL_SIZE_BYTES = KOKORO_ARTIFACTS.reduce((s, a) => s + a.sizeBytes, 0)
 export const TOTAL_SIZE_LABEL = `~${Math.round(TOTAL_SIZE_BYTES / 1_048_576)} MB`

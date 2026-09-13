@@ -230,6 +230,38 @@ export class VoiceOrchestrator extends EventEmitter {
     return this.selectStt()
   }
 
+  /**
+   * Safe TTS provider reload after a settings change.
+   * - Stops and awaits current playback before swapping.
+   * - Serialized: a second call while one is in progress is a no-op (returns
+   *   the same promise), so rapid saves cannot cause overlapping reloads.
+   * - Returns an error string on failure so the caller can surface it to the UI.
+   */
+  private ttsReloadPromise: Promise<string | null> | null = null
+
+  reloadTtsProvider(): Promise<string | null> {
+    if (this.ttsReloadPromise) return this.ttsReloadPromise
+    this.ttsReloadPromise = (async () => {
+      try {
+        // Stop and await current playback so the old provider is fully idle.
+        if (this.tts.stopAndWait) {
+          await this.tts.stopAndWait().catch(() => {})
+        } else {
+          this.tts.stop()
+        }
+        this.initTtsProvider()
+        return null
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.log.info(`VoiceOrchestrator: TTS reload failed: ${msg}`)
+        return msg
+      } finally {
+        this.ttsReloadPromise = null
+      }
+    })()
+    return this.ttsReloadPromise
+  }
+
   // ── Status ────────────────────────────────────────────────────────────────
 
   getStatus(): VoiceStatus { return this.status }
