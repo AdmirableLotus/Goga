@@ -48,6 +48,7 @@ const REDIRECT_ALLOWLIST = [
   'https://huggingface.co/',
   'https://cdn-lfs.huggingface.co/',
   'https://cdn-lfs-us-1.huggingface.co/',
+  'https://us.aws.cdn.hf.co/',
 ]
 
 // ── Artifact manifest ─────────────────────────────────────────────────────────
