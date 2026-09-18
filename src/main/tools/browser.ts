@@ -6,12 +6,28 @@ const browser = new BrowserAdapter()
 const reg = ToolRegistry.getInstance()
 
 reg.register({
-  name: 'browser.open',
-  description: 'Open a URL in Brave browser using Playwright. Returns a sessionId used by all other browser tools.',
+  name: 'browser.openExternal',
+  description: 'Show a URL in the user\'s default visible browser. Use for simple "open this URL for me" requests where no follow-up interaction (click, type, read, evaluate) is needed. Auto-completes the task.',
   parameters: {
     type: 'object',
     properties: {
-      url:      { type: 'string', description: 'URL to open.' },
+      url: { type: 'string', description: 'Full URL to open (must include https://).' }
+    },
+    required: ['url']
+  },
+  riskLevel: 'low', reversible: true, category: 'browser'
+}, async (p) => {
+  const r = await browser.openExternal(p.url as string)
+  return { success: true, data: r }
+})
+
+reg.register({
+  name: 'browser.open',
+  description: 'Open a URL in a Playwright-controlled browser session. Use when you need to interact with the page afterwards: click, type, read, evaluate, screenshot, or navigate. Returns a sessionId for follow-up operations.',
+  parameters: {
+    type: 'object',
+    properties: {
+      url:      { type: 'string', description: 'Full URL to open (must include https://).' },
       headless: { type: 'boolean', description: 'Run headless (no visible window). Default: false.' }
     },
     required: ['url']

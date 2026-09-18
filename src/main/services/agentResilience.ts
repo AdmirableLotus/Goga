@@ -5,6 +5,44 @@
  * AgentLoop (which pulls in native LLM modules).
  */
 
+// Tools that produce irreversible real-world side effects and must not be
+// executed twice with identical arguments in the same agent turn.
+export const SIDE_EFFECTING_TOOLS = new Set([
+  'browser.open', 'browser.openExternal', 'browser.navigate', 'browser.click', 'browser.type',
+  'browser.clickByRole', 'browser.evaluate',
+  'shell.execute', 'process.start', 'filesystem.write', 'filesystem.delete',
+  'computer.click', 'computer.type', 'computer.key',
+])
+
+/**
+ * Canonicalize params for deduplication: sort object keys, normalise URL
+ * trailing slash so "http://x.com" and "http://x.com/" are the same key.
+ */
+export function canonicalizeParams(params: unknown): string {
+  const s = JSON.stringify(params, Object.keys(params as object).sort())
+  return s.replace(/(\/")/, '"').replace(/(\/$)/, '')
+}
+
+/**
+ * Per-turn deduplicator. Blocks a side-effecting tool from executing more than
+ * once with the same canonicalized arguments within a single agent run.
+ * A new instance must be created for every call to AgentLoop.run().
+ */
+export class TurnDeduplicator {
+  private seen = new Set<string>()
+
+  /** Returns true if this (tool, params) pair has already executed this turn. */
+  isDuplicate(tool: string, params: unknown): boolean {
+    if (!SIDE_EFFECTING_TOOLS.has(tool)) return false
+    return this.seen.has(`${tool}|${canonicalizeParams(params)}`)
+  }
+
+  /** Record that this (tool, params) pair has now executed. */
+  record(tool: string, params: unknown): void {
+    this.seen.add(`${tool}|${canonicalizeParams(params)}`)
+  }
+}
+
 export const MAX_EQUIVALENT_FAILURES = 3
 export const MAX_RECOVERY = 3
 export const OVERALL_TASK_TIMEOUT_MS = 90_000
