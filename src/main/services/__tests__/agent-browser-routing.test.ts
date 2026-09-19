@@ -29,7 +29,7 @@ vi.mock('../../tools/registry', () => ({
 
 import { AgentLoop } from '../agentLoop'
 import { TurnDeduplicator, SIDE_EFFECTING_TOOLS, canonicalizeParams } from '../agentResilience'
-import { BrowserAdapter, ShellSessionError } from '../../adapters/browser'
+import { BrowserAdapter, ShellSessionError, PageClosedError } from '../../adapters/browser'
 import { applyAgentState, INITIAL_ACTIVITY } from '../../../renderer/components/missionUtils'
 import type { AgentState } from '../../../../shared/types'
 
@@ -336,6 +336,50 @@ describe('BrowserAdapter — ShellSessionError on Playwright-only ops', () => {
     const adapter = new BrowserAdapter()
     const { sessionId } = await adapter.openExternal('https://example.com')
     await expect(adapter.close(sessionId)).resolves.toEqual({ closed: sessionId })
+  })
+})
+
+// ── 6b. BrowserAdapter — PageClosedError on externally-closed page ────────────
+
+describe('BrowserAdapter — PageClosedError when page closed externally', () => {
+  it('getContent on a page-closed session throws PageClosedError', async () => {
+    const adapter = new BrowserAdapter()
+    // Manually inject a closed playwright session (simulates user closing the window)
+    const sessionId = 'browser-test-closed'
+    ;(adapter as any).sessions.set(sessionId, {
+      kind: 'playwright', browser: null, context: null, page: null, url: 'https://example.com', pageClosed: true
+    })
+    await expect(adapter.getContent(sessionId)).rejects.toThrow(PageClosedError)
+  })
+
+  it('PageClosedError message names the session and explains the fix', async () => {
+    const adapter = new BrowserAdapter()
+    const sessionId = 'browser-test-closed-2'
+    ;(adapter as any).sessions.set(sessionId, {
+      kind: 'playwright', browser: null, context: null, page: null, url: 'https://example.com', pageClosed: true
+    })
+    const err = await adapter.getContent(sessionId).catch(e => e)
+    expect(err).toBeInstanceOf(PageClosedError)
+    expect(err.message).toContain(sessionId)
+    expect(err.message).toContain('browser.open')
+  })
+
+  it('navigate on a page-closed session throws PageClosedError', async () => {
+    const adapter = new BrowserAdapter()
+    const sessionId = 'browser-test-closed-3'
+    ;(adapter as any).sessions.set(sessionId, {
+      kind: 'playwright', browser: null, context: null, page: null, url: 'https://example.com', pageClosed: true
+    })
+    await expect(adapter.navigate(sessionId, 'https://other.com')).rejects.toThrow(PageClosedError)
+  })
+
+  it('PageClosedError is distinct from ShellSessionError', () => {
+    const pce = new PageClosedError('browser-1')
+    const sse = new ShellSessionError('external-1')
+    expect(pce).toBeInstanceOf(PageClosedError)
+    expect(pce).not.toBeInstanceOf(ShellSessionError)
+    expect(sse).toBeInstanceOf(ShellSessionError)
+    expect(sse).not.toBeInstanceOf(PageClosedError)
   })
 })
 

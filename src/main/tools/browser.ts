@@ -28,7 +28,7 @@ reg.register({
     type: 'object',
     properties: {
       url:      { type: 'string', description: 'Full URL to open (must include https://).' },
-      headless: { type: 'boolean', description: 'Run headless (no visible window). Default: false.' }
+      headless: { type: 'boolean', description: 'Run headless (no visible window). Default: true.' }
     },
     required: ['url']
   },

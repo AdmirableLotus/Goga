@@ -17,12 +17,21 @@ export class ShellSessionError extends Error {
   }
 }
 
+/** Thrown when the Playwright page was closed externally (e.g. user closed the browser window). */
+export class PageClosedError extends Error {
+  constructor(sessionId: string) {
+    super(`Session ${sessionId} page was closed externally. The browser window was closed before the operation could complete. Call browser.open again to start a new session.`)
+    this.name = 'PageClosedError'
+  }
+}
+
 interface SessionEntry {
   kind: 'playwright' | 'external'
   browser: Browser | null
   context: BrowserContext | null
   page: Page | null
   url: string
+  pageClosed?: boolean
 }
 
 export class BrowserAdapter implements ToolAdapter {
@@ -75,7 +84,7 @@ export class BrowserAdapter implements ToolAdapter {
 
   /** Open a URL in a Playwright-controlled browser session.
    * Returns a browser-N session that supports navigate, click, type, evaluate, screenshot. */
-  async open(url: string, headless = false): Promise<BrowserSession> {
+  async open(url: string, headless = true): Promise<BrowserSession> {
     const chromium = await this.getPlaywright()
     const browser = await chromium.launch({
       executablePath: BRAVE_PATH,
@@ -89,7 +98,12 @@ export class BrowserAdapter implements ToolAdapter {
     const page = await context.newPage()
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     const sessionId = `browser-${++this.sessionCounter}`
-    this.sessions.set(sessionId, { kind: 'playwright', browser, context, page, url })
+    const entry: SessionEntry = { kind: 'playwright', browser, context, page, url }
+    this.sessions.set(sessionId, entry)
+    page.on('close', () => {
+      entry.pageClosed = true
+      this.log.warn(`Browser page closed externally [${sessionId}]`)
+    })
     this.log.info(`Browser opened: ${url} [${sessionId}]`)
     return { sessionId, url: page.url() }
   }
@@ -168,6 +182,7 @@ export class BrowserAdapter implements ToolAdapter {
     const s = this.sessions.get(sessionId)
     if (!s) throw new Error(`No browser session: ${sessionId}. Call browser.open first.`)
     if (s.kind === 'external') throw new ShellSessionError(sessionId)
+    if (s.pageClosed) throw new PageClosedError(sessionId)
     return s
   }
 
