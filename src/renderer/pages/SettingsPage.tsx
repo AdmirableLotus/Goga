@@ -253,7 +253,7 @@ export default function SettingsPage() {
         <Field label="STT provider">
           <select value={settings.sttProvider ?? 'windows'} onChange={e => update({ sttProvider: e.target.value as AppSettings['sttProvider'] })} style={styles.select} disabled={!settings.voiceEnabled}>
             <option value="windows">Windows Speech (offline, fast)</option>
-            <option value="whisper">Whisper (accurate, GPU)</option>
+            <option value="whisper">Whisper (accurate, local)</option>
           </select>
         </Field>
         {(settings.sttProvider ?? 'windows') === 'whisper' && (
@@ -269,9 +269,9 @@ export default function SettingsPage() {
               </select>
             </Field>
             <Field label="Whisper device">
-              <select value={settings.whisperDevice ?? 'cuda'} onChange={e => update({ whisperDevice: e.target.value as AppSettings['whisperDevice'] })} style={styles.select} disabled={!settings.voiceEnabled}>
-                <option value="cuda">CUDA (RTX GPU — recommended)</option>
-                <option value="cpu">CPU (slower)</option>
+              <select value={settings.whisperDevice ?? 'cpu'} onChange={e => update({ whisperDevice: e.target.value as AppSettings['whisperDevice'] })} style={styles.select} disabled={!settings.voiceEnabled}>
+                <option value="cpu">CPU (works everywhere)</option>
+                <option value="cuda">CUDA (RTX GPU — requires CUDA toolkit)</option>
                 <option value="auto">Auto</option>
               </select>
             </Field>

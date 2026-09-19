@@ -293,7 +293,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   userName: 'Boss',
   sttProvider: 'windows',
   whisperModel: 'base',
-  whisperDevice: 'cuda',
+  whisperDevice: 'cpu',
   whisperLanguage: '',
   ttsProvider: 'sapi'
 }
