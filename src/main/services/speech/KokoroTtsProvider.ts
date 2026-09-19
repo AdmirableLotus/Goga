@@ -192,10 +192,11 @@ export class KokoroTtsProvider implements ITtsProvider {
       const script = `
 const { KokoroTTS } = require('kokoro-js')
 const { env } = require('@huggingface/transformers')
-const modelDir = process.argv[2]
-const outPath  = process.argv[3]
-const text     = process.argv[4]
-const speed    = parseFloat(process.argv[5]) || 1.0
+const fs = require('fs')
+const modelDir = process.argv[1]
+const outPath  = process.argv[2]
+const text     = process.argv[3]
+const speed    = parseFloat(process.argv[4]) || 1.0
 
 // Fail closed: no remote model access permitted.
 env.allowRemoteModels = false
@@ -205,7 +206,11 @@ env.cacheDir          = modelDir
 ;(async () => {
   const tts = await KokoroTTS.from_pretrained(modelDir, { dtype: 'q8', device: 'cpu' })
   const audio = await tts.generate(text, { voice: 'af_heart', speed })
-  audio.save(outPath)
+  await audio.save(outPath)
+  // Verify the file was written before signalling success
+  if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 100) {
+    throw new Error('WAV file missing or empty after save')
+  }
 })().then(() => process.exit(0)).catch(e => {
   process.stderr.write(String(e.message || e))
   process.exit(1)
@@ -214,7 +219,11 @@ env.cacheDir          = modelDir
       const child = spawn(
         process.execPath,
         ['-e', script, '--', this.modelDir, outPath, text, String(rate)],
-        { windowsHide: true, timeout: 60_000 }
+        {
+          windowsHide: true,
+          timeout: 60_000,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+        }
       )
       this.proc = child
 
@@ -225,7 +234,10 @@ env.cacheDir          = modelDir
         this.proc = null
         if (this.gen !== myGen) { resolve(); return }
         if (code === 0) resolve()
-        else reject(new Error(`Kokoro synthesis failed: ${stderr.slice(0, 200)}`))
+        else {
+          this.log.info(`TTS:Kokoro: synthesis failed (code=${code}): ${stderr.slice(0, 300)}`)
+          reject(new Error(`Kokoro synthesis failed: ${stderr.slice(0, 200)}`))
+        }
       })
 
       child.on('error', err => {
@@ -287,13 +299,18 @@ $player.PlaySync()
         }
       })
 
-      child.stderr?.on('data', () => { /* suppress */ })
+      let playStderr = ''
+      child.stderr?.on('data', (d: Buffer) => { playStderr += d.toString() })
 
       child.on('close', code => {
         this.proc = null
         clearAmp()
         if (this.gen !== myGen) { resolve(); return }
-        code === 0 ? resolve() : reject(new Error('Kokoro: WAV playback failed'))
+        if (code === 0) resolve()
+        else {
+          this.log.info(`TTS:Kokoro: playback failed (code=${code}): ${playStderr.slice(0, 200)}`)
+          reject(new Error('Kokoro: WAV playback failed'))
+        }
       })
 
       child.on('error', err => {

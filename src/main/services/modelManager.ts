@@ -324,49 +324,96 @@ export class ModelManager {
   }
 
   // ── Streaming download with per-file progress ─────────────────────────────
+  //
+  // Redirect handling:
+  //   - 301, 302, 307, 308 are all followed.
+  //   - 307/308 preserve the GET method (correct for HuggingFace resolve-cache).
+  //   - Every Location value must be an absolute HTTPS URL matching the allowlist.
+  //   - Missing Location → hard failure (never save the redirect body).
+  //   - Any other 3xx → hard failure.
+  //   - Redirect bodies are always drained before following, never written to disk.
+  //   - Hard limit of 5 hops prevents loops.
 
   private downloadFile(
     url: string,
     dest: string,
-    onReceived: (bytes: number) => void
+    onReceived: (bytes: number) => void,
+    _httpGet: typeof https.get = https.get
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const file = fs.createWriteStream(dest)
       let received = 0
 
+      // Destroy the write stream, delete the partial file, then reject.
+      // We wait for the 'close' event before unlinking so the file handle
+      // is released on Windows before we attempt deletion.
+      let aborted = false
+      const abort = (err: Error) => {
+        if (aborted) return
+        aborted = true
+        file.once('close', () => {
+          try { fs.unlinkSync(dest) } catch { }
+          reject(err)
+        })
+        file.destroy()
+      }
+
       const request = (targetUrl: string, redirectCount = 0) => {
         if (redirectCount > 5) {
-          file.destroy()
-          reject(new Error('Too many redirects'))
+          abort(new Error('Too many redirects'))
           return
         }
 
-        https.get(targetUrl, { timeout: 30_000 }, res => {
-          if (res.statusCode === 301 || res.statusCode === 302) {
+        _httpGet(targetUrl, { timeout: 30_000 }, res => {
+          const status = res.statusCode ?? 0
+
+          // ── Redirect handling (301 / 302 / 307 / 308) ──────────────────────
+          if (status === 301 || status === 302 || status === 307 || status === 308) {
             const loc = res.headers.location
-            if (loc) {
-              // Validate redirect target against the allowlist before following.
-              const allowed = REDIRECT_ALLOWLIST.some(prefix => loc.startsWith(prefix))
-              if (!allowed) {
-                res.resume()
-                file.destroy()
-                reject(new Error(`Redirect to untrusted host blocked: ${loc}`))
-                return
-              }
-              res.resume()
-              request(loc, redirectCount + 1)
+
+            // Always drain the redirect response body — never write it to disk.
+            res.resume()
+
+            if (!loc) {
+              abort(new Error(`Redirect (HTTP ${status}) with no Location header from ${targetUrl}`))
               return
             }
-          }
 
-          if (!res.statusCode || res.statusCode >= 400) {
-            // Drain the response so the socket is released before rejecting.
-            res.resume()
-            file.destroy()
-            reject(new Error(`Download failed: HTTP ${res.statusCode} for ${targetUrl}`))
+            // Resolve relative Location against the request origin before validating.
+            const absLoc = loc.startsWith('http') ? loc : `https://huggingface.co${loc}`
+
+            // Location must be absolute HTTPS — relative paths and HTTP are rejected.
+            if (!absLoc.startsWith('https://')) {
+              abort(new Error(`Redirect to non-HTTPS URL blocked: ${loc}`))
+              return
+            }
+
+            // Validate against the allowlist.
+            const allowed = REDIRECT_ALLOWLIST.some(prefix => absLoc.startsWith(prefix))
+            if (!allowed) {
+              abort(new Error(`Redirect to untrusted host blocked: ${absLoc}`))
+              return
+            }
+
+            request(absLoc, redirectCount + 1)
             return
           }
 
+          // ── Unsupported 3xx (303, 304, 305, 306, 309+) ─────────────────────
+          if (status >= 300 && status < 400) {
+            res.resume()
+            abort(new Error(`Unsupported redirect HTTP ${status} for ${targetUrl}`))
+            return
+          }
+
+          // ── HTTP error ──────────────────────────────────────────────────────
+          if (status === 0 || status >= 400) {
+            res.resume()
+            abort(new Error(`Download failed: HTTP ${status} for ${targetUrl}`))
+            return
+          }
+
+          // ── 2xx — stream body to disk ───────────────────────────────────────
           res.on('data', (chunk: Buffer) => {
             received += chunk.length
             onReceived(received)
@@ -374,11 +421,11 @@ export class ModelManager {
 
           res.pipe(file)
           file.on('finish', () => resolve())
-          file.on('error', err => { file.destroy(); reject(err) })
-          res.on('error', err => { file.destroy(); reject(err) })
+          file.on('error', err => abort(err))
+          res.on('error', err => abort(err))
         })
-          .on('error', err => { file.destroy(); reject(err) })
-          .on('timeout', () => { file.destroy(); reject(new Error(`Download timed out: ${targetUrl}`)) })
+          .on('error', err => abort(err))
+          .on('timeout', () => abort(new Error(`Download timed out: ${targetUrl}`)))
       }
 
       request(url)

@@ -2,19 +2,20 @@
  * model-manager.test.ts
  *
  * Tests for the model IPC handler layer (handlers/model.ts) and the
- * ModelManager service. All network I/O is mocked — no bytes are transferred.
+ * ModelManager service. All network I/O is mocked â€” no bytes are transferred.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as path from 'path'
+import * as fs from 'fs'
 import type { DownloadProgress } from '../../services/modelManager'
 
-// ── Mock electron app before any import that touches it ──────────────────────
+// â”€â”€ Mock electron app before any import that touches it â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 vi.mock('electron', () => ({
   app: { getPath: () => '/fake/userData' },
 }))
 
-// ── Capture the ModelManager constructor arg and mock its methods ─────────────
+// â”€â”€ Capture the ModelManager constructor arg and mock its methods â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let mockIsModelReady = false
 let mockDownloadImpl: ((cb: (p: DownloadProgress) => void) => Promise<void>) | null = null
 
@@ -39,11 +40,11 @@ vi.mock('../../services/modelManager', async (importOriginal) => {
   }
 })
 
-// ── Import handler factory after mocks are in place ───────────────────────────
+// â”€â”€ Import handler factory after mocks are in place â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { registerModelHandlers, _resetDownloadFlag } from '../../handlers/model'
 import { ModelManager as MockedModelManager, KOKORO_ARTIFACTS, MANIFEST_HASH } from '../../services/modelManager'
 
-// ── Minimal IpcMain / BrowserWindow stubs ─────────────────────────────────────
+// â”€â”€ Minimal IpcMain / BrowserWindow stubs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function makeIpc() {
   const handlers: Record<string, (event: unknown, ...args: unknown[]) => unknown> = {}
   const handle = (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => {
@@ -70,7 +71,7 @@ function makeWindow(id = 1) {
   return win
 }
 
-// ── Test suite ────────────────────────────────────────────────────────────────
+// â”€â”€ Test suite â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('model IPC handler', () => {
   let ipc: ReturnType<typeof makeIpc>
@@ -91,20 +92,20 @@ describe('model IPC handler', () => {
     vi.restoreAllMocks()
   })
 
-  // 1. Status — not installed
+  // 1. Status â€” not installed
   it('model:kokoro-status returns installed=false when model absent', async () => {
     const result = await ipc.invoke('model:kokoro-status')
     expect(result).toEqual({ installed: false, downloading: false })
   })
 
-  // 2. Status — installed
+  // 2. Status â€” installed
   it('model:kokoro-status returns installed=true when model present', async () => {
     mockIsModelReady = true
     const result = await ipc.invoke('model:kokoro-status')
     expect(result).toEqual({ installed: true, downloading: false })
   })
 
-  // 3. Preflight — zero network, returns manifest info
+  // 3. Preflight â€” zero network, returns manifest info
   it('model:kokoro-preflight returns manifest without touching network', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('should not be called'))
     const result = await ipc.invoke('model:kokoro-preflight') as {
@@ -121,7 +122,7 @@ describe('model IPC handler', () => {
     expect(result.artifacts[0].sha256).toBeTruthy()
   })
 
-  // 4. Manifest has exactly 4 artifacts — voices/af_heart.bin must not be present
+  // 4. Manifest has exactly 4 artifacts â€” voices/af_heart.bin must not be present
   it('manifest contains exactly 4 artifacts and no voice .bin file', () => {
     expect(KOKORO_ARTIFACTS).toHaveLength(4)
     const filenames = KOKORO_ARTIFACTS.map(a => a.filename)
@@ -129,7 +130,6 @@ describe('model IPC handler', () => {
     expect(filenames).toContain('config.json')
     expect(filenames).toContain('tokenizer.json')
     expect(filenames).toContain('tokenizer_config.json')
-    // Voice .bin must NOT be in the download manifest
     expect(filenames.some(f => f.endsWith('.bin'))).toBe(false)
   })
 
@@ -146,14 +146,11 @@ describe('model IPC handler', () => {
 
   // 6. Voice .bin file is provided by kokoro-js package, not the download manifest
   it('af_heart.bin exists in the kokoro-js package voices directory', () => {
-    const fs = require('fs')
-    // Resolve via the package's dist entry, then walk up to the package root
     const entryPoint = require.resolve('kokoro-js')
-    const pkgDir = path.dirname(path.dirname(entryPoint)) // dist/ -> package root
+    const pkgDir = path.dirname(path.dirname(entryPoint))
     const voicePath = path.join(pkgDir, 'voices', 'af_heart.bin')
     expect(fs.existsSync(voicePath)).toBe(true)
-    const stat = fs.statSync(voicePath)
-    expect(stat.size).toBe(522_240)
+    expect(fs.statSync(voicePath).size).toBe(522_240)
   })
 
   // 7. MANIFEST_HASH is consistent with the 4-artifact set
@@ -165,7 +162,7 @@ describe('model IPC handler', () => {
     expect(h.digest('hex')).toBe(MANIFEST_HASH)
   })
 
-  // 8. Approval/download separation — preflight does NOT start download
+  // 8. Approval/download separation â€” preflight does NOT start download
   it('preflight does not trigger any download side-effects', async () => {
     let downloadCalled = false
     mockDownloadImpl = async () => { downloadCalled = true }
@@ -175,12 +172,12 @@ describe('model IPC handler', () => {
     expect(win._sent.length).toBe(0)
   })
 
-  // 9. Download — progress events reach the requesting window
+  // 9. Download â€” progress events reach the requesting window
   it('model:kokoro-download streams progress to the requesting window', async () => {
     const events: DownloadProgress[] = [
       { phase: 'info', message: 'manifest info' },
-      { phase: 'downloading', message: 'Downloading…', percent: 50, artifact: 'model.onnx' },
-      { phase: 'done', message: 'All verified ✓' },
+      { phase: 'downloading', message: 'Downloadingâ€¦', percent: 50, artifact: 'model.onnx' },
+      { phase: 'done', message: 'All verified âœ“' },
     ]
     mockDownloadImpl = async (cb) => { for (const e of events) cb(e) }
 
@@ -192,10 +189,10 @@ describe('model IPC handler', () => {
     expect(win._sent[2]).toEqual(['model:kokoro-progress', events[2]])
   })
 
-  // 10. Failure — flag reset so retry is possible
+  // 10. Failure â€” flag reset so retry is possible
   it('model:kokoro-download resets in-progress flag on failure', async () => {
     mockDownloadImpl = async (cb) => {
-      cb({ phase: 'downloading', message: 'Downloading…', percent: 10 })
+      cb({ phase: 'downloading', message: 'Downloadingâ€¦', percent: 10 })
       throw new Error('Checksum mismatch')
     }
 
@@ -206,7 +203,7 @@ describe('model IPC handler', () => {
     expect((status as { downloading: boolean }).downloading).toBe(false)
   })
 
-  // 11. Concurrent requests — second call rejected immediately
+  // 11. Concurrent requests â€” second call rejected immediately
   it('concurrent model:kokoro-download is rejected', async () => {
     let resolveDl!: () => void
     mockDownloadImpl = () => new Promise<void>(res => { resolveDl = res })
@@ -221,7 +218,7 @@ describe('model IPC handler', () => {
     await first
   })
 
-  // 12. Unmount cleanup — progress not sent to destroyed window
+  // 12. Unmount cleanup â€” progress not sent to destroyed window
   it('progress is not sent to a destroyed window (unmount cleanup)', async () => {
     const deadWin = makeWindow(1)
     deadWin.webContents.isDestroyed = () => true
@@ -230,7 +227,7 @@ describe('model IPC handler', () => {
     registerModelHandlers(ipc2.ipcMain as never, () => deadWin as never)
 
     mockDownloadImpl = async (cb) => {
-      cb({ phase: 'downloading', message: 'Downloading…', percent: 20 })
+      cb({ phase: 'downloading', message: 'Downloadingâ€¦', percent: 20 })
     }
 
     const senderEvent = { sender: { id: 1 } }
@@ -239,19 +236,16 @@ describe('model IPC handler', () => {
   })
 })
 
-// ── Provider reload tests ─────────────────────────────────────────────────────
+// â”€â”€ Provider reload tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('VoiceOrchestrator.reloadTtsProvider', () => {
-  it('is serialized — concurrent calls return the same promise', async () => {
-    // Mock the orchestrator minimally
+  it('is serialized â€” concurrent calls return the same promise', async () => {
     const stopAndWait = vi.fn().mockResolvedValue(undefined)
     const initTts = vi.fn()
-    const log = { info: vi.fn() }
 
-    // Build a minimal orchestrator-like object with the real reloadTtsProvider logic
     const obj = {
       tts: { stopAndWait, stop: vi.fn(), name: 'MockTTS' },
-      log,
+      log: { info: vi.fn() },
       ttsReloadPromise: null as Promise<string | null> | null,
       initTtsProvider: initTts,
       reloadTtsProvider(): Promise<string | null> {
@@ -273,7 +267,7 @@ describe('VoiceOrchestrator.reloadTtsProvider', () => {
 
     const p1 = obj.reloadTtsProvider()
     const p2 = obj.reloadTtsProvider()
-    expect(p1).toBe(p2)  // same promise — not two separate reloads
+    expect(p1).toBe(p2)
 
     await p1
     expect(stopAndWait).toHaveBeenCalledTimes(1)

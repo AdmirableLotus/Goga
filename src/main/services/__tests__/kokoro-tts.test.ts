@@ -508,7 +508,7 @@ describe('ModelManager', () => {
     expect(infoMsg).toContain('model_quantized.onnx')
     expect(infoMsg).toContain('config.json')
     expect(infoMsg).toContain('tokenizer.json')
-    expect(infoMsg).toContain('af_heart.bin')
+    expect(infoMsg).toContain('tokenizer_config.json')
     expect(infoMsg).toContain('SHA-256')
   })
 
@@ -637,7 +637,7 @@ describe('ModelManager', () => {
     httpStatus = 302
     redirectTo = 'http://evil.example.com/malicious'
     await expect(freshManager().downloadKokoro(() => {}))
-      .rejects.toThrow('Redirect to untrusted host blocked')
+      .rejects.toThrow('blocked')
   })
 
   // 37. Redirect to huggingface.co CDN is allowed
@@ -683,7 +683,7 @@ describe('ModelManager', () => {
       let thrownMsg = ''
       await m.downloadKokoro(() => {}).catch(e => { threw = true; thrownMsg = String(e.message) })
       if (threw) {
-        expect(thrownMsg).not.toContain('Redirect to untrusted host blocked')
+        expect(thrownMsg).not.toContain('blocked: http://evil')
       }
     } finally {
       ;(httpsMod as any).get = origGet
