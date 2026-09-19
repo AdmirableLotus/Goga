@@ -433,6 +433,54 @@ describe('agentRouting — show verb and URL triggers', () => {
   })
 })
 
+// ── 10. agentRouting — form/fill/submit routing requirement ─────────────────
+// P2 acceptance requirement: form-interaction phrases route to agent.
+// Trigger: /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i
+// Rule: requires form/field/input context — bare "fill" without that context
+// stays on the normal chat path.
+
+describe('agentRouting — form/fill/submit routing (P2 acceptance)', () => {
+  // ── Agent path ────────────────────────────────────────────────────────────
+  it('"fill the form" → agent path', () => {
+    expect(looksLikeAgentTask('fill the form')).toBe(true)
+  })
+  it('"fill and submit the form" → agent path (exact P2 phrase)', () => {
+    expect(looksLikeAgentTask('fill and submit the form')).toBe(true)
+  })
+  it('"submit the form" → agent path', () => {
+    expect(looksLikeAgentTask('submit the form')).toBe(true)
+  })
+  it('"complete this form" → agent path', () => {
+    expect(looksLikeAgentTask('complete this form')).toBe(true)
+  })
+  it('"fill in the input fields" → agent path', () => {
+    expect(looksLikeAgentTask('fill in the input fields')).toBe(true)
+  })
+  it('"submit the login form" → agent path', () => {
+    expect(looksLikeAgentTask('submit the login form')).toBe(true)
+  })
+
+  // ── Normal chat path — fill without form/field/input context ─────────────
+  it('"please fill in your details" → normal chat (no form/field/input)', () => {
+    expect(looksLikeAgentTask('please fill in your details')).toBe(false)
+  })
+  it('"can you fill me in on what happened?" → normal chat', () => {
+    expect(looksLikeAgentTask('can you fill me in on what happened?')).toBe(false)
+  })
+
+  // ── P2 phrase is exact — not a replacement containing "run" ──────────────
+  it('P2 phrase is "fill and submit the form", not a "run" variant', () => {
+    // The trigger for this requirement is fill+form, not run.
+    // "run" triggers via the separate /\b(run|execute|install|build|compile)\b/ rule.
+    // This test documents that the form trigger fires on the exact P2 phrase.
+    const p2 = 'fill and submit the form'
+    expect(looksLikeAgentTask(p2)).toBe(true)
+    // Confirm it is the fill+form trigger, not a run-based trigger
+    const formTrigger = /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i
+    expect(formTrigger.test(p2)).toBe(true)
+  })
+})
+
 // ── 9. browser.open → browser.openExternal rewrite for simple tasks ────────────
 
 describe('agentLoop tool rewrite — browser.open → browser.openExternal on simple tasks', () => {
