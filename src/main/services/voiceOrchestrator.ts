@@ -20,6 +20,7 @@ import { app } from 'electron'
 import { WindowsSttProvider } from './speech/WindowsSpeechProvider'
 import { WindowsTtsProvider } from './speech/WindowsSpeechProvider'
 import { WhisperSttProvider } from './speech/WhisperSttProvider'
+import type { WhisperModel, WhisperDevice } from './speech/WhisperSttProvider'
 import { ElevenLabsTtsProvider } from './speech/ElevenLabsTtsProvider'
 import { ElevenLabsSttProvider } from './speech/ElevenLabsSttProvider'
 import { KokoroTtsProvider, KokoroModelMissingError } from './speech/KokoroTtsProvider'
@@ -183,9 +184,19 @@ export class VoiceOrchestrator extends EventEmitter {
       if (want === 'whisper') {
         if (WhisperSttProvider.scriptExists()) {
           if (this.stt.name !== 'Whisper') {
+            const wModel = settings.whisperModel as WhisperModel | undefined
+            const wDevice = settings.whisperDevice as WhisperDevice | undefined
+            // Pre-download disclosure: emit event so UI can gate if model not cached
+            const preflight = WhisperSttProvider.preflight(wModel ?? 'base', wDevice ?? 'cuda')
+            if (!preflight.cached) {
+              this.log.info(
+                `WhisperSTT: model not cached — first use will download ~${preflight.downloadMB}MB from ${preflight.source} to ${preflight.cacheDir}`
+              )
+              this.emit('whisper:download-required', preflight)
+            }
             this.setSttProvider(new WhisperSttProvider({
-              model: settings.whisperModel,
-              device: settings.whisperDevice,
+              model: wModel,
+              device: wDevice,
               language: settings.whisperLanguage || undefined
             }))
           }
@@ -220,6 +231,8 @@ export class VoiceOrchestrator extends EventEmitter {
     this.tts = p
     this.log.info(`VoiceOrchestrator: TTS provider → ${p.name}`)
   }
+
+  getTtsProvider(): ITtsProvider { return this.tts }
 
   /**
    * Re-run the authoritative selector (e.g. after settings change). Uses the
@@ -598,6 +611,9 @@ export class VoiceOrchestrator extends EventEmitter {
     provider.onPlaybackStart = () => {
       playbackStarted = true
       this.setStatus('speaking')
+      // Reset conversation window from when Goga starts speaking so the user
+      // has a full window to reply after playback ends.
+      if (this.conversationActive) this.resetConversationTimer()
     }
 
     try {

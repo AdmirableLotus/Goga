@@ -90,6 +90,12 @@ export interface MainHandlers {
   // Reload TTS provider after settings change — returns error string or null
   'voice:reload-tts': () => Promise<string | null>
 
+  // Whisper STT pre-download disclosure (no network, no process spawned)
+  'whisper:preflight': (model: string, device: string) => Promise<{
+    model: string; device: string; downloadMB: number;
+    cached: boolean; cacheDir: string; source: string
+  }>
+
   // Security workspace
   'security:list': () => Promise<SecurityWorkspace[]>
   'security:get': (id: string) => Promise<SecurityWorkspace | null>
@@ -123,6 +129,8 @@ export interface RendererEvents {
   'voice:transcript': { text: string }
   'voice:partial': { text: string }
   'voice:amplitude': { value: number }
+  // Whisper model download disclosure (emitted before first recognition if model not cached)
+  'whisper:download-required': { model: string; device: string; downloadMB: number; cached: boolean; cacheDir: string; source: string }
 }
 
 export type MainChannel = keyof MainHandlers

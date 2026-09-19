@@ -84,7 +84,8 @@ export class LocalLlamaService {
 
   async chat(
     messages: { role: 'system' | 'user' | 'assistant'; content: string }[],
-    onToken?: (token: string) => void
+    onToken?: (token: string) => void,
+    signal?: AbortSignal
   ): Promise<string> {
     if (!this.isReady() || !this.model) {
       throw new Error(`LocalLlama not ready: ${this.state.status} — ${this.state.error ?? ''}`)
@@ -120,6 +121,9 @@ export class LocalLlamaService {
       let result = ''
       await session.prompt(finalPrompt, {
         onTextChunk: (chunk: string) => {
+          // node-llama-cpp has no abort API: suppress tokens after abort
+          // but cannot stop the underlying computation.
+          if (signal?.aborted) return
           result += chunk
           onToken?.(chunk)
         },

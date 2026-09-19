@@ -30,6 +30,8 @@ export default function ChatPage() {
   const committedMsgIds = useRef<Set<string>>(new Set())
   // Track which turnIds have been finalised by a canonical chat:message
   const finalisedTurnIds = useRef<Set<string>>(new Set())
+  // Submission lock: prevents re-entry while a chat:send IPC call is in flight
+  const sendInFlight = useRef(false)
 
   const inConversation = hasConversation(messages)
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
@@ -63,11 +65,12 @@ export default function ChatPage() {
       window.goga.on('agent:state', state => {
         setAgentState(state)
         setVisualState(agentStateToVisual(state))
-        if (['idle', 'done', 'stopped'].includes(state.status)) setLoading(false)
+        if (['idle', 'done', 'stopped', 'error'].includes(state.status)) setLoading(false)
       }),
 
       window.goga.on('agent:stopped', () => {
         setLoading(false)
+        setAgentSteps([])
         setAgentState(s => s ? { ...s, status: 'stopped' } : null)
         setVisualState('stopped')
       }),
@@ -141,8 +144,9 @@ export default function ChatPage() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
   const sendText = async (text: string) => {
-    // Allow sending during TTS/agent runs; only block during pure LLM generation.
-    if (!text || (loading && !isAgentRunning)) return
+    // Block if loading (non-agent) OR if a send is already in flight
+    if (!text || sendInFlight.current || (loading && !isAgentRunning)) return
+    sendInFlight.current = true
 
     // A new typed request stops any current speech immediately.
     window.goga.invoke('voice:stopSpeaking')
@@ -180,6 +184,7 @@ export default function ChatPage() {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${e}`, timestamp: Date.now() }])
     } finally {
       setLoading(false)
+      sendInFlight.current = false
     }
   }
 
@@ -202,7 +207,7 @@ export default function ChatPage() {
       )}
 
       {/* Agent step panel */}
-      {(agentSteps.length > 0 || isAgentRunning) && (
+      {(agentSteps.length > 0 || isAgentRunning) && agentState?.status !== 'error' && agentState?.status !== 'done' && (
         <div style={S.agentPanel}>
           <div style={S.agentHeader}>
             <span style={{ fontWeight: 600, fontSize: 11, color: '#8b5cff' }}>
