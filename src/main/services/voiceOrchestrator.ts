@@ -187,7 +187,7 @@ export class VoiceOrchestrator extends EventEmitter {
             const wModel = settings.whisperModel as WhisperModel | undefined
             const wDevice = settings.whisperDevice as WhisperDevice | undefined
             // Pre-download disclosure: emit event so UI can gate if model not cached
-            const preflight = WhisperSttProvider.preflight(wModel ?? 'base', wDevice ?? 'cuda')
+            const preflight = WhisperSttProvider.preflight(wModel ?? 'base', wDevice ?? 'cpu')
             if (!preflight.cached) {
               this.log.info(
                 `WhisperSTT: model not cached — first use will download ~${preflight.downloadMB}MB from ${preflight.source} to ${preflight.cacheDir}`

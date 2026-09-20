@@ -263,7 +263,7 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
   ipcMain.handle('whisper:preflight', async (_e, model: string, device: string) => {
     return WhisperSttProvider.preflight(
       (model as Parameters<typeof WhisperSttProvider.preflight>[0]) ?? 'base',
-      (device as Parameters<typeof WhisperSttProvider.preflight>[1]) ?? 'cuda'
+      (device as Parameters<typeof WhisperSttProvider.preflight>[1]) ?? 'cpu'
     )
   })
 }

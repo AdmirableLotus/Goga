@@ -125,23 +125,6 @@ reg.register({
 })
 
 reg.register({
-  name: 'browser.evaluate',
-  description: 'Run JavaScript in the browser page context and return the result. Use for extracting data, checking state, or interacting with the DOM.',
-  parameters: {
-    type: 'object',
-    properties: {
-      sessionId: { type: 'string' },
-      script:    { type: 'string', description: 'JavaScript expression or function body to evaluate.' }
-    },
-    required: ['sessionId', 'script']
-  },
-  riskLevel: 'medium', reversible: true, category: 'browser'
-}, async (p) => {
-  const r = await browser.evaluate(p.sessionId as string, p.script as string)
-  return { success: true, data: r }
-})
-
-reg.register({
   name: 'browser.waitFor',
   description: 'Wait for a CSS selector to appear on the page.',
   parameters: {

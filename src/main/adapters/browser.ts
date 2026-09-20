@@ -17,6 +17,14 @@ export class ShellSessionError extends Error {
   }
 }
 
+/** Thrown when browser.evaluate is called — this op is not exposed to the agent. */
+export class EvaluateNotAllowedError extends Error {
+  constructor() {
+    super('browser.evaluate is not available to the agent. Use browser.snapshot, browser.ariaSnapshot, browser.getByRole, browser.getByLabel, or browser.getByText to inspect page state.')
+    this.name = 'EvaluateNotAllowedError'
+  }
+}
+
 /** Thrown when the Playwright page was closed externally (e.g. user closed the browser window). */
 export class PageClosedError extends Error {
   constructor(sessionId: string) {
@@ -46,12 +54,12 @@ export class BrowserAdapter implements ToolAdapter {
     switch (op) {
       case 'open':        return this.open(params.url as string, params.headless as boolean | undefined)
       case 'openExternal': return this.openExternal(params.url as string)
+      case 'evaluate':     throw new EvaluateNotAllowedError()
       case 'navigate':    return this.navigate(params.sessionId as string, params.url as string)
       case 'click':       return this.click(params.sessionId as string, params.selector as string | undefined, params.x as number | undefined, params.y as number | undefined)
       case 'type':        return this.type(params.sessionId as string, params.selector as string, params.text as string)
       case 'getContent':  return this.getContent(params.sessionId as string)
       case 'screenshot':  return this.screenshotPage(params.sessionId as string)
-      case 'evaluate':    return this.evaluate(params.sessionId as string, params.script as string)
       case 'waitFor':     return this.waitFor(params.sessionId as string, params.selector as string, params.timeoutMs as number | undefined)
       case 'close':       return this.close(params.sessionId as string)
       case 'closeAll':    return this.closeAll()
@@ -72,8 +80,16 @@ export class BrowserAdapter implements ToolAdapter {
   }
 
   /** Open a URL via Electron shell.openExternal — visible in the user's default browser.
-   * Returns an external-N session that cannot be used with Playwright operations. */
+   * Returns an external-N session that cannot be used with Playwright operations.
+   * Only http: and https: schemes are permitted; all others are rejected. */
   async openExternal(url: string): Promise<BrowserSession> {
+    let parsed: URL
+    try { parsed = new URL(url) } catch {
+      throw new Error(`browser.openExternal: invalid URL: ${url}`)
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      throw new Error(`browser.openExternal: scheme "${parsed.protocol}" is not allowed. Only https: and http: are permitted.`)
+    }
     const { shell } = await import('electron')
     await shell.openExternal(url)
     const sessionId = `external-${++this.sessionCounter}`
@@ -147,6 +163,8 @@ export class BrowserAdapter implements ToolAdapter {
     return { base64: buf.toString('base64'), url: s.page!.url() }
   }
 
+  // evaluate() is intentionally not exposed to the agent (EvaluateNotAllowedError is
+  // thrown in execute() for op='evaluate'). It remains here for internal/test use only.
   async evaluate(sessionId: string, script: string): Promise<{ result: unknown }> {
     const s = this.requireSession(sessionId)
     const result = await s.page!.evaluate(script)

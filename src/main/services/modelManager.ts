@@ -379,8 +379,16 @@ export class ModelManager {
               return
             }
 
-            // Resolve relative Location against the request origin before validating.
-            const absLoc = loc.startsWith('http') ? loc : `https://huggingface.co${loc}`
+            // Resolve relative Location against the origin of the current request URL.
+            // A CDN host returning a relative path must resolve against that CDN origin,
+            // not always against huggingface.co.
+            let absLoc: string
+            try {
+              absLoc = new URL(loc, targetUrl).href
+            } catch {
+              abort(new Error(`Redirect (HTTP ${status}) has unparseable Location: ${loc}`))
+              return
+            }
 
             // Location must be absolute HTTPS — relative paths and HTTP are rejected.
             if (!absLoc.startsWith('https://')) {
