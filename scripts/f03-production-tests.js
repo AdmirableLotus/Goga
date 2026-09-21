@@ -553,15 +553,25 @@ async function testNotepad() {
       return
     }
 
-    // Phase 2: focus by exact realPid+HWND, type with exact realPid+HWND
-    const focusParams = { pid: notepadRealPid, hwnd: notepadHwnd, title: 'Notepad' }
-    const typeParams  = { text: MARKER, pid: notepadRealPid, hwnd: notepadHwnd, windowTitle: 'Notepad' }
+    // Phase 2: focus by exact realPid+HWND, clear any pre-existing text, then type marker.
+    // Clearing (Ctrl+A then Delete) ensures the readback contains only this run's marker,
+    // regardless of text left by a prior test in the same Notepad host process.
+    const focusParams  = { pid: notepadRealPid, hwnd: notepadHwnd, title: 'Notepad' }
+    const selectAllKey = { key: 'ctrl+a', pid: notepadRealPid, hwnd: notepadHwnd }
+    const deleteKey    = { key: 'delete',  pid: notepadRealPid, hwnd: notepadHwnd }
+    const typeParams   = { text: MARKER, pid: notepadRealPid, hwnd: notepadHwnd, windowTitle: 'Notepad' }
 
     installPlan([
       { thought: 'Focus Notepad by exact PID+HWND',
         tool: 'computer.focus.window',
         params: focusParams },
-      { thought: 'Type verification marker',
+      { thought: 'Select all existing text so it can be cleared',
+        tool: 'computer.key',
+        params: selectAllKey },
+      { thought: 'Delete selected text - document is now empty',
+        tool: 'computer.key',
+        params: deleteKey },
+      { thought: 'Type verification marker into clean document',
         tool: 'computer.type',
         params: typeParams },
       { thought: 'Done', done: true, reply: 'Notepad task complete.', tool: '', params: {} }
@@ -621,15 +631,17 @@ async function testBrave() {
     // phase B fills and submits using the real sessionId.
     let capturedSessionId = null
 
-    // Phase A plan
+    // Phase A plan.
+    // Task string contains fill/submit/form so looksLikeAgentTask routes to AgentLoop
+    // and isSimpleOpenTask returns false, ensuring browser.open (Playwright) is used.
     installPlan([
-      { thought: 'Open test page in Brave',
+      { thought: 'Open test page in Brave via Playwright for form automation',
         tool: 'browser.open',
         params: { url: testPageUrl, headless: false } },
       { thought: 'Done phase A', done: true, reply: 'Browser opened.', tool: '', params: {} }
     ])
 
-    const { state: stateA } = await processAndWait('open the test page in brave browser', 30000)
+    const { state: stateA } = await processAndWait('fill and submit the form at ' + testPageUrl, 30000)
     const openStep = stateA.steps.find(s => s.tool === 'browser.open')
     capturedSessionId = openStep?.result?.data?.sessionId ?? null
     sessionId = capturedSessionId
@@ -646,7 +658,8 @@ async function testBrave() {
       return
     }
 
-    // Phase B: fill and submit using the real sessionId
+    // Phase B: fill and submit using the real sessionId.
+    // Task string uses fill/submit/form keywords to route through AgentLoop.
     installPlan([
       { thought: 'Fill username input',
         tool: 'browser.type',
@@ -657,7 +670,7 @@ async function testBrave() {
       { thought: 'Done', done: true, reply: 'Form submitted.', tool: '', params: {} }
     ])
 
-    const { state: stateB } = await processAndWait('fill and submit the form', 20000)
+    const { state: stateB } = await processAndWait('fill and submit the form on the test page', 20000)
 
     const typeStep  = stateB.steps.find(s => s.tool === 'browser.type')
     const clickStep = stateB.steps.find(s => s.tool === 'browser.click')

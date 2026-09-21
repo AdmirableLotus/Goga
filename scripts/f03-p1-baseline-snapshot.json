@@ -1,157 +1,112 @@
 [
   {
-    "hwnd": 4392762,
-    "pid": 12300,
+    "hwnd": 2754910,
+    "pid": 6964,
     "title": ""
   },
   {
-    "hwnd": 1706068,
-    "pid": 12300,
+    "hwnd": 2819850,
+    "pid": 6964,
     "title": ""
   },
   {
-    "hwnd": 65868,
-    "pid": 12300,
+    "hwnd": 1704120,
+    "pid": 6964,
     "title": ""
   },
   {
-    "hwnd": 65848,
-    "pid": 12300,
+    "hwnd": 65750,
+    "pid": 6964,
     "title": ""
   },
   {
-    "hwnd": 132496,
-    "pid": 26724,
-    "title": "index.html - Goga - Visual Studio Code"
-  },
-  {
-    "hwnd": 460160,
-    "pid": 26724,
-    "title": "Reaper Waters (localhost:3000) - reaper waters app - Visual Studio Code"
-  },
-  {
-    "hwnd": 196672,
-    "pid": 22156,
-    "title": "Goga vs Ultron Features - Brave"
-  },
-  {
-    "hwnd": 3410034,
-    "pid": 22156,
-    "title": "Netflix - Brave"
-  },
-  {
-    "hwnd": 330070,
-    "pid": 27776,
-    "title": "?Reaper Waters - (1281)"
-  },
-  {
-    "hwnd": 197850,
-    "pid": 12300,
-    "title": "Downloads - File Explorer"
-  },
-  {
-    "hwnd": 2818792,
-    "pid": 4184,
+    "hwnd": 65778,
+    "pid": 6964,
     "title": ""
   },
   {
-    "hwnd": 1313028,
-    "pid": 3704,
-    "title": "C:\\Program Files\\WindowsApps\\ngrok.ngrok_3.39.9.0_x64__1g87z0zv29zzc\\ngrok.exe - ngrok  http 3000 --host-header=\"localhost:3000\""
+    "hwnd": 132170,
+    "pid": 13392,
+    "title": "Walkthrough: GitHub Copilot - Goga - Visual Studio Code"
   },
   {
-    "hwnd": 854220,
-    "pid": 9984,
-    "title": ""
+    "hwnd": 919188,
+    "pid": 10488,
+    "title": "Base44 APP - Brave"
   },
   {
-    "hwnd": 854248,
-    "pid": 12300,
-    "title": ""
+    "hwnd": 6031388,
+    "pid": 10488,
+    "title": "Watch Nash Bridges S05:E17 - Line of Sight - Free TV Shows | Tubi - Brave"
   },
   {
-    "hwnd": 722438,
-    "pid": 3704,
-    "title": "C:\\WINDOWS\\system32\\cmd.exe "
-  },
-  {
-    "hwnd": 198452,
-    "pid": 24864,
-    "title": ""
-  },
-  {
-    "hwnd": 589866,
-    "pid": 23908,
-    "title": "Settings"
-  },
-  {
-    "hwnd": 328474,
-    "pid": 9984,
-    "title": "Settings"
-  },
-  {
-    "hwnd": 262708,
-    "pid": 11296,
-    "title": "Windows Input Experience"
-  },
-  {
-    "hwnd": 66352,
-    "pid": 27416,
-    "title": "NVIDIA GeForce Overlay"
-  },
-  {
-    "hwnd": 66014,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 66004,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 65986,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 65948,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 65946,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 65944,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 65942,
-    "pid": 12300,
-    "title": ""
-  },
-  {
-    "hwnd": 198440,
-    "pid": 3328,
-    "title": "Goga"
-  },
-  {
-    "hwnd": 5638104,
-    "pid": 26724,
-    "title": "deploy.js - original reaper coin creations - Visual Studio Code"
-  },
-  {
-    "hwnd": 1182100,
-    "pid": 13584,
+    "hwnd": 3278450,
+    "pid": 22228,
     "title": "Snipping Tool"
   },
   {
-    "hwnd": 65890,
-    "pid": 12300,
+    "hwnd": 66582,
+    "pid": 13392,
+    "title": "Welcome - reaper waters app - Visual Studio Code"
+  },
+  {
+    "hwnd": 591086,
+    "pid": 1712,
+    "title": "example.png"
+  },
+  {
+    "hwnd": 3867924,
+    "pid": 15304,
+    "title": "?Reaper team chat - (332)"
+  },
+  {
+    "hwnd": 132008,
+    "pid": 12724,
+    "title": "Settings"
+  },
+  {
+    "hwnd": 262828,
+    "pid": 1880,
+    "title": "Settings"
+  },
+  {
+    "hwnd": 65892,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65910,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65918,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65862,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65860,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65858,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65856,
+    "pid": 6964,
+    "title": ""
+  },
+  {
+    "hwnd": 65800,
+    "pid": 6964,
     "title": "Program Manager"
   }
 ]

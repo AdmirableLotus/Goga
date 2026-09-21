@@ -25,11 +25,11 @@
        success=false data=null
 
   Live test: baseline hwnd count=22
-  Live test: process.start launcherPid=14488
-  Live test: windowByTitleDiff hwnd=0x30070c pid=17084
-  Live test: newPid=17084 PROTECTED_PID=23116 isProtected=false
+  Live test: process.start launcherPid=25828
+  Live test: windowByTitleDiff hwnd=0x60b1a pid=19188
+  Live test: newPid=19188 PROTECTED_PID=23116 isProtected=false
   [✓] D3: windowByTitleDiff returns exactly one result for one new Notepad  [PASS]
-       hwnd=0x30070c pid=17084
+       hwnd=0x60b1a pid=19188
   Live test: WM_CLOSE result: gone=True
   [✓] D5: All baseline HWNDs survive after scoped WM_CLOSE cleanup  [PASS]
        missing=0/22 allSurvived=true

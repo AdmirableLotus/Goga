@@ -7,22 +7,22 @@
 
 
 ── P1: Notepad — production path ────────────────────────────────
-       baseline hwnd count=31 baselineValid=true (saved to c:\Users\redre\OneDrive\Desktop\mom\Goga\scripts\f03-p1-baseline-snapshot.json)
-       process.start pid=23864
+       baseline hwnd count=22 baselineValid=true (saved to C:\Users\redre\Desktop\mom\Goga-clean\scripts\f03-p1-baseline-snapshot.json)
+       process.start pid=19936
   [✓] P1a: process.start launched Notepad, returned PID  [PASS]
-       pid=23864 step.success=true
+       pid=19936 step.success=true
   [✓] P1b: AuthorizationService allowed process.start  [PASS]
        allowed=true requiresApproval=false reason="risk medium within auto-approve threshold medium"
-       windowByTitleDiff hwnd=0x903dc realPid=11528 exactlyOne=true
+       windowByTitleDiff hwnd=0x470aca realPid=18552 exactlyOne=true
        testHwnd absent from baseline: true
   [✓] P1c: computer.type step succeeded  [PASS]
        success=true error=none
   [✓] P1d: UIAutomation readback contains marker (exact HWND)  [PASS]
-       marker="GogaVerification_1787012827928" readBack="Hello Goga test 123Get your bot token (5 minutes)Open Telegram  search @BotFatherSend /newbotGive it a name -"
+       marker="GogaVerification_1789949837588" readBack="continueGogaVerificion_1789931587781MutatioGogaVerification_1789949837588"
   [✓] P1e: VerificationEngine reports window_exists=passed  [PASS]
-       outcome=passed detail="window "Notepad" found in 10 windows"
+       outcome=passed detail="window "Notepad" found in 8 windows"
   [✓] P1f: Notepad cleanup: exact HWND closed (gone=True)  [PASS]
-       hwnd=0x903dc gone=true
+       hwnd=0x470aca gone=true
 
 ── P2: Brave — production path ──────────────────────────────────
        browser.open sessionId=browser-1
@@ -36,9 +36,9 @@
        outcome=passed detail="selector="#btn-result" text="submit-clicked" expected="submit-clicked" matches=true"
 
 ── P3: Cancellation — real AbortController path ─────────────────
-       cancellation baseline hwnd count=31 baselineValid=true
-       cancellation notepadPid=14452
-       cancellation hwnd=0x380518 realPid=15428 exactlyOne=true
+       cancellation baseline hwnd count=23 baselineValid=true
+       cancellation notepadPid=10188
+       cancellation hwnd=0xc50730 realPid=21688 exactlyOne=true
        testHwnd absent from baseline: true
        mutation1Logged=true
   [✓] P3a: Mutation 1 (MARKER_1) executed before stop()  [PASS]
@@ -46,13 +46,13 @@
   [✓] P3b: AgentLoop.stop() halted the loop  [PASS]
        status=stopped isRunning=false
   [✓] P3c: MARKER_2 absent — second mutation never executed  [PASS]
-       marker2="MutationTwo_17870128…" absent=true readBack="Hello Goga test 123Get your bot token (5 minutes)Open Telegram  search @BotFatherSend /newbotGive it a name -"
+       marker2="MutationTwo_17899498…" absent=true readBack="continueGogaVerificion_1789931587781MutatioGogaVerification_1789949837588Mutation"
   [✓] P3d: LogService records cancellation  [PASS]
        entry="Agent stopped: test cancellation after mutation 1"
   [✓] P3e: mutationsAfterCancel=0  [PASS]
        stepsAfterStop=0
   [✓] P3f: Notepad cleanup: exact HWND closed (gone=True)  [PASS]
-       hwnd=0x380518 gone=true
+       hwnd=0xc50730 gone=true
 
 ══════════════════════════════════════════════════════════════════════
 F0.3 PRODUCTION-PATH TEST RESULTS
