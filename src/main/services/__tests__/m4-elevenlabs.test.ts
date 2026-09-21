@@ -109,6 +109,7 @@ vi.mock('../logs', () => ({
 const settings: Record<string, any> = {
   voiceEnabled: true, autoSpeakResponses: true, voiceRate: 1.0, voiceVolume: 1.0,
   voiceName: '', allowBargeIn: true, wakePhrase: 'hey goga', conversationWindowSecs: 45, sttProvider: 'windows',
+  ttsProvider: 'elevenlabs',
 }
 
 vi.mock('../settings', () => ({ SettingsService: { getInstance: () => ({ get: () => settings }) } }))

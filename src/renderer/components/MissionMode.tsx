@@ -72,11 +72,12 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
   const [activity, setActivity] = useState<ActivityState>(INITIAL_ACTIVITY)
 
   // Refs for stable subscription callbacks — do not trigger re-subscription
-  const stoppedRef     = useRef(false)            // true while in stopped state
-  const lastMsgIdRef   = useRef<string | null>(null)  // dedup chat:message
-  const lastTranscript = useRef<string>('')           // dedup voice:transcript
-  const streamingRef   = useRef('')                   // mirror of streamingText for stable closure
-  const agentRunningRef = useRef(false)               // true while a real multi-step agent run is in flight
+  const stoppedRef      = useRef(false)               // true while in stopped state
+  const lastMsgIdRef    = useRef<string | null>(null)  // dedup chat:message
+  const lastTranscript  = useRef<string>('')           // dedup voice:transcript
+  const streamingRef    = useRef('')                   // mirror of streamingText for stable closure
+  const agentRunningRef = useRef(false)                // true while a real multi-step agent run is in flight
+  const activeTurnIdRef = useRef<string | null>(null)  // stable turn correlation ID
 
   // ── IPC subscriptions ─────────────────────────────────────────────────────
   // voice:status and voice:amplitude are handled by ChatComposer.
@@ -86,7 +87,7 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
     const callbacks: ActivityCallbacks = {
       setActivity, setAgentState, setMission, setPendingAction, setVisualState,
       stoppedRef, lastMsgIdRef, lastTranscript, streamingRef,
-      agentRunningRef,
+      agentRunningRef, activeTurnIdRef,
       agentStateToVisual,
     }
     return subscribeActivityEvents(window.goga, callbacks)
@@ -109,7 +110,9 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
     stoppedRef.current = false
     lastMsgIdRef.current = null
     agentRunningRef.current = false
-    setActivity(prev => applySend(prev, text))
+    const turnId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    activeTurnIdRef.current = turnId
+    setActivity(prev => applySend(prev, text, turnId))
     setVisualState('thinking')
     try {
       await window.goga.invoke('chat:send', text)

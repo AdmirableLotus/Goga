@@ -10,7 +10,7 @@ import { OllamaClient } from './ollamaClient'
 import { LocalLlamaService } from './localLlama'
 import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
-import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
+import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
 import type { AgentState, AgentStep, AgentStatus, ToolResult } from '../../shared/types'
 
@@ -68,7 +68,8 @@ export class AgentLoop {
 
   async run(task: string): Promise<string> {
     if (this.isRunning()) {
-      this.stop('New task started')
+      this.log.warn(`Agent re-entry blocked: already running "${this.state.task.slice(0, 60)}" — ignoring new task "${task.slice(0, 60)}"`)
+      return `I'm still working on the previous task. Please wait or press Stop first.`
     }
 
     this.abortController = new AbortController()
@@ -101,6 +102,7 @@ export class AgentLoop {
     // ── Resilience guards (shared pure helpers) ─────────────────────────────
     const taskStart = Date.now()
     const cycleTracker = new FailureCycleTracker(MAX_EQUIVALENT_FAILURES)
+    const dedup = new TurnDeduplicator()
 
     // HARD overall timeout: actively abort any in-flight model/tool call at the
     // budget, not just between iterations. The abort propagates through the
@@ -148,6 +150,16 @@ export class AgentLoop {
           break
         }
 
+        // ── TOOL REWRITE: browser.open on simple tasks → browser.openExternal ────
+        // The local LLM reliably picks browser.open for all URL opens. For simple
+        // show/open tasks with no follow-up intent, silently rewrite to
+        // browser.openExternal so the correct visible shell path runs.
+        if (toolCall.tool === 'browser.open' && AgentLoop.isSimpleOpenTask(task)) {
+          toolCall.tool = 'browser.openExternal'
+          // headless param is irrelevant for openExternal — remove it
+          delete toolCall.params.headless
+        }
+
         // ── CHOOSE TOOL ───────────────────────────────────────────────────────
         // Unregistered tool names are rejected IMMEDIATELY — no retry loop.
         const toolDef = this.registry.get(toolCall.tool)?.definition
@@ -179,12 +191,21 @@ export class AgentLoop {
 
         if (signal.aborted) break
 
+        // ── DUPLICATE GUARD ───────────────────────────────────────────────────
+        if (dedup.isDuplicate(toolCall.tool, toolCall.params)) {
+          this.log.warn(`Agent duplicate action blocked: ${toolCall.tool} — stopping turn`)
+          finalReply = `I already performed ${toolCall.tool} with those arguments this turn. Stopping to avoid repeating the same action.`
+          this.setState({ status: 'error', error: `duplicate_action: ${toolCall.tool}` })
+          break
+        }
+
         // ── ACT ───────────────────────────────────────────────────────────────
         this.setState({ currentTool: toolCall.tool })
         this.log.info(`Agent step ${i + 1}: ${toolCall.tool} — ${toolCall.thought.slice(0, 80)}`)
 
         const toolCtx = { abortSignal: signal, securityWorkspaceId: authCtx.securityWorkspaceId }
         const result = await this.registry.execute(toolCall.tool, toolCall.params, toolCtx)
+        if (result.success) dedup.record(toolCall.tool, toolCall.params)
 
         // ── OBSERVE RESULT + VERIFY ───────────────────────────────────────────
         let screenshotAfter: string | undefined
@@ -211,6 +232,19 @@ export class AgentLoop {
         this.state.steps.push(step)
         this.pushState()
         getMainWindow()?.webContents.send('agent:step', step)
+
+        // ── AUTO-COMPLETE for terminal single-action tasks ─────────────────────
+        // browser.openExternal always auto-completes — it has no follow-up state.
+        // browser.open auto-completes only on simple open-URL tasks with no multi-step intent.
+        if (result.success && (
+          toolCall.tool === 'browser.openExternal' ||
+          (toolCall.tool === 'browser.open' && AgentLoop.isSimpleOpenTask(task))
+        )) {
+          finalReply = `Opened ${toolCall.params.url} in the browser.`
+          this.setState({ status: 'done' })
+          this.log.info(`Agent auto-completed: ${toolCall.tool} on simple open-URL task`)
+          break
+        }
 
         // ── RECOVER ───────────────────────────────────────────────────────────
         if (!verified && !result.success) {
@@ -418,6 +452,18 @@ What is the next single action to take?`
   }
 
   /**
+   * True when the task is a simple "open URL" request with no further intent
+   * (no login, fill, search, or multi-step qualifier).
+   */
+  static isSimpleOpenTask(task: string): boolean {
+    const t = task.toLowerCase()
+    if (/log.?in|sign.?in|fill|submit|search|find|look|check|click|type|enter|create|register|tell|read|heading|title|content|text|what|report|get|extract|scrape|inspect|analyze|analyse/.test(t)) return false
+    const hasOpenVerb = /open|go to|navigate|visit|launch|show/.test(t)
+    const hasUrlOrDomain = /https?:\/\/|www\.|\.[a-z]{2,4}(\s|$)|browser|chrome|firefox|mozilla|brave|edge/.test(t)
+    return hasOpenVerb && hasUrlOrDomain
+  }
+
+  /**
    * Map common LLM-generated aliases to the exact registered tool names.
    * The GGUF model outputs "shell" instead of "shell.execute", "process.launch"
    * instead of "process.start", etc. Normalise here so the registry lookup succeeds.
@@ -429,8 +475,12 @@ What is the next single action to take?`
       'shell.command':    'shell.execute',
       'process.launch':   'process.start',
       'process.run':      'process.start',
-      'browser.goto':     'browser.navigate',
+      'browser':              'browser.open',
+      'browser.external':     'browser.openExternal',
+      'browser.show':         'browser.openExternal',
+      'browser.goto':         'browser.navigate',
       'browser.go':       'browser.navigate',
+      'browser.url':      'browser.navigate',
       'computer.type_text': 'computer.type',
       'computer.keyboard': 'computer.type',
       'computer.press':   'computer.key',

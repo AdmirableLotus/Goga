@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { AppSettings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
+import type { DownloadProgress } from '../../main/services/modelManager'
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
@@ -9,10 +10,21 @@ export default function SettingsPage() {
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
+  // Kokoro install state
+  type KokoroPhase = 'idle' | 'preflight' | 'confirming' | 'downloading' | 'done' | 'error'
+  const [kokoroInstalled, setKokoroInstalled] = useState(false)
+  const [kokoroPhase, setKokoroPhase] = useState<KokoroPhase>('idle')
+  const [preflight, setPreflight] = useState<Awaited<ReturnType<typeof window.goga.invoke<'model:kokoro-preflight'>>> | null>(null)
+  const [progress, setProgress] = useState<DownloadProgress | null>(null)
+  const unsubRef = useRef<(() => void) | null>(null)
+
   useEffect(() => {
     window.goga.invoke('settings:get').then(setSettings)
     window.goga.invoke('tts:voices').then(setVoices)
     checkOllama()
+    window.goga.invoke('model:kokoro-status').then(s => setKokoroInstalled(s.installed))
+    // Cleanup: remove progress listener if Settings unmounts mid-download
+    return () => { unsubRef.current?.() }
   }, [])
 
   const checkOllama = async () => {
@@ -27,12 +39,67 @@ export default function SettingsPage() {
     }
   }
 
+  const [ttsReloadError, setTtsReloadError] = useState<string | null>(null)
+
   const update = (patch: Partial<AppSettings>) => setSettings(s => ({ ...s, ...patch }))
+
+  const updateTtsProvider = async (provider: AppSettings['ttsProvider']) => {
+    update({ ttsProvider: provider })
+    setTtsReloadError(null)
+    // Save immediately so the main process reloads the provider.
+    const updated = { ...settings, ttsProvider: provider }
+    await window.goga.invoke('settings:set', updated)
+    const err = await window.goga.invoke('voice:reload-tts')
+    if (err) setTtsReloadError(err)
+  }
 
   const save = async () => {
     await window.goga.invoke('settings:set', settings)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const runPreflight = async () => {
+    setKokoroPhase('preflight')
+    try {
+      const info = await window.goga.invoke('model:kokoro-preflight')
+      setPreflight(info)
+      setKokoroPhase('confirming')
+    } catch (e) {
+      setProgress({ phase: 'error', message: String(e) })
+      setKokoroPhase('error')
+    }
+  }
+
+  const startDownload = async () => {
+    setKokoroPhase('downloading')
+    // Subscribe to progress events; store unsub so we can clean up.
+    unsubRef.current = window.goga.on('model:kokoro-progress', (p) => {
+      setProgress(p)
+      if (p.phase === 'done') {
+        setKokoroInstalled(true)
+        setKokoroPhase('done')
+        unsubRef.current?.()
+      }
+      if (p.phase === 'error') {
+        setKokoroPhase('error')
+        unsubRef.current?.()
+      }
+    })
+    try {
+      await window.goga.invoke('model:kokoro-download')
+    } catch (e) {
+      setProgress({ phase: 'error', message: String(e) })
+      setKokoroPhase('error')
+      unsubRef.current?.()
+    }
+  }
+
+  const resetKokoro = () => {
+    unsubRef.current?.()
+    setKokoroPhase('idle')
+    setPreflight(null)
+    setProgress(null)
   }
 
   return (
@@ -90,10 +157,103 @@ export default function SettingsPage() {
         </Field>
 
         <Section label="Voice & Speech" />
+        <Field label="TTS provider">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <select
+              value={settings.ttsProvider ?? 'sapi'}
+              onChange={e => updateTtsProvider(e.target.value as AppSettings['ttsProvider'])}
+              style={styles.select}
+            >
+              <option value="sapi">Windows SAPI (built-in, offline)</option>
+              <option value="kokoro">Kokoro (local neural TTS){kokoroInstalled ? ' ✓' : ' — not installed'}</option>
+              <option value="elevenlabs">ElevenLabs (cloud)</option>
+            </select>
+            {ttsReloadError && (
+              <span style={{ fontSize: 11, color: 'var(--danger)' }}>Provider error: {ttsReloadError}</span>
+            )}
+          </div>
+        </Field>
+
+        {/* ── Kokoro install section ─────────────────────────────────── */}
+        {(settings.ttsProvider ?? 'sapi') === 'kokoro' && (
+          <div style={styles.kokoroBox}>
+            {kokoroInstalled && kokoroPhase === 'idle' && (
+              <span style={{ color: 'var(--success)' }}>✓ Kokoro model installed and verified.</span>
+            )}
+
+            {!kokoroInstalled && kokoroPhase === 'idle' && (
+              <>
+                <span style={{ color: 'var(--text-muted)' }}>Kokoro model not installed.</span>
+                <button onClick={runPreflight} style={{ ...styles.smallBtn, marginLeft: 12 }}>Show download info…</button>
+              </>
+            )}
+
+            {kokoroPhase === 'preflight' && (
+              <span style={{ color: 'var(--text-muted)' }}>Loading manifest…</span>
+            )}
+
+            {kokoroPhase === 'confirming' && preflight && (
+              <div style={{ width: '100%' }}>
+                <div style={styles.preflightGrid}>
+                  <Row label="Source commit" value={preflight.commit} mono />
+                  <Row label="Manifest" value={`v${preflight.manifestVersion}`} />
+                  <Row label="Total size" value={preflight.totalSize} />
+                  <Row label="Destination" value={preflight.destination} mono />
+                </div>
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>Artifacts:</div>
+                <table style={styles.artifactTable}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>File</th>
+                      <th style={styles.th}>Size</th>
+                      <th style={styles.th}>SHA-256</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preflight.artifacts.map(a => (
+                      <tr key={a.filename}>
+                        <td style={styles.td}><code style={styles.mono}>{a.filename}</code></td>
+                        <td style={styles.td}>{a.sizeMB} MB</td>
+                        <td style={styles.td}><code style={{ ...styles.mono, fontSize: 10 }}>{a.sha256}</code></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                  <button onClick={startDownload} style={styles.confirmBtn}>Confirm — Download {preflight.totalSize}</button>
+                  <button onClick={resetKokoro} style={styles.smallBtn}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {kokoroPhase === 'downloading' && progress && (
+              <div style={{ width: '100%' }}>
+                <div style={{ marginBottom: 6, fontSize: 12 }}>{progress.message}</div>
+                {progress.percent !== undefined && (
+                  <div style={styles.progressTrack}>
+                    <div style={{ ...styles.progressBar, width: `${progress.percent}%` }} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {kokoroPhase === 'done' && (
+              <span style={{ color: 'var(--success)' }}>✓ Kokoro installed and verified. Save settings to activate.</span>
+            )}
+
+            {kokoroPhase === 'error' && (
+              <div style={{ width: '100%' }}>
+                <span style={{ color: 'var(--danger)' }}>{progress?.message ?? 'Unknown error'}</span>
+                <button onClick={resetKokoro} style={{ ...styles.smallBtn, marginLeft: 12 }}>Retry</button>
+              </div>
+            )}
+          </div>
+        )}
+
         <Field label="STT provider">
           <select value={settings.sttProvider ?? 'windows'} onChange={e => update({ sttProvider: e.target.value as AppSettings['sttProvider'] })} style={styles.select} disabled={!settings.voiceEnabled}>
             <option value="windows">Windows Speech (offline, fast)</option>
-            <option value="whisper">Whisper (accurate, GPU)</option>
+            <option value="whisper">Whisper (accurate, local)</option>
           </select>
         </Field>
         {(settings.sttProvider ?? 'windows') === 'whisper' && (
@@ -109,9 +269,9 @@ export default function SettingsPage() {
               </select>
             </Field>
             <Field label="Whisper device">
-              <select value={settings.whisperDevice ?? 'cuda'} onChange={e => update({ whisperDevice: e.target.value as AppSettings['whisperDevice'] })} style={styles.select} disabled={!settings.voiceEnabled}>
-                <option value="cuda">CUDA (RTX GPU — recommended)</option>
-                <option value="cpu">CPU (slower)</option>
+              <select value={settings.whisperDevice ?? 'cpu'} onChange={e => update({ whisperDevice: e.target.value as AppSettings['whisperDevice'] })} style={styles.select} disabled={!settings.voiceEnabled}>
+                <option value="cpu">CPU (works everywhere)</option>
+                <option value="cuda">CUDA (RTX GPU — requires CUDA toolkit)</option>
                 <option value="auto">Auto</option>
               </select>
             </Field>
@@ -196,6 +356,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, padding: '3px 0', fontSize: 12 }}>
+      <span style={{ width: 120, color: 'var(--text-muted)', flexShrink: 0 }}>{label}</span>
+      <span style={mono ? { fontFamily: 'monospace', wordBreak: 'break-all' } : {}}>{value}</span>
+    </div>
+  )
+}
+
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' },
   toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderBottom: '1px solid var(--border)' },
@@ -204,5 +373,14 @@ const styles: Record<string, React.CSSProperties> = {
   select: { background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 10px', minWidth: 200 },
   smallBtn: { background: 'var(--surface2)', color: 'var(--text)', padding: '5px 10px' },
   ollamaGuide: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px', margin: '8px 0', fontSize: 13, lineHeight: 1.6 },
-  code: { background: 'var(--surface)', padding: '2px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12 }
+  code: { background: 'var(--surface)', padding: '2px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12 },
+  kokoroBox: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '14px 16px', margin: '6px 0 10px', display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 },
+  preflightGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 },
+  artifactTable: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
+  th: { textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontWeight: 600 },
+  td: { padding: '4px 8px', borderBottom: '1px solid var(--border)', verticalAlign: 'top' },
+  mono: { fontFamily: 'monospace' },
+  confirmBtn: { background: 'var(--accent)', color: '#fff', fontWeight: 600, padding: '6px 14px' },
+  progressTrack: { height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden', width: '100%' },
+  progressBar: { height: '100%', background: 'var(--accent)', transition: 'width 0.3s ease' },
 }

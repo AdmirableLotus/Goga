@@ -12,7 +12,9 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build --config vite.config.ts",
     "start": "npm run build && npx electron .",
+    "test:kokoro": "vitest run src/main/services/__tests__/kokoro-tts.test.ts",
     "test:m2": "vitest run --config vitest.config.mts src/renderer/components/__tests__/MissionMode.m2.test.tsx",
+    "test:voice-chat": "vitest run --config vitest.config.mts src/renderer/components/__tests__/MissionMode.m2.test.tsx src/main/services/__tests__/kokoro-tts.test.ts",
     "test:m4": "vitest run src/main/services/__tests__/m4-elevenlabs.test.ts",
     "test:m41": "vitest run src/main/services/__tests__/m41-stt.test.ts src/main/services/__tests__/m41-agent-resilience.test.ts src/main/services/__tests__/m41-agent-timeout.test.ts",
     "gen-icon": "node scripts/gen-icon.js",
@@ -30,6 +32,9 @@
       "assets/**/*",
       "node_modules/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/kokoro-js/voices/**"
     ],
     "win": {
       "target": "nsis",
@@ -52,6 +57,7 @@
     "@types/three": "^0.185.4",
     "active-win": "^8.2.1",
     "dotenv": "16.4.7",
+    "kokoro-js": "1.2.1",
     "electron-store": "^8.2.0",
     "epub2": "^3.0.2",
     "node-llama-cpp": "^3.19.1",
@@ -60,7 +66,7 @@
     "postprocessing": "^6.39.4",
     "screenshot-desktop": "^1.15.4",
     "three": "^0.185.1",
-    "ws": "8.18.0"
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
@@ -84,6 +90,11 @@
     "vite": "^5.0.0",
     "vitest": "2.1.9",
     "wait-on": "^7.0.0"
+  },
+  "overrides": {
+    "fast-uri": "4.1.4",
+    "js-yaml": "4.3.2",
+    "joi": "17.13.8"
   },
   "allowScripts": {
     "electron@32.3.3": true,

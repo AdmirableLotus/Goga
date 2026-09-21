@@ -16,11 +16,14 @@
  */
 
 import { EventEmitter } from 'events'
+import { app } from 'electron'
 import { WindowsSttProvider } from './speech/WindowsSpeechProvider'
 import { WindowsTtsProvider } from './speech/WindowsSpeechProvider'
 import { WhisperSttProvider } from './speech/WhisperSttProvider'
+import type { WhisperModel, WhisperDevice } from './speech/WhisperSttProvider'
 import { ElevenLabsTtsProvider } from './speech/ElevenLabsTtsProvider'
 import { ElevenLabsSttProvider } from './speech/ElevenLabsSttProvider'
+import { KokoroTtsProvider, KokoroModelMissingError } from './speech/KokoroTtsProvider'
 import type { ISttProvider, ITtsProvider } from './speech/ISpeechProvider'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
@@ -89,16 +92,40 @@ export class VoiceOrchestrator extends EventEmitter {
     return VoiceOrchestrator.instance
   }
 
-  /** Select TTS provider: ElevenLabs if key+voiceId present, else SAPI. */
+  /**
+   * Select TTS provider based on settings.ttsProvider.
+   * ElevenLabs is only selected when explicitly configured AND env vars present.
+   * Default for new and existing installs is 'sapi'. Kokoro only activates after
+   * verified installation AND explicit user selection (ttsProvider = 'kokoro').
+   */
   private initTtsProvider() {
-    if (ElevenLabsTtsProvider.isConfigured()) {
-      this.tts = new ElevenLabsTtsProvider()
-      this.log.info('VoiceOrchestrator: TTS provider → ElevenLabs')
-    } else {
+    const settings = SettingsService.getInstance().get()
+    const want = settings.ttsProvider ?? 'sapi'
+    this.fallbackTts = new WindowsTtsProvider()
+
+    if (want === 'elevenlabs') {
+      if (ElevenLabsTtsProvider.isConfigured()) {
+        this.tts = new ElevenLabsTtsProvider()
+        this.log.info('VoiceOrchestrator: TTS provider → ElevenLabs')
+      } else {
+        this.tts = new WindowsTtsProvider()
+        this.log.info('VoiceOrchestrator: TTS provider → WindowsSpeech (ElevenLabs not configured)')
+      }
+    } else if (want === 'sapi') {
       this.tts = new WindowsTtsProvider()
       this.log.info('VoiceOrchestrator: TTS provider → WindowsSpeech (SAPI)')
+    } else if (want === 'kokoro') {
+      // speak() will throw KokoroModelMissingError if model absent or manifest stale;
+      // the orchestrator catches that and falls back to SAPI.
+      let userDataPath = ''
+      try { userDataPath = app.getPath('userData') } catch { }
+      this.tts = new KokoroTtsProvider(userDataPath)
+      this.log.info('VoiceOrchestrator: TTS provider → Kokoro (local)')
+    } else {
+      // Unknown value — safe fallback
+      this.tts = new WindowsTtsProvider()
+      this.log.info(`VoiceOrchestrator: TTS provider unknown (${want}), falling back to SAPI`)
     }
-    this.fallbackTts = new WindowsTtsProvider()
   }
 
   // ── Authoritative STT selection ────────────────────────────────────────────
@@ -157,9 +184,19 @@ export class VoiceOrchestrator extends EventEmitter {
       if (want === 'whisper') {
         if (WhisperSttProvider.scriptExists()) {
           if (this.stt.name !== 'Whisper') {
+            const wModel = settings.whisperModel as WhisperModel | undefined
+            const wDevice = settings.whisperDevice as WhisperDevice | undefined
+            // Pre-download disclosure: emit event so UI can gate if model not cached
+            const preflight = WhisperSttProvider.preflight(wModel ?? 'base', wDevice ?? 'cpu')
+            if (!preflight.cached) {
+              this.log.info(
+                `WhisperSTT: model not cached — first use will download ~${preflight.downloadMB}MB from ${preflight.source} to ${preflight.cacheDir}`
+              )
+              this.emit('whisper:download-required', preflight)
+            }
             this.setSttProvider(new WhisperSttProvider({
-              model: settings.whisperModel,
-              device: settings.whisperDevice,
+              model: wModel,
+              device: wDevice,
               language: settings.whisperLanguage || undefined
             }))
           }
@@ -195,6 +232,8 @@ export class VoiceOrchestrator extends EventEmitter {
     this.log.info(`VoiceOrchestrator: TTS provider → ${p.name}`)
   }
 
+  getTtsProvider(): ITtsProvider { return this.tts }
+
   /**
    * Re-run the authoritative selector (e.g. after settings change). Uses the
    * same serialized path + generation guard, so it can never start Whisper
@@ -202,6 +241,38 @@ export class VoiceOrchestrator extends EventEmitter {
    */
   reloadSttProvider(): Promise<void> {
     return this.selectStt()
+  }
+
+  /**
+   * Safe TTS provider reload after a settings change.
+   * - Stops and awaits current playback before swapping.
+   * - Serialized: a second call while one is in progress is a no-op (returns
+   *   the same promise), so rapid saves cannot cause overlapping reloads.
+   * - Returns an error string on failure so the caller can surface it to the UI.
+   */
+  private ttsReloadPromise: Promise<string | null> | null = null
+
+  reloadTtsProvider(): Promise<string | null> {
+    if (this.ttsReloadPromise) return this.ttsReloadPromise
+    this.ttsReloadPromise = (async () => {
+      try {
+        // Stop and await current playback so the old provider is fully idle.
+        if (this.tts.stopAndWait) {
+          await this.tts.stopAndWait().catch(() => {})
+        } else {
+          this.tts.stop()
+        }
+        this.initTtsProvider()
+        return null
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.log.info(`VoiceOrchestrator: TTS reload failed: ${msg}`)
+        return msg
+      } finally {
+        this.ttsReloadPromise = null
+      }
+    })()
+    return this.ttsReloadPromise
   }
 
   // ── Status ────────────────────────────────────────────────────────────────
@@ -540,6 +611,9 @@ export class VoiceOrchestrator extends EventEmitter {
     provider.onPlaybackStart = () => {
       playbackStarted = true
       this.setStatus('speaking')
+      // Reset conversation window from when Goga starts speaking so the user
+      // has a full window to reply after playback ends.
+      if (this.conversationActive) this.resetConversationTimer()
     }
 
     try {
@@ -552,9 +626,13 @@ export class VoiceOrchestrator extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err)
       userStopped = this.status === 'idle'
 
-      if (!playbackStarted && !userStopped && provider.name === 'ElevenLabs') {
-        const reason = msg.includes('timeout') ? 'timeout' : 'error'
-        this.log.info(`VoiceOrchestrator: ElevenLabs failed (${reason}), falling back to SAPI`)
+      const isProviderFailure = !playbackStarted && !userStopped
+      const isKokoroMissing = err instanceof KokoroModelMissingError
+      const needsFallback = isProviderFailure || isKokoroMissing
+
+      if (needsFallback && provider.name !== 'WindowsSpeech') {
+        const reason = isKokoroMissing ? 'model missing' : msg.includes('timeout') ? 'timeout' : 'error'
+        this.log.info(`VoiceOrchestrator: ${provider.name} failed (${reason}), falling back to SAPI`)
         provider.stop()
         try {
           this.fallbackTts.onAmplitude = (v: number) => { this.emit('amplitude', v) }
@@ -613,9 +691,10 @@ export class VoiceOrchestrator extends EventEmitter {
         VoiceOrchestrator.TTS_OVERALL_TIMEOUT_MS,
         'narrate'
       )
-    } catch {
-      if (!playbackStarted && provider.name === 'ElevenLabs' && this.status !== 'idle') {
-        this.log.info('VoiceOrchestrator: ElevenLabs narrate failed, falling back to SAPI')
+    } catch (err) {
+      const isKokoroMissing = err instanceof KokoroModelMissingError
+      if ((!playbackStarted || isKokoroMissing) && provider.name !== 'WindowsSpeech' && this.status !== 'idle') {
+        this.log.info(`VoiceOrchestrator: ${provider.name} narrate failed, falling back to SAPI`)
         provider.stop()
         try {
           this.setStatus('speaking')
@@ -680,5 +759,20 @@ export class VoiceOrchestrator extends EventEmitter {
 
   async getVoices(): Promise<string[]> {
     return this.tts.getVoices()
+  }
+
+  /**
+   * Graceful shutdown: stop all TTS child processes and dispose the STT
+   * provider. Called from the Electron will-quit handler via a typed public
+   * method — no (as any) casts needed in index.ts.
+   */
+  async shutdown(): Promise<void> {
+    try { await this.tts.stopAndWait?.() } catch { }
+    try { await this.fallbackTts.stopAndWait?.() } catch { }
+    try {
+      if ('dispose' in this.stt && typeof (this.stt as { dispose?: () => void }).dispose === 'function') {
+        (this.stt as { dispose: () => void }).dispose()
+      }
+    } catch { }
   }
 }

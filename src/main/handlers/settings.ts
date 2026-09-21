@@ -8,10 +8,19 @@ export function registerSettingsHandlers(ipcMain: IpcMain) {
   ipcMain.handle('settings:get', async () => settings.get())
   ipcMain.handle('settings:set', async (_e, patch: Record<string, unknown>) => {
     const updated = settings.set(patch)
-    // Reload STT provider if voice settings changed
     if ('sttProvider' in patch || 'whisperModel' in patch || 'whisperDevice' in patch || 'whisperLanguage' in patch) {
       VoiceOrchestrator.getInstance().reloadSttProvider()
     }
+    if ('ttsProvider' in patch) {
+      // Fire-and-forget; renderer can call voice:reload-tts explicitly for the result.
+      VoiceOrchestrator.getInstance().reloadTtsProvider()
+    }
     return updated
+  })
+
+  // Explicit reload with error reporting — renderer calls this after settings:set
+  // when it needs to know whether the new provider initialized successfully.
+  ipcMain.handle('voice:reload-tts', async () => {
+    return VoiceOrchestrator.getInstance().reloadTtsProvider()
   })
 }

@@ -121,6 +121,7 @@ export interface ChatMessage {
   content: string
   timestamp: number
   actionIds?: string[]
+  turnId?: string
 }
 
 export interface LogEntry {
@@ -169,6 +170,7 @@ export interface AppSettings {
   whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large-v2' | 'large-v3'
   whisperDevice: 'cuda' | 'cpu' | 'auto'
   whisperLanguage: string
+  ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
 }
 
 // ── Phase D: Mission types ───────────────────────────────────────────────────
@@ -291,8 +293,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   userName: 'Boss',
   sttProvider: 'windows',
   whisperModel: 'base',
-  whisperDevice: 'cuda',
-  whisperLanguage: ''
+  whisperDevice: 'cpu',
+  whisperLanguage: '',
+  ttsProvider: 'sapi'
 }
 
 // ── Security Workspace ────────────────────────────────────────────────────────

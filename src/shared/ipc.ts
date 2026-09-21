@@ -76,6 +76,26 @@ export interface MainHandlers {
   'ollama:models': () => Promise<string[]>
   'localModel:status': () => Promise<import('../main/services/localLlama').LocalModelState>
 
+  // Kokoro model management
+  'model:kokoro-status': () => Promise<{ installed: boolean; downloading: boolean }>
+  'model:kokoro-preflight': () => Promise<{
+    commit: string
+    manifestVersion: string
+    totalSize: string
+    destination: string
+    artifacts: Array<{ filename: string; sha256: string; sizeMB: string }>
+  }>
+  'model:kokoro-download': () => Promise<void>
+
+  // Reload TTS provider after settings change — returns error string or null
+  'voice:reload-tts': () => Promise<string | null>
+
+  // Whisper STT pre-download disclosure (no network, no process spawned)
+  'whisper:preflight': (model: string, device: string) => Promise<{
+    model: string; device: string; downloadMB: number;
+    cached: boolean; cacheDir: string; source: string
+  }>
+
   // Security workspace
   'security:list': () => Promise<SecurityWorkspace[]>
   'security:get': (id: string) => Promise<SecurityWorkspace | null>
@@ -92,7 +112,7 @@ export interface MainHandlers {
 // Channels: main -> renderer (on)
 export interface RendererEvents {
   'chat:message': ChatMessage
-  'chat:token': { token: string }
+  'chat:token': { token: string; turnId: string }
   'action:update': Action
   'action:approval-required': Action
   'log:entry': LogEntry
@@ -104,9 +124,13 @@ export interface RendererEvents {
   'mission:state': import('./types').Mission
   // Voice
   'voice:status': { status: import('../main/services/voiceOrchestrator').VoiceStatus }
+  // Kokoro download progress
+  'model:kokoro-progress': import('../main/services/modelManager').DownloadProgress
   'voice:transcript': { text: string }
   'voice:partial': { text: string }
   'voice:amplitude': { value: number }
+  // Whisper model download disclosure (emitted before first recognition if model not cached)
+  'whisper:download-required': { model: string; device: string; downloadMB: number; cached: boolean; cacheDir: string; source: string }
 }
 
 export type MainChannel = keyof MainHandlers

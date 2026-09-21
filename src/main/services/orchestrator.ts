@@ -25,7 +25,7 @@ export class OrchestratorService {
   private agent    = AgentLoop.getInstance()
   private registry = ToolRegistry.getInstance()
 
-  async process(userMessage: ChatMessage, onToken?: (token: string) => void, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void): Promise<ChatMessage> {
+  async process(userMessage: ChatMessage, onToken?: (token: string) => void, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void, signal?: AbortSignal): Promise<ChatMessage> {
     this.log.info(`Processing: ${userMessage.content.slice(0, 80)}`)
     this.brain.addMessage(userMessage)
 
@@ -60,7 +60,7 @@ export class OrchestratorService {
     if (useOllama) {
       const ollamaAvailable = await this.ollama.isAvailable()
       if (ollamaAvailable) {
-        const reply = await this.thinkWithOllama(content, onToken)
+        const reply = await this.thinkWithOllama(content, onToken, signal)
         this.brain.addMessage(reply)
         this.extractAndStoreFacts(content, reply.content)
         return reply
@@ -70,7 +70,7 @@ export class OrchestratorService {
 
     // ── PRIMARY: node-llama-cpp local model ───────────────────────────────────
     if (this.llama.isReady()) {
-      const reply = await this.thinkWithLocalLlama(content, onToken)
+      const reply = await this.thinkWithLocalLlama(content, onToken, signal)
       this.brain.addMessage(reply)
       this.extractAndStoreFacts(content, reply.content)
       return reply
@@ -82,7 +82,7 @@ export class OrchestratorService {
       this.log.info('LocalLlama still loading — waiting up to 30s…')
       const ready = await this.waitForLlama(30_000)
       if (ready) {
-        const reply = await this.thinkWithLocalLlama(content, onToken)
+        const reply = await this.thinkWithLocalLlama(content, onToken, signal)
         this.brain.addMessage(reply)
         this.extractAndStoreFacts(content, reply.content)
         return reply
@@ -95,7 +95,7 @@ export class OrchestratorService {
 
     if (ollamaAvailable) {
       this.log.warn('LocalLlama unavailable — falling back to Ollama')
-      const reply = await this.thinkWithOllama(content, onToken)
+      const reply = await this.thinkWithOllama(content, onToken, signal)
       this.brain.addMessage(reply)
       this.extractAndStoreFacts(content, reply.content)
       return reply
@@ -199,7 +199,7 @@ IMPORTANT: You have full conversation history. Always read it before responding 
 Address ${settings.userName} by name occasionally. Keep responses concise unless detail is needed.`
   }
 
-  private async thinkWithLocalLlama(userInput: string, onToken?: (token: string) => void): Promise<ChatMessage> {
+  private async thinkWithLocalLlama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
     const history = this.brain.getHistory().slice(-20)
     const systemPrompt = this.buildSystemPrompt(userInput)
 
@@ -212,7 +212,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
     ]
 
     try {
-      const content = await this.llama.chat(messages, onToken)
+      const content = await this.llama.chat(messages, onToken, signal)
       this.log.info(`LocalLlama response: ${content.slice(0, 60)}…`)
       return { id: nanoid(), role: 'assistant', content: content.trim(), timestamp: Date.now() }
     } catch (err) {
@@ -222,7 +222,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
     }
   }
 
-  private async thinkWithOllama(userInput: string, onToken?: (token: string) => void): Promise<ChatMessage> {
+  private async thinkWithOllama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
     const history = this.brain.getHistory().slice(-20)
     const systemPrompt = this.buildSystemPrompt(userInput)
 
@@ -235,7 +235,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
     ]
 
     try {
-      const content = await this.ollama.chat(messages, onToken)
+      const content = await this.ollama.chat(messages, onToken, signal)
       return { id: nanoid(), role: 'assistant', content: content.trim(), timestamp: Date.now() }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

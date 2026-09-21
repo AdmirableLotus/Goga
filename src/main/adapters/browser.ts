@@ -9,11 +9,37 @@ export interface BrowserSession {
   url: string
 }
 
+/** Thrown when a Playwright-only operation is called on an external shell session. */
+export class ShellSessionError extends Error {
+  constructor(sessionId: string) {
+    super(`Session ${sessionId} is an external shell session (opened via browser.openExternal). It has no Playwright page — use browser.open for automation tasks that require click, type, evaluate, or screenshot.`)
+    this.name = 'ShellSessionError'
+  }
+}
+
+/** Thrown when browser.evaluate is called — this op is not exposed to the agent. */
+export class EvaluateNotAllowedError extends Error {
+  constructor() {
+    super('browser.evaluate is not available to the agent. Use browser.snapshot, browser.ariaSnapshot, browser.getByRole, browser.getByLabel, or browser.getByText to inspect page state.')
+    this.name = 'EvaluateNotAllowedError'
+  }
+}
+
+/** Thrown when the Playwright page was closed externally (e.g. user closed the browser window). */
+export class PageClosedError extends Error {
+  constructor(sessionId: string) {
+    super(`Session ${sessionId} page was closed externally. The browser window was closed before the operation could complete. Call browser.open again to start a new session.`)
+    this.name = 'PageClosedError'
+  }
+}
+
 interface SessionEntry {
-  browser: Browser
-  context: BrowserContext
-  page: Page
+  kind: 'playwright' | 'external'
+  browser: Browser | null
+  context: BrowserContext | null
+  page: Page | null
   url: string
+  pageClosed?: boolean
 }
 
 export class BrowserAdapter implements ToolAdapter {
@@ -27,12 +53,13 @@ export class BrowserAdapter implements ToolAdapter {
     const op = params.op as string
     switch (op) {
       case 'open':        return this.open(params.url as string, params.headless as boolean | undefined)
+      case 'openExternal': return this.openExternal(params.url as string)
+      case 'evaluate':     throw new EvaluateNotAllowedError()
       case 'navigate':    return this.navigate(params.sessionId as string, params.url as string)
       case 'click':       return this.click(params.sessionId as string, params.selector as string | undefined, params.x as number | undefined, params.y as number | undefined)
       case 'type':        return this.type(params.sessionId as string, params.selector as string, params.text as string)
       case 'getContent':  return this.getContent(params.sessionId as string)
       case 'screenshot':  return this.screenshotPage(params.sessionId as string)
-      case 'evaluate':    return this.evaluate(params.sessionId as string, params.script as string)
       case 'waitFor':     return this.waitFor(params.sessionId as string, params.selector as string, params.timeoutMs as number | undefined)
       case 'close':       return this.close(params.sessionId as string)
       case 'closeAll':    return this.closeAll()
@@ -52,7 +79,28 @@ export class BrowserAdapter implements ToolAdapter {
     return pw.chromium as import('playwright').BrowserType
   }
 
-  async open(url: string, headless = false): Promise<BrowserSession> {
+  /** Open a URL via Electron shell.openExternal — visible in the user's default browser.
+   * Returns an external-N session that cannot be used with Playwright operations.
+   * Only http: and https: schemes are permitted; all others are rejected. */
+  async openExternal(url: string): Promise<BrowserSession> {
+    let parsed: URL
+    try { parsed = new URL(url) } catch {
+      throw new Error(`browser.openExternal: invalid URL: ${url}`)
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      throw new Error(`browser.openExternal: scheme "${parsed.protocol}" is not allowed. Only https: and http: are permitted.`)
+    }
+    const { shell } = await import('electron')
+    await shell.openExternal(url)
+    const sessionId = `external-${++this.sessionCounter}`
+    this.sessions.set(sessionId, { kind: 'external', browser: null, context: null, page: null, url })
+    this.log.info(`Browser opened via shell: ${url} [${sessionId}]`)
+    return { sessionId, url }
+  }
+
+  /** Open a URL in a Playwright-controlled browser session.
+   * Returns a browser-N session that supports navigate, click, type, evaluate, screenshot. */
+  async open(url: string, headless = true): Promise<BrowserSession> {
     const chromium = await this.getPlaywright()
     const browser = await chromium.launch({
       executablePath: BRAVE_PATH,
@@ -66,26 +114,31 @@ export class BrowserAdapter implements ToolAdapter {
     const page = await context.newPage()
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     const sessionId = `browser-${++this.sessionCounter}`
-    this.sessions.set(sessionId, { browser, context, page, url })
+    const entry: SessionEntry = { kind: 'playwright', browser, context, page, url }
+    this.sessions.set(sessionId, entry)
+    page.on('close', () => {
+      entry.pageClosed = true
+      this.log.warn(`Browser page closed externally [${sessionId}]`)
+    })
     this.log.info(`Browser opened: ${url} [${sessionId}]`)
     return { sessionId, url: page.url() }
   }
 
   async navigate(sessionId: string, url: string): Promise<{ url: string; title: string }> {
     const s = this.requireSession(sessionId)
-    await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
-    s.url = s.page.url()
-    return { url: s.page.url(), title: await s.page.title() }
+    await s.page!.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+    s.url = s.page!.url()
+    return { url: s.page!.url(), title: await s.page!.title() }
   }
 
   async click(sessionId: string, selector?: string, x?: number, y?: number): Promise<{ clicked: string }> {
     const s = this.requireSession(sessionId)
     if (selector) {
-      await s.page.click(selector, { timeout: 10_000 })
+      await s.page!.click(selector, { timeout: 10_000 })
       return { clicked: selector }
     }
     if (x !== undefined && y !== undefined) {
-      await s.page.mouse.click(x, y)
+      await s.page!.mouse.click(x, y)
       return { clicked: `(${x},${y})` }
     }
     throw new Error('click requires selector or x,y coordinates')
@@ -93,34 +146,35 @@ export class BrowserAdapter implements ToolAdapter {
 
   async type(sessionId: string, selector: string, text: string): Promise<{ typed: string }> {
     const s = this.requireSession(sessionId)
-    await s.page.fill(selector, text, { timeout: 10_000 })
+    await s.page!.fill(selector, text, { timeout: 10_000 })
     return { typed: text }
   }
 
   async getContent(sessionId: string): Promise<{ url: string; title: string; text: string; html: string }> {
     const s = this.requireSession(sessionId)
-    const [title, html] = await Promise.all([s.page.title(), s.page.content()])
-    // Strip scripts/styles for a clean text version
-    const text = await s.page.evaluate('document.body ? document.body.innerText : ""') as string
-    return { url: s.page.url(), title, text: text.slice(0, 12_000), html: html.slice(0, 20_000) }
+    const [title, html] = await Promise.all([s.page!.title(), s.page!.content()])
+    const text = await s.page!.evaluate('document.body ? document.body.innerText : ""') as string
+    return { url: s.page!.url(), title, text: text.slice(0, 12_000), html: html.slice(0, 20_000) }
   }
 
   async screenshotPage(sessionId: string): Promise<{ base64: string; url: string }> {
     const s = this.requireSession(sessionId)
-    const buf = await s.page.screenshot({ type: 'png', fullPage: false })
-    return { base64: buf.toString('base64'), url: s.page.url() }
+    const buf = await s.page!.screenshot({ type: 'png', fullPage: false })
+    return { base64: buf.toString('base64'), url: s.page!.url() }
   }
 
+  // evaluate() is intentionally not exposed to the agent (EvaluateNotAllowedError is
+  // thrown in execute() for op='evaluate'). It remains here for internal/test use only.
   async evaluate(sessionId: string, script: string): Promise<{ result: unknown }> {
     const s = this.requireSession(sessionId)
-    const result = await s.page.evaluate(script)
+    const result = await s.page!.evaluate(script)
     return { result }
   }
 
   async waitFor(sessionId: string, selector: string, timeoutMs = 10_000): Promise<{ found: boolean }> {
     const s = this.requireSession(sessionId)
     try {
-      await s.page.waitForSelector(selector, { timeout: timeoutMs })
+      await s.page!.waitForSelector(selector, { timeout: timeoutMs })
       return { found: true }
     } catch {
       return { found: false }
@@ -130,7 +184,7 @@ export class BrowserAdapter implements ToolAdapter {
   async close(sessionId: string): Promise<{ closed: string }> {
     const s = this.sessions.get(sessionId)
     if (s) {
-      await s.browser.close()
+      if (s.kind === 'playwright' && s.browser) await s.browser.close()
       this.sessions.delete(sessionId)
     }
     return { closed: sessionId }
@@ -145,6 +199,8 @@ export class BrowserAdapter implements ToolAdapter {
   private requireSession(sessionId: string): SessionEntry {
     const s = this.sessions.get(sessionId)
     if (!s) throw new Error(`No browser session: ${sessionId}. Call browser.open first.`)
+    if (s.kind === 'external') throw new ShellSessionError(sessionId)
+    if (s.pageClosed) throw new PageClosedError(sessionId)
     return s
   }
 
@@ -163,13 +219,13 @@ export class BrowserAdapter implements ToolAdapter {
   }> {
     const s = this.requireSession(sessionId)
     const [title, focusedEl, interactive] = await Promise.all([
-      s.page.title(),
-      s.page.evaluate(`(() => {
+      s.page!.title(),
+      s.page!.evaluate(`(() => {
         const el = document.activeElement
         if (!el || el === document.body) return null
         return el.tagName.toLowerCase() + '[' + (el.getAttribute('aria-label') || el.getAttribute('name') || el.id || '') + ']'
       })()`),
-      s.page.evaluate(`(() => {
+      s.page!.evaluate(`(() => {
         const els = Array.from(document.querySelectorAll(
           'button,a[href],input,select,textarea,[role="button"],[role="link"],[role="menuitem"],[role="tab"],[role="checkbox"],[role="radio"]'
         ))
@@ -182,11 +238,11 @@ export class BrowserAdapter implements ToolAdapter {
       })()`)
     ])
     const result: Awaited<ReturnType<BrowserAdapter['snapshot']>> = {
-      url: s.page.url(), title, focusedElement: (focusedEl as string | null),
+      url: s.page!.url(), title, focusedElement: (focusedEl as string | null),
       interactiveElements: interactive as Array<{ role: string; name: string; tag: string; id?: string }>
     }
     if (includeScreenshot) {
-      const buf = await s.page.screenshot({ type: 'png', fullPage: false })
+      const buf = await s.page!.screenshot({ type: 'png', fullPage: false })
       result.screenshotRef = buf.toString('base64').slice(0, 100) + '…'  // reference only, not full base64
     }
     return result
@@ -199,11 +255,11 @@ export class BrowserAdapter implements ToolAdapter {
    */
   async ariaSnapshot(sessionId: string): Promise<{ snapshot: string; url: string; title: string }> {
     const s = this.requireSession(sessionId)
-    const raw = await s.page.ariaSnapshot()
+    const raw = await s.page!.ariaSnapshot()
     return {
       snapshot: raw.slice(0, 8000),
-      url: s.page.url(),
-      title: await s.page.title()
+      url: s.page!.url(),
+      title: await s.page!.title()
     }
   }
 
@@ -215,11 +271,11 @@ export class BrowserAdapter implements ToolAdapter {
     sessionId: string, role: string, name: string, exact = false
   ): Promise<{ clicked: boolean; locator: string; ambiguous?: boolean; candidates?: string[] }> {
     const s = this.requireSession(sessionId)
-    const ariaRole = role as Parameters<typeof s.page.getByRole>[0]
+    const ariaRole = role as Parameters<Page['getByRole']>[0]
 
     // Priority 1: getByRole — check for ambiguity before clicking
     try {
-      const loc = s.page.getByRole(ariaRole, { name, exact })
+      const loc = s.page!.getByRole(ariaRole, { name, exact })
       const count = await loc.count()
       if (count > 1) {
         // Ambiguous — collect candidate descriptions, do NOT silently pick first
@@ -240,7 +296,7 @@ export class BrowserAdapter implements ToolAdapter {
 
     // Priority 2: getByLabel — check for ambiguity
     try {
-      const loc = s.page.getByLabel(name, { exact })
+      const loc = s.page!.getByLabel(name, { exact })
       const count = await loc.count()
       if (count > 1) {
         return { clicked: false, locator: `label=${name}`, ambiguous: true,
@@ -254,7 +310,7 @@ export class BrowserAdapter implements ToolAdapter {
 
     // Priority 3: getByText — check for ambiguity
     try {
-      const loc = s.page.getByText(name, { exact })
+      const loc = s.page!.getByText(name, { exact })
       const count = await loc.count()
       if (count > 1) {
         return { clicked: false, locator: `text=${name}`, ambiguous: true,
@@ -273,8 +329,8 @@ export class BrowserAdapter implements ToolAdapter {
     sessionId: string, role: string, name?: string, exact = false
   ): Promise<{ found: boolean; count: number; first: { text: string; visible: boolean } | null }> {
     const s = this.requireSession(sessionId)
-    const ariaRole = role as Parameters<typeof s.page.getByRole>[0]
-    const loc = name ? s.page.getByRole(ariaRole, { name, exact }) : s.page.getByRole(ariaRole)
+    const ariaRole = role as Parameters<Page['getByRole']>[0]
+    const loc = name ? s.page!.getByRole(ariaRole, { name, exact }) : s.page!.getByRole(ariaRole)
     const count = await loc.count()
     if (count === 0) return { found: false, count: 0, first: null }
     const first = loc.first()
@@ -289,7 +345,7 @@ export class BrowserAdapter implements ToolAdapter {
     sessionId: string, text: string, exact = false
   ): Promise<{ found: boolean; value: string | null; visible: boolean }> {
     const s = this.requireSession(sessionId)
-    const loc = s.page.getByLabel(text, { exact })
+    const loc = s.page!.getByLabel(text, { exact })
     const count = await loc.count()
     if (count === 0) return { found: false, value: null, visible: false }
     const first = loc.first()
@@ -304,7 +360,7 @@ export class BrowserAdapter implements ToolAdapter {
     sessionId: string, text: string, exact = false
   ): Promise<{ found: boolean; count: number; first: { tag: string; visible: boolean } | null }> {
     const s = this.requireSession(sessionId)
-    const loc = s.page.getByText(text, { exact })
+    const loc = s.page!.getByText(text, { exact })
     const count = await loc.count()
     if (count === 0) return { found: false, count: 0, first: null }
     const first = loc.first()

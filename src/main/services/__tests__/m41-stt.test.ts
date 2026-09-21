@@ -99,6 +99,7 @@ vi.mock('../speech/WhisperSttProvider', () => {
   class WhisperSttProvider {
     name = 'Whisper'
     static scriptExists() { return providerTracking.whisperScriptExists }
+    static preflight() { return { model: 'base', device: 'cuda', downloadMB: 0, cached: true, cacheDir: '', source: '' } }
     constructor() { providerTracking.whisperInstances++ }
     recognize = vi.fn(() => { providerTracking.whisperRecognizeCalls++; return Promise.resolve({ transcript: '' }) })
     startContinuous = vi.fn(() => { providerTracking.whisperContinuousCalls++ })
