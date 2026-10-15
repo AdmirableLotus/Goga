@@ -13,6 +13,10 @@ export interface Action {
   error?: string
   requiresApproval: boolean
   riskLevel: RiskLevel
+  /** True when this action was created by the agent loop's approval gate.
+   *  On approve: only resolveApproval is called — desktop.execute is NOT.
+   *  False/absent: legacy desktop action — only desktop.execute is called. */
+  agentOwned?: boolean
 }
 
 // JSON Schema subset used to describe tool parameters to the LLM
@@ -91,7 +95,7 @@ export interface ToolDefinition {
   // true = action can be undone (click, type, navigate); false = destructive (delete, format)
   reversible: boolean
   // categories used for scope checking in security mode
-  category: 'computer' | 'browser' | 'shell' | 'filesystem' | 'process' | 'vision' | 'memory' | 'web' | 'android'
+  category: 'computer' | 'browser' | 'shell' | 'filesystem' | 'process' | 'vision' | 'memory' | 'web' | 'android' | 'system'
 }
 
 // One step the agent took during a task

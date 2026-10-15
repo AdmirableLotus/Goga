@@ -136,7 +136,10 @@ export class AgentLoop {
         } catch { /* observation failure is non-fatal */ }
 
         // ── UNDERSTAND + PLAN ─────────────────────────────────────────────────
-        const toolCall = await this.planNextStep(
+        // On step 0, check for tasks we can dispatch directly without asking the LLM.
+        // This prevents the model from narrating prose instead of emitting JSON.
+        const hardcoded = i === 0 ? AgentLoop.getHardcodedFirstStep(task) : null
+        const toolCall = hardcoded ?? await this.planNextStep(
           task, completedSteps, screenshotB64, activeWindow, patternHint, signal
         )
 
@@ -144,7 +147,7 @@ export class AgentLoop {
 
         // ── DONE ──────────────────────────────────────────────────────────────
         if (toolCall.done) {
-          finalReply = toolCall.reply ?? 'Task complete.'
+          finalReply = toolCall.reply || 'Task complete.'
           this.setState({ status: 'done' })
           this.log.info(`Agent done after ${i + 1} steps`)
           break
@@ -161,13 +164,33 @@ export class AgentLoop {
         }
 
         // ── CHOOSE TOOL ───────────────────────────────────────────────────────
-        // Unregistered tool names are rejected IMMEDIATELY — no retry loop.
+        // Unknown tool: inject a structured error into the step history and allow
+        // ONE replanning attempt. The error lists valid tool names so the LLM can
+        // self-correct. A second consecutive unknown-tool response hard-stops.
         const toolDef = this.registry.get(toolCall.tool)?.definition
         if (!toolDef) {
-          this.log.warn(`Agent requested unregistered tool: ${toolCall.tool} — rejecting immediately`)
-          finalReply = `I tried to use a capability I don't have ("${toolCall.tool}"), so I stopped. Could you rephrase the request as a concrete action?`
-          this.setState({ status: 'error', error: `unknown_tool: ${toolCall.tool}` })
-          break
+          this.log.warn(`Agent requested unregistered tool: ${toolCall.tool}`)
+          const validTools = this.registry.list().map(t => t.name).join(', ')
+          const errorStep: AgentStep = {
+            index: i,
+            thought: toolCall.thought,
+            tool: toolCall.tool,
+            params: toolCall.params,
+            result: { success: false, error: `Unknown tool "${toolCall.tool}". Valid tools: ${validTools}` },
+            verified: false,
+            timestamp: Date.now()
+          }
+          completedSteps.push(errorStep)
+          this.state.steps.push(errorStep)
+          this.pushState()
+          // Hard-stop on second consecutive unknown-tool — prevents infinite loop
+          const prevStep = completedSteps[completedSteps.length - 2]
+          if (prevStep && !this.registry.get(prevStep.tool)) {
+            finalReply = `I requested an unknown tool ("${toolCall.tool}") twice in a row and stopped to avoid looping.`
+            this.setState({ status: 'error', error: `unknown_tool: ${toolCall.tool}` })
+            break
+          }
+          continue  // one replanning attempt — LLM sees the error step
         }
 
         // ── RISK CHECK ────────────────────────────────────────────────────────
@@ -236,6 +259,22 @@ export class AgentLoop {
         // ── AUTO-COMPLETE for terminal single-action tasks ─────────────────────
         // browser.openExternal always auto-completes — it has no follow-up state.
         // browser.open auto-completes only on simple open-URL tasks with no multi-step intent.
+        // notepad.saveText is terminal: success auto-completes with filePath;
+        // failure hard-stops with the error - the LLM cannot recover a failed
+        // save by replanning (no intermediate state to fix).
+        if (toolCall.tool === 'notepad.saveText') {
+          if (result.success) {
+            const d = result.data as { filePath: string; bytes: number; cleanupWarning?: string }
+            finalReply = `Saved to ${d.filePath} (${d.bytes} bytes).`
+              + (d.cleanupWarning ? ` Note: ${d.cleanupWarning}` : '')
+            this.setState({ status: 'done' })
+            this.log.info('Agent auto-completed: notepad.saveText')
+          } else {
+            finalReply = `Save failed: ${result.error ?? 'unknown error'}`
+            this.setState({ status: 'error', error: finalReply })
+          }
+          break
+        }
         if (result.success && (
           toolCall.tool === 'browser.openExternal' ||
           (toolCall.tool === 'browser.open' && AgentLoop.isSimpleOpenTask(task))
@@ -370,6 +409,7 @@ RULES:
 - Always include a "thought" field explaining your reasoning.
 - After a failed step, try a different approach — do not repeat the exact same action.
 - If you genuinely cannot proceed after 3 attempts, set "done": true with an honest "reply".
+- To save text to a file, ALWAYS use notepad.saveText — never shell.execute or process.start for this purpose.
 
 RESPONSE FORMAT (strict JSON):
 {"thought": "...", "tool": "tool.name", "params": {...}, "done": false}
@@ -452,6 +492,27 @@ What is the next single action to take?`
   }
 
   /**
+   * For well-known single-tool tasks, return the first step directly so the
+   * LLM cannot narrate prose instead of emitting JSON.
+   * Returns null when no override applies.
+   */
+  static getHardcodedFirstStep(task: string): LLMToolCall | null {
+    // notepad.saveText — matches: save "<text>" to <filename> in Documents
+    const saveMatch = task.match(
+      /save\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s+to\s+(?:a\s+)?(?:new\s+)?(?:file\s+)?(?:named?\s+)?([\w.-]+\.txt)/i
+    )
+    if (saveMatch) {
+      return {
+        thought: `Task is a direct save-text request — dispatching notepad.saveText without LLM planning.`,
+        tool: 'notepad.saveText',
+        params: { text: saveMatch[1].trim(), filename: saveMatch[2].trim() },
+        done: false
+      }
+    }
+    return null
+  }
+
+  /**
    * True when the task is a simple "open URL" request with no further intent
    * (no login, fill, search, or multi-step qualifier).
    */
@@ -484,6 +545,9 @@ What is the next single action to take?`
       'computer.type_text': 'computer.type',
       'computer.keyboard': 'computer.type',
       'computer.press':   'computer.key',
+      'notepad.save':     'notepad.saveText',
+      'notepad.write':    'notepad.saveText',
+      'file.save':        'notepad.saveText',
     }
     return ALIASES[name] ?? name
   }
@@ -547,7 +611,8 @@ Respond with ONLY: {"success": true/false, "reason": "brief explanation"}`
         status: 'pending' as const,
         createdAt: Date.now(),
         requiresApproval: true,
-        riskLevel: 'high' as const
+        riskLevel: 'high' as const,
+        agentOwned: true   // handler must only call resolveApproval, never desktop.execute
       }
 
       ActionStore.getInstance().add(action)

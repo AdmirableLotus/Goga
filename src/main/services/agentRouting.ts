@@ -7,6 +7,10 @@
 
 // Phrases that clearly signal an autonomous multi-step task
 export const AGENT_TRIGGERS: RegExp[] = [
+  /\bnotepad\.saveText\b/i,
+  /\bsave\b.{0,60}\b(text|content|file|document|notes?)\b/i,
+  /\bsave\b.{0,80}\.txt\b/i,
+  /\bwrite\b.{0,40}\b(to|into)\b.{0,40}\b(file|document|txt|notepad)\b/i,
   /\b(open|launch|start|show)\b.{0,40}\b(and|then|to)\b/i,
   /\b(open|launch|start|show)\b.{0,40}\b(browser|brave|chrome|firefox|edge|app|terminal|notepad|explorer|spotify|discord|slack|vscode|code)\b/i,
   /\b(show|open|visit|go to|navigate to|browse to)\b.{0,60}https?:\/\//i,
@@ -25,7 +29,12 @@ export const AGENT_TRIGGERS: RegExp[] = [
 
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
 
+// Phrases that open a question or request an explanation — these stay on the
+// chat path even if they contain words that would otherwise trigger the agent.
+const CONVERSATIONAL_PREFIX = /^\s*(explain|how (do|does|to|can|would|should)|what (is|are|was|were|does|would)|why (is|does|would)|when (is|does|would)|tell me (about|how|what|why)|what'?s the best|should i|can you explain|could you explain)/i
+
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
+  if (CONVERSATIONAL_PREFIX.test(message)) return false
   if (AGENT_TRIGGERS.some(r => r.test(message))) return true
   if (CONFIRM_TRIGGERS.test(message.trim()) && lastAssistantMsg) {
     return /\b(search|look|find|open|navigate|run|execute|install|shall i|want me|would you like|should i|can i)\b/i.test(lastAssistantMsg)

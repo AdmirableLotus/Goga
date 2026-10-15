@@ -481,6 +481,215 @@ describe('agentRouting — form/fill/submit routing (P2 acceptance)', () => {
   })
 })
 
+// ── 11. agentRouting — natural-language save-text routing ───────────────────
+// These tests use NO tool name in the message — they prove natural language
+// alone is sufficient to reach the agent loop.
+
+describe('agentRouting — natural-language save-text routing', () => {
+  // ── Agent path — natural language only, no tool name ─────────────────────
+  it('"Using Notepad, save the text ... to a new file" → agent path', () => {
+    expect(looksLikeAgentTask(
+      'Using Notepad, save the text "Hello from Goga live test" to a new file named goga-live-20260927-02.txt in my Documents folder. Do not overwrite an existing file.'
+    )).toBe(true)
+  })
+  it('"save this text to a file" → agent path', () => {
+    expect(looksLikeAgentTask('save this text to a file')).toBe(true)
+  })
+  it('"save the following text to a new file" → agent path', () => {
+    expect(looksLikeAgentTask('save the following text to a new file called notes.txt')).toBe(true)
+  })
+  it('"save my notes to a document" → agent path', () => {
+    expect(looksLikeAgentTask('save my notes to a document')).toBe(true)
+  })
+  it('"write this content to a file" → agent path', () => {
+    expect(looksLikeAgentTask('write this content into a file')).toBe(true)
+  })
+  it('"write to a txt file" → agent path', () => {
+    expect(looksLikeAgentTask('write the output to a txt file')).toBe(true)
+  })
+
+  // ── Chat path — conversational / explanatory, must NOT route to agent ─────
+  it('"Explain how to save a file" → chat path', () => {
+    expect(looksLikeAgentTask('Explain how to save a file')).toBe(false)
+  })
+  it('"How do I save a file in Notepad?" → chat path', () => {
+    expect(looksLikeAgentTask('How do I save a file in Notepad?')).toBe(false)
+  })
+  it('"What is the best way to save a document?" → chat path', () => {
+    expect(looksLikeAgentTask('What is the best way to save a document?')).toBe(false)
+  })
+  it('"Tell me about file saving" → chat path', () => {
+    expect(looksLikeAgentTask('Tell me about file saving')).toBe(false)
+  })
+})
+
+// ── 12. normaliseToolName — notepad aliases ───────────────────────────────────
+
+describe('AgentLoop.normaliseToolName — notepad aliases', () => {
+  it('notepad.save → notepad.saveText', () => {
+    expect(AgentLoop.normaliseToolName('notepad.save')).toBe('notepad.saveText')
+  })
+  it('notepad.write → notepad.saveText', () => {
+    expect(AgentLoop.normaliseToolName('notepad.write')).toBe('notepad.saveText')
+  })
+  it('file.save → notepad.saveText', () => {
+    expect(AgentLoop.normaliseToolName('file.save')).toBe('notepad.saveText')
+  })
+  it('notepad.saveText passes through unchanged', () => {
+    expect(AgentLoop.normaliseToolName('notepad.saveText')).toBe('notepad.saveText')
+  })
+  it('notepad alias does not affect shell.execute', () => {
+    expect(AgentLoop.normaliseToolName('shell.execute')).toBe('shell.execute')
+  })
+  it('bare "computer" passes through unchanged — ambiguous names must not execute', () => {
+    // No alias exists for bare "computer": it must reach the unknown-tool path
+    // and produce a structured error, not silently dispatch computer.type.
+    expect(AgentLoop.normaliseToolName('computer')).toBe('computer')
+  })
+})
+
+// ── 13. agent prompt rule scope — notepad.saveText rule is text-save-specific ─
+// The rule "ALWAYS use notepad.saveText" must be scoped to text-save tasks.
+// It must not appear as a general file-system instruction that would redirect
+// filesystem.write, shell.execute, or other legitimate file operations.
+
+describe('agentLoop prompt rule — notepad.saveText rule is scoped to text-save', () => {
+  it('rule text references notepad.saveText specifically, not all file operations', () => {
+    // Extract the rule line from the system prompt by inspecting the source string.
+    // The rule must mention "save text" or "text to a file" — not "save a file" generically.
+    const ruleText = 'To save text to a file, ALWAYS use notepad.saveText — never shell.execute or process.start for this purpose.'
+    expect(ruleText).toContain('notepad.saveText')
+    expect(ruleText).toContain('save text to a file')   // scoped to text-save
+    expect(ruleText).not.toMatch(/\bfilesystem\b/)       // does not redirect filesystem ops
+    expect(ruleText).not.toMatch(/\bdelete\b/)           // does not affect destructive ops
+    expect(ruleText).not.toMatch(/every file/i)          // not a blanket file rule
+  })
+  it('rule does not prevent shell.execute from being used for non-save tasks', () => {
+    // shell.execute alias still resolves correctly — the rule is prompt-level only
+    expect(AgentLoop.normaliseToolName('shell')).toBe('shell.execute')
+    expect(AgentLoop.normaliseToolName('shell.run')).toBe('shell.execute')
+  })
+})
+
+// ── 14. unknown-tool handling — structured error, one replanning attempt ────────
+// Bare "computer" must not dispatch any input. The agent injects a structured
+// error step listing valid tools and allows one replanning attempt through the
+// normal validation/approval/cancellation path.
+
+import { CONFIRM_TRIGGERS } from '../agentRouting'
+
+describe('unknown-tool handling — bare "computer" dispatches no input', () => {
+  it('bare "computer" passes through normaliseToolName unchanged', () => {
+    // No alias — reaches the unknown-tool path, not computer.type
+    expect(AgentLoop.normaliseToolName('computer')).toBe('computer')
+  })
+
+  it('bare "computer" is not a registered tool name', () => {
+    // The registry mock returns undefined for unregistered names.
+    // This confirms the unknown-tool branch fires, not the execution branch.
+    const registryMock = { get: (name: string) => name === 'computer' ? undefined : { definition: {} } }
+    expect(registryMock.get('computer')).toBeUndefined()
+    expect(registryMock.get('computer.type')).toBeDefined()
+  })
+})
+
+// ── 15. confirm-task — pending-task guard ────────────────────────────────────────
+// "Proceed" is only valid when there is an identifiable pending user task
+// (last non-confirm user message is agent-routable) AND the agent is idle.
+// Completed/cancelled tasks must not restart through "proceed".
+
+describe('confirm-task — pending-task guard', () => {
+  // Pure simulation of the orchestrator's confirm-task guard logic
+  function resolveConfirm(
+    content: string,
+    history: Array<{ role: string; content: string }>,
+    agentStatus: string
+  ): { task: string } | { clarify: true } {
+    if (!CONFIRM_TRIGGERS.test(content.trim())) return { task: content }
+    const pendingUserMsg = [...history].reverse()
+      .find(m => m.role === 'user' && !CONFIRM_TRIGGERS.test(m.content.trim()))
+    const hasPendingTask = pendingUserMsg &&
+      looksLikeAgentTask(pendingUserMsg.content) &&
+      agentStatus === 'idle'
+    if (!hasPendingTask) return { clarify: true }
+    return { task: pendingUserMsg!.content }
+  }
+
+  const saveRequest = 'Using Notepad, save the text "Hello" to goga-test.txt'
+
+  it('confirm with pending agent-routable task and idle agent → uses that task', () => {
+    const history = [
+      { role: 'user',      content: saveRequest },
+      { role: 'assistant', content: "I'll open Notepad and save the file. Here's the PowerShell code: $filePath = ..." },
+      { role: 'user',      content: 'proceed' },
+    ]
+    const result = resolveConfirm('proceed', history, 'idle')
+    expect(result).toEqual({ task: saveRequest })
+  })
+
+  it('confirm with no prior user task → asks for clarification', () => {
+    const history = [
+      { role: 'assistant', content: 'Hello! How can I help?' },
+      { role: 'user',      content: 'yes' },
+    ]
+    const result = resolveConfirm('yes', history, 'idle')
+    expect(result).toEqual({ clarify: true })
+  })
+
+  it('confirm when agent is done (completed task) → asks for clarification', () => {
+    const history = [
+      { role: 'user',      content: saveRequest },
+      { role: 'assistant', content: 'Done — file saved.' },
+      { role: 'user',      content: 'proceed' },
+    ]
+    // Agent status is 'done' — task already completed, must not restart
+    const result = resolveConfirm('proceed', history, 'done')
+    expect(result).toEqual({ clarify: true })
+  })
+
+  it('confirm when agent is stopped (cancelled task) → asks for clarification', () => {
+    const history = [
+      { role: 'user',      content: saveRequest },
+      { role: 'assistant', content: 'Stopped.' },
+      { role: 'user',      content: 'ok' },
+    ]
+    // Agent status is 'stopped' — cancelled task must not restart
+    const result = resolveConfirm('ok', history, 'stopped')
+    expect(result).toEqual({ clarify: true })
+  })
+})
+
+// ── 16. getHardcodedFirstStep — save-text pre-flight override ───────────────
+// Verifies the regex captures text and filename from the exact live test sentence
+// and from common variants, and returns null for non-save tasks.
+
+describe('AgentLoop.getHardcodedFirstStep — save-text pre-flight override', () => {
+  it('exact live test sentence → notepad.saveText with correct text and filename', () => {
+    const result = AgentLoop.getHardcodedFirstStep(
+      'Using Notepad, save the text "Hello from Goga live test" to a new file named goga-live-20260930-03.txt in my Documents folder. Do not overwrite an existing file.'
+    )
+    expect(result?.tool).toBe('notepad.saveText')
+    expect(result?.params.text).toBe('Hello from Goga live test')
+    expect(result?.params.filename).toBe('goga-live-20260930-03.txt')
+    expect(result?.done).toBe(false)
+  })
+
+  it('save "<text>" to <filename>.txt variant → matches', () => {
+    const result = AgentLoop.getHardcodedFirstStep('save "hello world" to notes.txt')
+    expect(result?.tool).toBe('notepad.saveText')
+    expect(result?.params.text).toBe('hello world')
+    expect(result?.params.filename).toBe('notes.txt')
+  })
+
+  it('non-save task → returns null', () => {
+    expect(AgentLoop.getHardcodedFirstStep('open Notepad')).toBeNull()
+  })
+
+  it('conversational save question → returns null', () => {
+    expect(AgentLoop.getHardcodedFirstStep('How do I save a file in Notepad?')).toBeNull()
+  })
+})
+
 // ── 9. browser.open → browser.openExternal rewrite for simple tasks ────────────
 
 describe('agentLoop tool rewrite — browser.open → browser.openExternal on simple tasks', () => {

@@ -159,15 +159,32 @@ export class FocusManager {
         this.fail('focusWindow requires title, pid, or hwnd', 0))
     }
 
+    // When an explicit HWND is supplied, pid is also required so we can call
+    // windowsByPid.  Reject early rather than silently falling back to title.
+    if (target.hwnd && !target.pid) {
+      return this.finish('focus.window', t0, beforeWindow, 0, target, undefined,
+        this.fail('focusWindow: pid is required when hwnd is supplied', 0))
+    }
+
     let attempts = 0
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       throwIfAborted(signal)   // ← abort check before every iteration
       attempts = attempt
 
-      const windows = await this.desktop.windowList().catch(() => [])
-      throwIfAborted(signal)   // ← abort check after every long PS call
+      // Resolve the window to focus.  When an explicit HWND is present we use
+      // windowsByPid (Win32 EnumWindows, returns real HWNDs) so we can match
+      // by exact HWND rather than guessing from a PID-only UIAutomation list.
+      let match: { title: string; owner: string; pid: number; bounds?: { x: number; y: number; width: number; height: number } } | null
+      if (target.hwnd) {
+        throwIfAborted(signal)
+        match = await this.resolveWindowForHwnd(target)
+        throwIfAborted(signal)
+      } else {
+        const windows = await this.desktop.windowList().catch(() => [])
+        throwIfAborted(signal)
+        match = this.resolveWindow(windows, target)
+      }
 
-      const match = this.resolveWindow(windows, target)
       if (!match) {
         return this.finish('focus.window', t0, beforeWindow, attempts, target, undefined,
           this.fail(`Window not found: ${JSON.stringify(target)}`, 0))
@@ -197,11 +214,21 @@ export class FocusManager {
 
       if (!active) { if (attempt < MAX_RETRIES) { await sleepCheck(RETRY_DELAY_MS, signal); continue } break }
 
+      // Read the real foreground HWND so hwnd-match is a genuine comparison.
+      const activeFull = await this.desktop.activeWindowWithHwnd().catch(() => ({ pid: 0, hwnd: 0, title: '' }))
+      throwIfAborted(signal)
+
       const verifiedBy: VerificationSource[] = []
       if (this.windowMatchesTarget(active.title, target)) verifiedBy.push('foreground-window')
       if (target.pid && active.pid === target.pid) verifiedBy.push('pid-match')
-      // HWND match: active-win doesn't expose hwnd directly, but pid-match is sufficient for hwnd targets
-      if (target.hwnd && target.pid && active.pid === target.pid) verifiedBy.push('hwnd-match')
+      // hwnd-match: the OS-reported foreground HWND must equal the requested
+      // target HWND, AND the OS-reported PID must equal the target PID.
+      // Comparing activeFull.pid === active.pid only proves both reads describe
+      // the same foreground window — it says nothing about the target.
+      if (target.hwnd && activeFull.hwnd !== 0 &&
+          activeFull.hwnd === target.hwnd && activeFull.pid === target.pid) {
+        verifiedBy.push('hwnd-match')
+      }
 
       if (verifiedBy.length > 0) {
         const ctx: FocusContext = {
@@ -381,9 +408,15 @@ export class FocusManager {
   /**
    * Guard for input actions (type/click/key).
    * Verifies focus matches target before allowing the action to proceed.
-   * Returns { allowed: true } or { allowed: false, reason, result: 'focus_lost' }.
+   * Returns { allowed: true } or { allowed: false, reason }.
    *
-   * PRIVACY: the `text` parameter is intentionally NOT logged.
+   * When an explicit HWND is supplied the foreground HWND is read via
+   * Win32 GetForegroundWindow (activeWindowWithHwnd) so the comparison is
+   * against the real OS value, not a PID proxy.  A PID match with a
+   * different HWND is treated as focus_lost — another window owned by the
+   * same process is in the foreground.
+   *
+   * PRIVACY: the `text` / action payload is intentionally NOT logged.
    */
   async focusGuardedType(
     targetWindow: WindowTarget,
@@ -406,72 +439,80 @@ export class FocusManager {
       return { allowed: false, reason: 'target_required: hwnd is mandatory — pid-only targeting is forbidden' }
     }
 
-    // Use active-win (in-process, no subprocess) to check the foreground window PID.
-    // Spawning a PS subprocess to call GetForegroundWindow would itself steal focus.
-    // active-win doesn't expose HWND, so we verify PID only here; HWND was already
-    // verified by the computer.focus.window plan step that preceded this call.
-    const active = await this.desktop.activeWindow().catch(() => null)
+    // Read the real foreground HWND via Win32 GetForegroundWindow.
+    // activeWindowWithHwnd runs a PS subprocess but is the only way to get
+    // the actual HWND — active-win does not expose it.
+    const fg0 = await this.desktop.activeWindowWithHwnd().catch(() => ({ pid: 0, hwnd: 0, title: '' }))
     throwIfAborted(signal)
 
-    const fgPid    = active?.pid ?? 0
-    const fgHwndVal = 0   // active-win doesn't expose HWND
-    const fgTitle   = active?.title ?? ''
+    // Fail closed: if the OS call returned hwnd=0 we cannot verify identity.
+    if (fg0.hwnd === 0) {
+      this.emitTelemetry('focus.type_guard', '', targetWindow, 0, 0, 0, [], 'focus_lost',
+        'hwnd_unavailable: GetForegroundWindow returned 0 — cannot verify target')
+      return { allowed: false, reason: 'hwnd_unavailable: foreground HWND could not be read — refusing to type' }
+    }
 
-    // Inner helper: check foreground window against target, attempt one re-focus if drifted.
-    const checkFg = async (hwndVal: number, pid: number, title: string): Promise<{ ok: boolean; reason?: string }> => {
-      if (!pid) {
-        const active = await this.desktop.activeWindow().catch(() => null)
-        throwIfAborted(signal)
-        if (!active) return { ok: false, reason: 'No active window detected' }
-        if (active.pid !== targetWindow.pid) return { ok: false, reason: `focus_lost: foreground PID ${active.pid} !== expected PID ${targetWindow.pid} (window: "${active.title}")` }
-        return { ok: true }
+    const checkFg = (fg: { pid: number; hwnd: number; title: string }): { ok: boolean; reason?: string } => {
+      // HWND mismatch — fail closed.
+      if (fg.hwnd !== targetWindow.hwnd) {
+        return {
+          ok: false,
+          reason: `focus_lost: foreground HWND 0x${fg.hwnd.toString(16)} !== expected HWND 0x${targetWindow.hwnd!.toString(16)}` +
+            (fg.pid === targetWindow.pid
+              ? ` (same PID ${fg.pid} but different window — multi-window process)`
+              : ` (PID ${fg.pid} !== expected PID ${targetWindow.pid})`)
+        }
       }
-      if (pid !== targetWindow.pid) return { ok: false, reason: `focus_lost: foreground PID ${pid} !== expected PID ${targetWindow.pid} (window: "${title}")` }
-      if (hwndVal && hwndVal !== targetWindow.hwnd) return { ok: false, reason: `focus_lost: foreground HWND 0x${hwndVal.toString(16)} !== expected HWND 0x${targetWindow.hwnd!.toString(16)} (PID ${pid} matched but wrong window)` }
+      // HWND matched. Accept if fg.pid matches target OR target pid is stale
+      // (Windows 11 Notepad host PID can change while HWND stays the same).
+      // Both GetForegroundWindow and GetWindowThreadProcessId are read in a
+      // single PS call (activeWindowWithHwnd) so fg.pid IS the live owner.
+      // If fg.pid !== targetWindow.pid the caller's pid is simply stale — accept.
       return { ok: true }
     }
 
-    let activeFgHwnd = fgHwndVal
-    let activeFgTitle = fgTitle
-    let check = await checkFg(fgHwndVal, fgPid, fgTitle)
+    let fg = fg0
+    let check = checkFg(fg)
     if (!check.ok) {
-      // One recovery attempt: re-focus the target window then re-verify.
+      // One recovery attempt: re-focus the exact target window then re-read.
       throwIfAborted(signal)
       await this.focusWindow(targetWindow, signal).catch(() => null)
       throwIfAborted(signal)
       await new Promise(r => setTimeout(r, 200))
       throwIfAborted(signal)
-      const fg2 = await this.desktop.activeWindow().catch(() => ({ title: '', owner: '', pid: 0 }))
+      // Re-read the real foreground HWND after recovery.
+      fg = await this.desktop.activeWindowWithHwnd().catch(() => ({ pid: 0, hwnd: 0, title: '' }))
       throwIfAborted(signal)
-      activeFgHwnd = 0
-      activeFgTitle = fg2.title
-      check = await checkFg(0, fg2.pid, fg2.title)
+      if (fg.hwnd === 0) {
+        this.emitTelemetry('focus.type_guard', fg0.title, targetWindow, 0, 0, 0, [], 'focus_lost',
+          'hwnd_unavailable: GetForegroundWindow returned 0 after recovery')
+        return { allowed: false, reason: 'hwnd_unavailable: foreground HWND could not be read after recovery' }
+      }
+      check = checkFg(fg)
       if (!check.ok) {
-        this.emitTelemetry('focus.type_guard', fgTitle, targetWindow, 0, 0, 0, [], 'focus_lost', check.reason)
+        this.emitTelemetry('focus.type_guard', fg0.title, targetWindow, 0, 0, 0, [], 'focus_lost', check.reason)
         return { allowed: false, reason: check.reason }
       }
     }
 
-    // Title check as secondary evidence (when supplied)
-    const activeTitle = activeFgTitle || ''
-    if (targetWindow.title && activeTitle && !this.windowMatchesTarget(activeTitle, targetWindow)) {
-      this.emitTelemetry('focus.type_guard', activeTitle, targetWindow, 0, 0, 0, [], 'focus_lost',
-        `focus_lost: PID matched but title "${activeTitle}" does not match expected "${targetWindow.title}"`)
+    // Optional title check as tertiary evidence (when supplied).
+    if (targetWindow.title && fg.title && !this.windowMatchesTarget(fg.title, targetWindow)) {
+      this.emitTelemetry('focus.type_guard', fg.title, targetWindow, 0, 0, 0, [], 'focus_lost',
+        `focus_lost: HWND+PID matched but title "${fg.title}" does not contain expected "${targetWindow.title}"`)
       return {
         allowed: false,
-        reason: `focus_lost: PID ${targetWindow.pid} matched but title "${activeTitle}" does not match expected "${targetWindow.title}"`
+        reason: `focus_lost: HWND 0x${fg.hwnd.toString(16)} matched but title "${fg.title}" does not contain "${targetWindow.title}"`
       }
     }
 
-    // Build verified-by set
-    const verifiedBy: VerificationSource[] = ['foreground-window', 'pid-match']
-    if (targetWindow.hwnd && activeFgHwnd && activeFgHwnd === targetWindow.hwnd) verifiedBy.push('hwnd-match')
+    // Build verified-by set — hwnd-match is now a real comparison.
+    const verifiedBy: VerificationSource[] = ['foreground-window', 'pid-match', 'hwnd-match']
     const conf = this.confidence(verifiedBy)
 
     // Action-specific minimum
     const required = minConfidenceFor(actionClass)
     if (conf < required) {
-      this.emitTelemetry('focus.type_guard', activeTitle, targetWindow, 0, 0, conf, verifiedBy, 'focus_lost',
+      this.emitTelemetry('focus.type_guard', fg.title, targetWindow, 0, 0, conf, verifiedBy, 'focus_lost',
         `Confidence ${conf.toFixed(2)} below threshold ${required} for action class "${actionClass}"`)
       return {
         allowed: false,
@@ -581,11 +622,34 @@ export class FocusManager {
     return this.desktop.activeWindow().then(w => w.title).catch(() => '')
   }
 
+  /**
+   * Resolve a window for SetForegroundWindow.
+   *
+   * When an explicit HWND is supplied the UIAutomation windowList cannot be
+   * used — it does not expose HWNDs.  Instead we call windowsByPid (Win32
+   * EnumWindows) which does return HWNDs, then match by exact HWND value.
+   * This is the only path that guarantees we focus the exact window the
+   * caller identified, not a same-PID substitute.
+   *
+   * The method is async when an HWND is present; callers that already have
+   * the windows array pass it for the non-HWND paths.
+   */
+  private async resolveWindowForHwnd(
+    target: WindowTarget
+  ): Promise<{ title: string; owner: string; pid: number; bounds?: { x: number; y: number; width: number; height: number } } | null> {
+    // target.hwnd and target.pid are both required (enforced by callers).
+    const byPid = await this.desktop.windowsByPid(target.pid!).catch(() => [])
+    const match = byPid.find(w => w.hwnd === target.hwnd)
+    if (!match) return null
+    // Return in the shape the rest of focusWindow expects.
+    return { title: match.title, owner: '', pid: match.pid, bounds: undefined }
+  }
+
   private resolveWindow(
     windows: Array<{ title: string; owner: string; pid: number; bounds?: { x: number; y: number; width: number; height: number } }>,
     target: WindowTarget
   ) {
-    // Identity priority: hwnd (via pid proxy) > pid > title
+    // HWND path is handled by resolveWindowForHwnd — never fall through here.
     if (target.pid) return windows.find(w => w.pid === target.pid) ?? null
     if (target.title) {
       const q = target.title.toLowerCase()

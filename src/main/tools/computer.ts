@@ -69,67 +69,128 @@ reg.register({
 
 reg.register({
   name: 'computer.click',
-  description: 'Move the mouse to (x, y) and click. Use computer.uiElements to find coordinates first.',
+  description: 'Move the mouse to (x, y) and click. Use computer.uiElements to find coordinates first. ' +
+    'REQUIRES pid and hwnd. Verifies foreground window matches both before clicking.',
   parameters: {
     type: 'object',
     properties: {
-      x:      { type: 'number', description: 'Screen X coordinate.' },
-      y:      { type: 'number', description: 'Screen Y coordinate.' },
-      button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default: left.' }
+      x:           { type: 'number', description: 'Screen X coordinate.' },
+      y:           { type: 'number', description: 'Screen Y coordinate.' },
+      button:      { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default: left.' },
+      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
+      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle.' },
+      windowTitle: { type: 'string', description: 'Optional secondary evidence.' }
     },
-    required: ['x', 'y']
+    required: ['x', 'y', 'pid', 'hwnd']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.click(p.x as number, p.y as number, p.button as 'left' | 'right' | undefined)
-  return { success: true, data: r }
+}, async (p, ctx) => {
+  const pid  = p.pid  as number | undefined
+  const hwnd = p.hwnd as number | undefined
+  if (!pid)  return { success: false, error: 'computer.click: target_required — pid is mandatory.' }
+  if (!hwnd) return { success: false, error: 'computer.click: target_required — hwnd is mandatory.' }
+  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
+  const guard = await focus.focusGuardedType(
+    target,
+    () => desktop.click(p.x as number, p.y as number, p.button as 'left' | 'right' | undefined).then(() => {}),
+    ctx.abortSignal,
+    'coordinate'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.click blocked: ${guard.reason}` }
+  return { success: true, data: { x: p.x, y: p.y, button: p.button ?? 'left' } }
 })
 
 reg.register({
   name: 'computer.doubleClick',
-  description: 'Double-click at (x, y).',
+  description: 'Double-click at (x, y). REQUIRES pid and hwnd. Verifies foreground window before clicking.',
   parameters: {
     type: 'object',
     properties: {
-      x: { type: 'number' }, y: { type: 'number' }
+      x:           { type: 'number' },
+      y:           { type: 'number' },
+      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
+      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle.' },
+      windowTitle: { type: 'string', description: 'Optional secondary evidence.' }
     },
-    required: ['x', 'y']
+    required: ['x', 'y', 'pid', 'hwnd']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.doubleClick(p.x as number, p.y as number)
-  return { success: true, data: r }
+}, async (p, ctx) => {
+  const pid  = p.pid  as number | undefined
+  const hwnd = p.hwnd as number | undefined
+  if (!pid)  return { success: false, error: 'computer.doubleClick: target_required — pid is mandatory.' }
+  if (!hwnd) return { success: false, error: 'computer.doubleClick: target_required — hwnd is mandatory.' }
+  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
+  const guard = await focus.focusGuardedType(
+    target,
+    () => desktop.doubleClick(p.x as number, p.y as number).then(() => {}),
+    ctx.abortSignal,
+    'coordinate'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.doubleClick blocked: ${guard.reason}` }
+  return { success: true, data: { x: p.x, y: p.y } }
 })
 
 reg.register({
   name: 'computer.rightClick',
-  description: 'Right-click at (x, y) to open a context menu.',
+  description: 'Right-click at (x, y) to open a context menu. REQUIRES pid and hwnd. Verifies foreground window before clicking.',
   parameters: {
     type: 'object',
-    properties: { x: { type: 'number' }, y: { type: 'number' } },
-    required: ['x', 'y']
+    properties: {
+      x:           { type: 'number' },
+      y:           { type: 'number' },
+      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
+      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle.' },
+      windowTitle: { type: 'string', description: 'Optional secondary evidence.' }
+    },
+    required: ['x', 'y', 'pid', 'hwnd']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.click(p.x as number, p.y as number, 'right')
-  return { success: true, data: r }
+}, async (p, ctx) => {
+  const pid  = p.pid  as number | undefined
+  const hwnd = p.hwnd as number | undefined
+  if (!pid)  return { success: false, error: 'computer.rightClick: target_required — pid is mandatory.' }
+  if (!hwnd) return { success: false, error: 'computer.rightClick: target_required — hwnd is mandatory.' }
+  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
+  const guard = await focus.focusGuardedType(
+    target,
+    () => desktop.click(p.x as number, p.y as number, 'right').then(() => {}),
+    ctx.abortSignal,
+    'coordinate'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.rightClick blocked: ${guard.reason}` }
+  return { success: true, data: { x: p.x, y: p.y, button: 'right' } }
 })
 
 reg.register({
   name: 'computer.drag',
-  description: 'Click and drag from one point to another.',
+  description: 'Click and drag from one point to another. REQUIRES pid and hwnd. Verifies foreground window before dragging.',
   parameters: {
     type: 'object',
     properties: {
-      fromX: { type: 'number' }, fromY: { type: 'number' },
-      toX:   { type: 'number' }, toY:   { type: 'number' }
+      fromX:       { type: 'number' }, fromY: { type: 'number' },
+      toX:         { type: 'number' }, toY:   { type: 'number' },
+      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
+      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle.' },
+      windowTitle: { type: 'string', description: 'Optional secondary evidence.' }
     },
-    required: ['fromX', 'fromY', 'toX', 'toY']
+    required: ['fromX', 'fromY', 'toX', 'toY', 'pid', 'hwnd']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.drag(p.fromX as number, p.fromY as number, p.toX as number, p.toY as number)
-  return { success: true, data: r }
+}, async (p, ctx) => {
+  const pid  = p.pid  as number | undefined
+  const hwnd = p.hwnd as number | undefined
+  if (!pid)  return { success: false, error: 'computer.drag: target_required — pid is mandatory.' }
+  if (!hwnd) return { success: false, error: 'computer.drag: target_required — hwnd is mandatory.' }
+  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
+  const guard = await focus.focusGuardedType(
+    target,
+    () => desktop.drag(p.fromX as number, p.fromY as number, p.toX as number, p.toY as number).then(() => {}),
+    ctx.abortSignal,
+    'coordinate'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.drag blocked: ${guard.reason}` }
+  return { success: true, data: { from: { x: p.fromX, y: p.fromY }, to: { x: p.toX, y: p.toY } } }
 })
 
 reg.register({
@@ -281,32 +342,64 @@ reg.register({
 
 reg.register({
   name: 'computer.key',
-  description: 'Press a single key by name (e.g. Enter, Escape, Tab, F5, Delete, Home, End, PageUp, PageDown, Left, Right, Up, Down).',
+  description: 'Press a single key by name (e.g. Enter, Escape, Tab, F5, Delete, Home, End, PageUp, PageDown, Left, Right, Up, Down). ' +
+    'REQUIRES pid and hwnd. Verifies foreground window matches both before sending any keystroke.',
   parameters: {
     type: 'object',
-    properties: { key: { type: 'string', description: 'Key name matching nut-js Key enum.' } },
-    required: ['key']
+    properties: {
+      key:         { type: 'string', description: 'Key name matching nut-js Key enum.' },
+      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
+      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle.' },
+      windowTitle: { type: 'string', description: 'Optional secondary evidence.' }
+    },
+    required: ['key', 'pid', 'hwnd']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.pressKey(p.key as string)
-  return { success: true, data: r }
+}, async (p, ctx) => {
+  const pid  = p.pid  as number | undefined
+  const hwnd = p.hwnd as number | undefined
+  if (!pid)  return { success: false, error: 'computer.key: target_required — pid is mandatory.' }
+  if (!hwnd) return { success: false, error: 'computer.key: target_required — hwnd is mandatory.' }
+  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
+  const guard = await focus.focusGuardedType(
+    target,
+    () => desktop.pressKey(p.key as string).then(() => {}),
+    ctx.abortSignal,
+    'input'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.key blocked: ${guard.reason}` }
+  return { success: true, data: { key: p.key } }
 })
 
 reg.register({
   name: 'computer.shortcut',
-  description: 'Press a keyboard shortcut (multiple keys simultaneously). E.g. ["LeftControl","C"] for Ctrl+C.',
+  description: 'Press a keyboard shortcut (multiple keys simultaneously). E.g. ["LeftControl","C"] for Ctrl+C. ' +
+    'REQUIRES pid and hwnd. Verifies foreground window matches both before sending any keystroke.',
   parameters: {
     type: 'object',
     properties: {
-      keys: { type: 'array', items: { type: 'string' }, description: 'Array of key names to press together.' }
+      keys:        { type: 'array', items: { type: 'string' }, description: 'Array of key names to press together.' },
+      pid:         { type: 'number', description: 'REQUIRED. Process ID of the target window.' },
+      hwnd:        { type: 'number', description: 'REQUIRED. Native window handle.' },
+      windowTitle: { type: 'string', description: 'Optional secondary evidence.' }
     },
-    required: ['keys']
+    required: ['keys', 'pid', 'hwnd']
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
-}, async (p) => {
-  const r = await desktop.shortcut(p.keys as string[])
-  return { success: true, data: r }
+}, async (p, ctx) => {
+  const pid  = p.pid  as number | undefined
+  const hwnd = p.hwnd as number | undefined
+  if (!pid)  return { success: false, error: 'computer.shortcut: target_required — pid is mandatory.' }
+  if (!hwnd) return { success: false, error: 'computer.shortcut: target_required — hwnd is mandatory.' }
+  const target = { pid, hwnd, title: p.windowTitle as string | undefined }
+  const guard = await focus.focusGuardedType(
+    target,
+    () => desktop.shortcut(p.keys as string[]).then(() => {}),
+    ctx.abortSignal,
+    'input'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.shortcut blocked: ${guard.reason}` }
+  return { success: true, data: { keys: p.keys } }
 })
 
 reg.register({

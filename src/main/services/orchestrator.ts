@@ -47,9 +47,31 @@ export class OrchestratorService {
 
     // Route to agent loop for multi-step tasks
     if (looksLikeAgentTask(content, lastAssistant)) {
-      const task = CONFIRM_TRIGGERS.test(content.trim()) && lastAssistant
-        ? `${lastAssistant.slice(0, 200)} — User confirmed: proceed.`
-        : content
+      let task: string
+      if (CONFIRM_TRIGGERS.test(content.trim())) {
+        // "Proceed" is only valid when there is an identifiable pending user task:
+        // the last non-confirm user message must itself be agent-routable, AND
+        // the agent must not already be running, done, or stopped from a prior run.
+        // Completed/cancelled tasks cannot be restarted through "proceed".
+        const agentStatus = this.agent.getState().status
+        const pendingUserMsg = [...history].reverse()
+          .find(m => m.role === 'user' && !CONFIRM_TRIGGERS.test(m.content.trim()))
+        const hasPendingTask = pendingUserMsg &&
+          looksLikeAgentTask(pendingUserMsg.content) &&
+          agentStatus === 'idle'
+        if (!hasPendingTask) {
+          const clarify: ChatMessage = {
+            id: nanoid(), role: 'assistant',
+            content: 'What would you like me to proceed with? Please describe the task.',
+            timestamp: Date.now()
+          }
+          this.brain.addMessage(clarify)
+          return clarify
+        }
+        task = pendingUserMsg!.content
+      } else {
+        task = content
+      }
       return this.startAgentTask(task, onTaskComplete)
     }
 
@@ -180,7 +202,14 @@ export class OrchestratorService {
     const bookChunks = this.library.search(userInput, 3)
     const toolSummary = this.registry.toPromptSummary()
 
+    const now = new Date()
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const currentDate = new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz }).format(now)
+    const currentTime = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZone: tz }).format(now)
+
     return `You are Goga, a loyal, intelligent AI assistant and computer operator living on ${settings.userName}'s PC.
+
+Current date and time: ${currentDate}, ${currentTime} (${tz})
 
 Your personality: direct, warm, honest, proactive. You speak like a trusted friend who happens to be brilliant.
 
@@ -269,8 +298,10 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
 
   async executeAction(action: Action): Promise<unknown> {
     this.store.setStatus(action.id, 'running')
-    this.log.info(`Executing approved action: ${action.label}`, { actionId: action.id })
-    AgentLoop.getInstance().resolveApproval(action.id, true)
+    this.log.info(`Executing legacy action: ${action.label}`, { actionId: action.id })
+    // Legacy path only — agent-owned actions are never routed here.
+    // resolveApproval is NOT called: that is the handler's responsibility
+    // for agent-owned actions, and legacy actions have no pending promise.
     try {
       const result = await this.desktop.execute(action.params)
       this.store.setResult(action.id, result)
