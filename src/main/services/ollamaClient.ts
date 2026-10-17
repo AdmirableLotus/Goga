@@ -1,5 +1,6 @@
 import http from 'http'
 import { SettingsService } from './settings'
+import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import type { ToolDefinition } from '../tools/registry'
 
 export interface OllamaMessage {
@@ -100,8 +101,32 @@ export class OllamaClient {
   ): Promise<{ text: string; toolCall?: OllamaToolCall }> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model: this.model, messages, tools, stream: false })
+    const json = await this.requestChat(url, body, undefined, signal)
+    return { text: json.message?.content ?? '', toolCall: json.message?.tool_calls?.[0] }
+  }
+
+  private async postJson(url: URL, _path: string, body: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
+    const json = await this.requestChat(url, body, onToken, signal)
+    return json.message?.content ?? ''
+  }
+
+  private requestChat(url: URL, body: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<OllamaResponse> {
+    const model = JSON.parse(body).model as string
     return new Promise((resolve, reject) => {
       if (signal?.aborted) { reject(new Error('aborted')); return }
+      let settled = false
+      const cleanup = () => signal?.removeEventListener('abort', onAbort)
+      const fail = (err: Error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(err)
+      }
+      const backendError = (status: number, raw: string, reason: string) => {
+        const safeBody = redactDiagnosticText(raw).slice(0, 4096)
+        plannerDiagnostic('ollama.error', { model, status, body: safeBody, reason })
+        return new Error(`Ollama model "${redactDiagnosticText(model)}" (HTTP ${status}): ${reason}: ${safeBody}`)
+      }
       const req = http.request({
         hostname: url.hostname,
         port: this.getPort(url),
@@ -109,55 +134,62 @@ export class OllamaClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
       }, res => {
+        const status = res.statusCode ?? 0
+        const httpFailed = status < 200 || status >= 300
+        let pending = ''
         let raw = ''
-        res.on('data', (chunk: Buffer) => { raw += chunk.toString() })
-        res.on('end', () => {
-          try {
-            const json: OllamaResponse = JSON.parse(raw)
-            const toolCall = json.message?.tool_calls?.[0]
-            resolve({ text: json.message?.content ?? '', toolCall })
-          } catch { resolve({ text: raw }) }
-        })
-        res.on('error', reject)
-      })
-      const onAbort = () => { try { req.destroy(new Error('aborted')) } catch { } }
-      signal?.addEventListener('abort', onAbort, { once: true })
-      req.on('close', () => signal?.removeEventListener('abort', onAbort))
-      req.on('error', reject)
-      req.write(body)
-      req.end()
-    })
-  }
-
-  private postJson(url: URL, path: string, body: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) { reject(new Error('aborted')); return }
-      const req = http.request({
-        hostname: url.hostname,
-        port: this.getPort(url),
-        path,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-      }, res => {
         let full = ''
-        res.on('data', (chunk: Buffer) => {
-          const lines = chunk.toString().split('\n').filter(Boolean)
-          for (const line of lines) {
-            try {
-              const json: OllamaResponse = JSON.parse(line)
-              const token = json.message?.content ?? ''
-              full += token
-              if (onToken && token) onToken(token)
-            } catch { /* partial chunk */ }
+        let last: OllamaResponse | undefined
+        const consume = (line: string) => {
+          if (!line.trim() || settled) return
+          let json: OllamaResponse & { error?: unknown }
+          try { json = JSON.parse(line) } catch {
+            fail(backendError(status, line, 'Invalid backend JSON'))
+            res.destroy()
+            return
+          }
+          if (json.error !== undefined) {
+            fail(backendError(status, line, 'Backend API error'))
+            res.destroy()
+            return
+          }
+          last = json
+          const token = json.message?.content ?? ''
+          full += token
+          if (onToken && token && !signal?.aborted) onToken(token)
+        }
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => {
+          if (settled) return
+          if (httpFailed) { raw += chunk; return }
+          pending += chunk
+          let newline: number
+          while ((newline = pending.indexOf('\n')) >= 0) {
+            consume(pending.slice(0, newline))
+            pending = pending.slice(newline + 1)
           }
         })
-        res.on('end', () => resolve(full))
-        res.on('error', reject)
+        res.on('end', () => {
+          if (settled) return
+          if (httpFailed) { fail(backendError(status, raw, 'Backend HTTP error')); return }
+          consume(pending)
+          if (settled) return
+          if (!last?.message) { fail(backendError(status, pending, 'Backend returned no message')); return }
+          settled = true
+          cleanup()
+          resolve({ ...last, message: { ...last.message, content: full } })
+        })
+        res.on('error', fail)
+        res.on('aborted', () => fail(new Error('Ollama response aborted')))
       })
-      const onAbort = () => { try { req.destroy(new Error('aborted')) } catch { } }
+      const onAbort = () => {
+        fail(new Error('aborted'))
+        req.destroy(new Error('aborted'))
+      }
       signal?.addEventListener('abort', onAbort, { once: true })
-      req.on('close', () => signal?.removeEventListener('abort', onAbort))
-      req.on('error', reject)
+      req.on('error', fail)
+      // Cover cancellation between the initial check and listener registration.
+      if (signal?.aborted) { onAbort(); return }
       req.write(body)
       req.end()
     })
