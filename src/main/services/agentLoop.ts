@@ -12,6 +12,7 @@ import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
 import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
+import { plannerDiagnostic } from './plannerDiagnostics'
 import type { AgentState, AgentStep, AgentStatus, ToolResult } from '../../shared/types'
 
 interface LLMToolCall {
@@ -22,6 +23,8 @@ interface LLMToolCall {
   reply?: string
   needsApproval?: boolean
   approvalReason?: string
+  /** True when the model failed to emit valid JSON after all retries — NOT a genuine task completion. */
+  _planningFailed?: boolean
 }
 
 export class AgentLoop {
@@ -78,6 +81,7 @@ export class AgentLoop {
     this.state = { status: 'running', task, steps: [] }
     this.pushState()
     this.log.info(`Agent started: ${task}`)
+    plannerDiagnostic('agent.enter', { task })
 
     const settings = SettingsService.getInstance().get()
     const maxSteps = settings.agentMaxSteps || 20
@@ -139,6 +143,7 @@ export class AgentLoop {
         // On step 0, check for tasks we can dispatch directly without asking the LLM.
         // This prevents the model from narrating prose instead of emitting JSON.
         const hardcoded = i === 0 ? AgentLoop.getHardcodedFirstStep(task) : null
+        if (i === 0) plannerDiagnostic('planner.hardcodedFirstStep', { result: hardcoded })
         const toolCall = hardcoded ?? await this.planNextStep(
           task, completedSteps, screenshotB64, activeWindow, patternHint, signal
         )
@@ -147,9 +152,15 @@ export class AgentLoop {
 
         // ── DONE ──────────────────────────────────────────────────────────────
         if (toolCall.done) {
-          finalReply = toolCall.reply || 'Task complete.'
-          this.setState({ status: 'done' })
-          this.log.info(`Agent done after ${i + 1} steps`)
+          if (toolCall._planningFailed) {
+            finalReply = toolCall.reply || 'Model failed to produce a valid tool call.'
+            this.setState({ status: 'error', error: 'planning_failed: invalid planner response' })
+            this.log.error(`Agent planning failed: model did not emit valid JSON after retry`)
+          } else {
+            finalReply = toolCall.reply || 'Task complete.'
+            this.setState({ status: 'done' })
+            this.log.info(`Agent done after ${i + 1} steps`)
+          }
           break
         }
 
@@ -169,6 +180,7 @@ export class AgentLoop {
         // self-correct. A second consecutive unknown-tool response hard-stops.
         const toolDef = this.registry.get(toolCall.tool)?.definition
         if (!toolDef) {
+          plannerDiagnostic('validation.rejected', { reason: 'Tool is not registered', tool: toolCall.tool })
           this.log.warn(`Agent requested unregistered tool: ${toolCall.tool}`)
           const validTools = this.registry.list().map(t => t.name).join(', ')
           const errorStep: AgentStep = {
@@ -195,6 +207,7 @@ export class AgentLoop {
 
         // ── RISK CHECK ────────────────────────────────────────────────────────
         const decision = this.auth.evaluateAndLog(toolDef, toolCall.params, authCtx)
+        plannerDiagnostic('validation.authorization', { tool: toolCall.tool, ...decision })
 
         if (!decision.allowed) {
           finalReply = `I can't do that: ${decision.reason}`
@@ -436,8 +449,17 @@ What is the next single action to take?`
 
     try {
       let raw: string
+      if (process.env.GOGA_PLANNER_REQUIRE_LOCAL === '1' && !this.llama.isReady()) {
+        throw new Error('Diagnostic guard: configured local planner is not ready; Ollama fallback forbidden')
+      }
+      plannerDiagnostic('planner.start', {
+        task, step: completedSteps.length,
+        backend: this.llama.isReady() ? 'node-llama-cpp' : 'ollama',
+        model: this.llama.isReady() ? this.llama.getState().modelPath : settings.modelName,
+        systemInstruction: systemPrompt, userInstruction: userContent
+      })
       if (this.llama.isReady()) {
-        raw = await this.llama.chat(messages as { role: 'system' | 'user' | 'assistant'; content: string }[])
+        raw = await this.llama.chat(messages as { role: 'system' | 'user' | 'assistant'; content: string }[], undefined, signal)
       } else {
         // Try native tool calls first (supported by llama3.1+, qwen2.5, etc.)
         const settings = SettingsService.getInstance().get()
@@ -445,13 +467,14 @@ What is the next single action to take?`
         if (useNativeTools) {
           const ollamaTools = this.registry.toOllamaTools()
           const { text, toolCall } = await this.ollama.chatWithTools(messages, ollamaTools, signal)
+          plannerDiagnostic('planner.nativeResponse', { raw: text, toolCall })
           if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
           if (toolCall) {
             return {
               thought: text || `Using ${toolCall.function.name}`,
               tool: toolCall.function.name,
               params: toolCall.function.arguments,
-              done: false
+              done: false as const
             }
           }
           // Model returned text instead of tool call — parse as JSON
@@ -461,33 +484,93 @@ What is the next single action to take?`
         }
       }
       if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
-      return this.parseToolCall(raw)
+
+      plannerDiagnostic('planner.initialResponse', { raw })
+      const parsed = this.parseToolCall(raw)
+
+      // ── MALFORMED RESPONSE DETECTION ─────────────────────────────────────
+      // Any parser/schema rejection gets exactly one corrective attempt,
+      // including malformed text that happens to contain opening braces.
+      const isMalformed = parsed._planningFailed === true
+      if (isMalformed) {
+        console.log('[RETRY] invalid planner output — firing corrective reprompt')
+        this.log.warn('Agent: invalid planner response — retrying with corrective reprompt')
+        if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
+
+        const retryMessages = [
+          ...messages,
+          { role: 'assistant' as const, content: raw },
+          { role: 'user' as const, content: 'Your response was not valid JSON. You MUST respond with only a JSON object — no prose, no explanation. Use exactly this format:\n{"thought": "...", "tool": "tool.name", "params": {...}, "done": false}' }
+        ]
+        plannerDiagnostic('planner.retryInstruction', { instruction: retryMessages[retryMessages.length - 1].content })
+
+        let retryRaw: string
+        if (process.env.GOGA_PLANNER_REQUIRE_LOCAL === '1' && !this.llama.isReady()) {
+          throw new Error('Diagnostic guard: local planner lost readiness before retry; Ollama fallback forbidden')
+        }
+        if (this.llama.isReady()) {
+          retryRaw = await this.llama.chat(retryMessages as { role: 'system' | 'user' | 'assistant'; content: string }[], undefined, signal)
+        } else {
+          retryRaw = await this.ollama.chat(retryMessages, undefined, signal)
+        }
+
+        if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }
+
+        plannerDiagnostic('planner.retryResponse', { raw: retryRaw })
+        const retryParsed = this.parseToolCall(retryRaw)
+        const retryMalformed = retryParsed._planningFailed === true
+        if (retryMalformed) {
+          console.log('[RETRY] corrective reprompt also invalid — failing loud')
+          this.log.error('Agent: model failed to produce valid JSON after corrective reprompt')
+          return {
+            thought: 'Model failed to produce a valid tool call after retry',
+            tool: '', params: {}, done: true,
+            reply: 'I was unable to plan the next step — the model did not return a valid tool call. Please try rephrasing your request.',
+            _planningFailed: true
+          }
+        }
+        return retryParsed
+      }
+
+      return parsed
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       this.log.error(`Agent LLM error: ${msg}`)
-      return { thought: `LLM error: ${msg}`, tool: '', params: {}, done: true, reply: `I couldn't think through the next step: ${msg}` }
+      return { thought: `LLM error: ${msg}`, tool: '', params: {}, done: true, reply: `I couldn't think through the next step: ${msg}`, _planningFailed: true }
     }
   }
 
   private parseToolCall(raw: string): LLMToolCall {
-    // Strip markdown code fences if present
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-    // Find the first JSON object
-    const match = cleaned.match(/\{[\s\S]*\}/)
-    if (!match) {
-      return { thought: 'Could not parse LLM response', tool: '', params: {}, done: true, reply: raw.slice(0, 300) }
+    const reject = (reason: string): LLMToolCall => {
+      plannerDiagnostic('parser.rejected', { reason })
+      return { thought: reason, tool: '', params: {}, done: true,
+        reply: `Unable to plan an executable action: ${reason}`, _planningFailed: true }
     }
+    // Accept a complete JSON object, optionally in a single markdown fence.
+    // Never turn prose, JSON syntax errors or invalid schema into completion.
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1').trim()
     try {
-      const parsed = JSON.parse(match[0]) as LLMToolCall
-      if (!parsed.thought) parsed.thought = 'No thought provided'
-      if (parsed.done) return parsed
-      if (!parsed.tool) return { ...parsed, done: true, reply: parsed.reply ?? 'No tool specified' }
-      if (!parsed.params) parsed.params = {}
-      // Normalise common model aliases to registered tool names
-      parsed.tool = AgentLoop.normaliseToolName(parsed.tool)
-      return parsed
-    } catch {
-      return { thought: 'JSON parse failed', tool: '', params: {}, done: true, reply: raw.slice(0, 300) }
+      const parsed = JSON.parse(cleaned)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return reject('Expected a JSON object')
+      if (parsed.done !== undefined && typeof parsed.done !== 'boolean') return reject('done must be boolean')
+      if (parsed.thought !== undefined && typeof parsed.thought !== 'string') return reject('thought must be a string')
+      if (parsed.reply !== undefined && typeof parsed.reply !== 'string') return reject('reply must be a string')
+      const thought = typeof parsed.thought === 'string' && parsed.thought ? parsed.thought : 'No thought provided'
+      if (parsed.done === true) {
+        if (parsed.tool !== undefined && parsed.tool !== '') return reject('Completion cannot also request a tool action')
+        if (typeof parsed.reply !== 'string' || !parsed.reply.trim()) return reject('Completion must include a nonempty reply')
+        plannerDiagnostic('parser.accepted', { done: true })
+        return { thought, tool: '', params: {}, done: true, reply: parsed.reply }
+      }
+      if (typeof parsed.tool !== 'string' || !parsed.tool.trim()) return reject('Non-terminal JSON response has no valid tool field')
+      if (parsed.params !== undefined && (!parsed.params || typeof parsed.params !== 'object' || Array.isArray(parsed.params))) {
+        return reject('Tool params must be an object')
+      }
+      const tool = AgentLoop.normaliseToolName(parsed.tool)
+      plannerDiagnostic('parser.accepted', { done: false, tool })
+      return { thought, tool, params: parsed.params ?? {}, done: false }
+    } catch (err) {
+      return reject(err instanceof Error ? err.message : String(err))
     }
   }
 
