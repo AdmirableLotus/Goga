@@ -11,6 +11,7 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\bsave\b.{0,60}\b(text|content|file|document|notes?)\b/i,
   /\bsave\b.{0,80}\.txt\b/i,
   /\bwrite\b.{0,40}\b(to|into)\b.{0,40}\b(file|document|txt|notepad)\b/i,
+  /\b(make|create|put)\b.{0,60}\b(file|document|\.txt)\b/i,
   /\b(open|launch|start|show)\b.{0,40}\b(and|then|to)\b/i,
   /\b(open|launch|start|show)\b.{0,40}\b(browser|brave|chrome|firefox|edge|app|terminal|notepad|explorer|spotify|discord|slack|vscode|code)\b/i,
   /\b(show|open|visit|go to|navigate to|browse to)\b.{0,60}https?:\/\//i,
