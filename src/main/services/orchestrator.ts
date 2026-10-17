@@ -13,6 +13,7 @@ import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
 import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS } from './agentRouting'
+import { plannerDiagnostic } from './plannerDiagnostics'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -32,10 +33,13 @@ export class OrchestratorService {
     const content = userMessage.content.trim()
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
+    const vagueWebsite = isVagueOpenWebsite(content)
+    const agentTask = looksLikeAgentTask(content, lastAssistant)
+    plannerDiagnostic('routing.decision', { task: content, vagueWebsite, agentTask, route: vagueWebsite ? 'clarify' : agentTask ? 'agent' : 'chat' })
 
     // "Open a website" with no named site/URL → ask which one instead of
     // starting an agent loop that would flail on an unknown target.
-    if (isVagueOpenWebsite(content)) {
+    if (vagueWebsite) {
       const reply = {
         id: nanoid(), role: 'assistant' as const,
         content: 'Which website would you like me to open? Tell me the site name or URL (for example, "open youtube.com").',
@@ -46,7 +50,7 @@ export class OrchestratorService {
     }
 
     // Route to agent loop for multi-step tasks
-    if (looksLikeAgentTask(content, lastAssistant)) {
+    if (agentTask) {
       let task: string
       if (CONFIRM_TRIGGERS.test(content.trim())) {
         // "Proceed" is only valid when there is an identifiable pending user task:

@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolResult, RiskLevel } from '../../shared/types'
 import type { OllamaTool } from '../services/ollamaClient'
+import { plannerDiagnostic } from '../services/plannerDiagnostics'
 
 export type { ToolDefinition, ToolResult }
 
@@ -52,7 +53,11 @@ export class ToolRegistry {
     const tool = this.tools.get(name)
     if (!tool) return { success: false, error: `Unknown tool: ${name}` }
     try {
-      return await tool.execute(params, context)
+      plannerDiagnostic('registry.dispatch', { tool: name, aborted: context.abortSignal.aborted })
+      const result = await tool.execute(params, context)
+      const data = result.data as { filePath?: string; bytes?: number } | undefined
+      plannerDiagnostic('registry.result', { tool: name, success: result.success, error: result.error, filePath: data?.filePath, bytes: data?.bytes })
+      return result
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }

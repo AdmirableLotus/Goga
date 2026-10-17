@@ -21,6 +21,14 @@ import { LocalLlamaService } from './services/localLlama'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
 // Bootstrap all tool registrations
 import './tools/index'
+import { plannerDiagnostic, loadedModuleIdentity } from './services/plannerDiagnostics'
+
+plannerDiagnostic('build.loaded', {
+  entry: loadedModuleIdentity(__filename),
+  planner: loadedModuleIdentity(require.resolve('./services/agentLoop')),
+  modelWrapper: loadedModuleIdentity(require.resolve('./services/localLlama')),
+  executable: process.execPath, appPath: app.getAppPath(), version: app.getVersion()
+})
 
 let mainWindow: BrowserWindow | null = null
 

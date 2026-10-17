@@ -1,6 +1,7 @@
 import fs from 'fs'
 import { LogService } from './logs'
 import { SettingsService } from './settings'
+import { plannerDiagnostic } from './plannerDiagnostics'
 
 export type LocalModelStatus = 'uninitialized' | 'loading' | 'ready' | 'error'
 
@@ -66,6 +67,7 @@ export class LocalLlamaService {
       this.log.info('LocalLlama: getLlama() — requesting best available GPU backend (auto)')
       this.llama = await getLlama({ gpu: 'auto' })
       this.log.info(`LocalLlama: backend=${this.llama.gpu ?? 'cpu'}`)
+      plannerDiagnostic('model.backend', { backend: this.llama.gpu ?? 'cpu', modelPath, gpuLayers, contextSize })
 
       this.log.info('LocalLlama: loading model weights…')
       this.model = await this.llama.loadModel({ modelPath, gpuLayers })
