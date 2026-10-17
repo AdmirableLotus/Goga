@@ -1,7 +1,8 @@
 import { ToolRegistry } from './registry'
 import type { ToolResult } from './registry'
-import { DesktopAdapter } from '../adapters/desktop'
+import { DesktopAdapter, WindowDiscoveryError } from '../adapters/desktop'
 import { FocusManager } from '../services/focusManager'
+import { plannerDiagnostic } from '../services/plannerDiagnostics'
 
 const desktop = new DesktopAdapter()
 const reg = ToolRegistry.getInstance()
@@ -289,13 +290,34 @@ reg.register({
   `
   const tmp = path2.join(os2.tmpdir(), 'goga-snap-' + Date.now() + '.ps1')
   fs2.writeFileSync(tmp, script, 'utf8')
-  const hwnds: number[] = await new Promise((resolve) => {
+  const hwnds: number[] = await new Promise((resolve, reject) => {
     let out = ''
+    let err = ''
     const proc = sp('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp], { windowsHide: true })
     proc.stdout.on('data', (d: Buffer) => { out += d.toString() })
-    proc.on('close', () => { try { fs2.unlinkSync(tmp) } catch {} ; resolve(out.trim().split(',').map(Number).filter(n => !isNaN(n) && n !== 0)) })
-    proc.on('error', () => { try { fs2.unlinkSync(tmp) } catch {}; resolve([]) })
+    proc.stderr.on('data', (d: Buffer) => { err += d.toString() })
+    proc.on('close', code => {
+      try { fs2.unlinkSync(tmp) } catch {}
+      if (err || code !== 0) {
+        plannerDiagnostic('windows.baseline.enumeration_error', { exitCode: code, stderr: err.trim() })
+        reject(new WindowDiscoveryError('enumeration', err.trim() || `Baseline helper exited with code ${code}`))
+        return
+      }
+      const tokens = out.trim().split(',')
+      if (out.trim() && tokens.some(t => !/^\d+$/.test(t) || !Number.isSafeInteger(Number(t)))) {
+        plannerDiagnostic('windows.baseline.parsing_error', { raw: out })
+        reject(new WindowDiscoveryError('parsing', 'Invalid baseline HWND output'))
+        return
+      }
+      resolve(tokens.map(Number).filter(n => !isNaN(n) && n !== 0))
+    })
+    proc.on('error', e => {
+      try { fs2.unlinkSync(tmp) } catch {}
+      plannerDiagnostic('windows.baseline.enumeration_error', { error: e.message })
+      reject(new WindowDiscoveryError('enumeration', e.message))
+    })
   })
+  plannerDiagnostic('windows.baseline', { hwnds })
   return { success: true, data: { hwnds } }
 })
 

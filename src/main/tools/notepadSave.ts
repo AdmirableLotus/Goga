@@ -19,6 +19,7 @@ import os from 'os'
 import { spawn } from 'child_process'
 import { ToolRegistry } from './registry'
 import { DesktopAdapter } from '../adapters/desktop'
+import { plannerDiagnostic } from '../services/plannerDiagnostics'
 
 // ── Testable seams ────────────────────────────────────────────────────────────
 
@@ -77,10 +78,22 @@ export const desktopOps = {
     _desktop.pressEnterInDialog(hwnd).catch(e => ({ ok: false, reason: String(e) })),
 
   findSaveAsDialog: (ownerHwnd: number, _pid: number): Promise<{ hwnd: number; pid: number; title: string } | null> =>
-    _desktop.findSaveAsInSubtree(ownerHwnd).catch(() => null),
+    _desktop.findSaveAsInSubtree(ownerHwnd),
 
-  setFilenameInSaveAs: (notepadHwnd: number, destPath: string): Promise<{ ok: boolean; actual?: string; reason?: string }> =>
-    _desktop.setFilenameInSaveAs(notepadHwnd, destPath).catch(e => ({ ok: false, reason: String(e) })),
+  /** Like findSaveAsDialog but distinguishes null (closed) from thrown error (PS failure).
+   *  Returns { dialog } when found, { dialog: null } when cleanly absent, throws on error. */
+  findSaveAsDialogOrThrow: (ownerHwnd: number): Promise<{ hwnd: number; pid: number; title: string } | null> =>
+    _desktop.findSaveAsInSubtree(ownerHwnd),
+
+  setFilenameInSaveAs: (notepadHwnd: number, destPath: string, expectedPid: number, signal?: AbortSignal): Promise<{ ok: boolean; actual?: string; reason?: string }> =>
+    _desktop.setFilenameInSaveAs(notepadHwnd, destPath, expectedPid, signal).catch(e => ({ ok: false, reason: String(e) })),
+
+  /** Read the current editable text of the filename field via GetWindowText on its HWND.
+   *  This is what the dialog will actually use when Save is pressed — independent of
+   *  the UIA Name property which may reflect a stale or display value. */
+  readFilenameFromSaveAs: (notepadHwnd: number): Promise<{ ok: boolean; value?: string; reason?: string }> =>
+    _desktop.readFilenameFromSaveAs(notepadHwnd).catch(e => ({ ok: false, reason: String(e) })),
+
 
   findDontSave: (dialogHwnd: number): Promise<import('../../shared/types').AccessibilityNode | null> =>
     _desktop.findElementByHwnd(dialogHwnd, "Don't Save").catch(() => null),
@@ -157,6 +170,7 @@ async function closeNotepad(
   pid: number, hwnd: number
 ): Promise<{ closed: boolean; reason?: string }> {
   if (!hwnd) return { closed: false, reason: 'hwnd=0: ambiguous ownership, window left open' }
+  plannerDiagnostic('notepad.cleanup.start', { hwnd, pid })
   try {
     await desktopOps.postClose(hwnd)
     for (let i = 0; i < 15; i++) {
@@ -205,7 +219,14 @@ reg.register({
   try {
   const signal   = ctx.abortSignal
   const text     = p.text as string
-  const filename = (p.filename as string | undefined) ?? uniqueFilename()
+  const rawFilename = (p.filename as string | undefined) ?? uniqueFilename()
+
+  // Guard: filename must be a bare name, not a path. Reject anything containing
+  // a path separator — the model must not supply an absolute or relative path here.
+  if (rawFilename.includes('/') || rawFilename.includes('\\')) {
+    return { success: false, error: `notepad.saveText: filename parameter must be a bare filename with no path separators, got: "${rawFilename}"` }
+  }
+  const filename = rawFilename
 
   // 0. Resolve Documents dir
   const docsDir  = await docsDirOps.resolve()
@@ -222,10 +243,12 @@ reg.register({
     return { success: false, error: 'notepad.saveText: could not snapshot HWNDs before launch' }
   }
   const baselineHwnds: number[] = (baselineResult.data as { hwnds: number[] }).hwnds
+  plannerDiagnostic('notepad.baseline', { hwnds: baselineHwnds })
 
   // 3. Launch a fresh Notepad
   if (signal?.aborted) return { success: false, error: 'cancelled' }
   const launchResult = await reg.execute('process.start', { executable: 'notepad.exe' }, { abortSignal: signal })
+  plannerDiagnostic('notepad.launch', { result: launchResult })
   if (!launchResult.success) {
     return { success: false, error: `notepad.saveText: failed to launch Notepad: ${launchResult.error}` }
   }
@@ -238,11 +261,13 @@ reg.register({
   }, { abortSignal: signal })
 
   if (!diffResult.success || !diffResult.data) {
+    if (diffResult.error) return { success: false, error: `notepad.saveText: discovery failed: ${diffResult.error}` }
     return { success: false, error: 'notepad.saveText: new Notepad window did not appear — ownership ambiguous, aborting without input' }
   }
 
   const _winRaw = diffResult.data as { hwnd: number | string; pid: number | string; title: string }
   let win = { hwnd: Number(_winRaw.hwnd), pid: Number(_winRaw.pid), title: _winRaw.title }
+  plannerDiagnostic('notepad.discovery.selected', { ...win })
   if (!win.hwnd || !win.pid) {
     return { success: false, error: 'notepad.saveText: windowByTitleDiff returned incomplete identity — aborting' }
   }
@@ -300,7 +325,11 @@ reg.register({
   let dialog: { hwnd: number; pid: number; title: string } | null = null
   for (let attempt = 0; attempt < 8; attempt++) {
     if (signal?.aborted) { await closeNotepad(win.pid, win.hwnd); return { success: false, error: 'cancelled' } }
-    dialog = await desktopOps.findSaveAsDialog(win.hwnd, win.pid)
+    try { dialog = await desktopOps.findSaveAsDialog(win.hwnd, win.pid) }
+    catch (e) {
+      await closeNotepad(win.pid, win.hwnd)
+      return { success: false, error: `notepad.saveText: dialog discovery failed: ${String(e)}` }
+    }
     if (dialog) {
       dialog = { hwnd: Number(dialog.hwnd), pid: Number(dialog.pid), title: dialog.title }
       break
@@ -318,7 +347,7 @@ reg.register({
   // control entirely. Reads back the value and verifies before proceeding.
   if (signal?.aborted) { await closeNotepad(win.pid, win.hwnd); return { success: false, error: 'cancelled' } }
 
-  const pathTypeResult = await desktopOps.setFilenameInSaveAs(win.hwnd, destPath)
+  const pathTypeResult = await desktopOps.setFilenameInSaveAs(win.hwnd, destPath, win.pid, signal)
 
   if (!pathTypeResult.ok) {
     await closeNotepad(win.pid, win.hwnd)
@@ -354,29 +383,62 @@ reg.register({
   }
 
   // 12. Confirm save (Enter) via UIAutomation — no foreground required
-  const enterResult = await desktopOps.pressEnterInDialog(dialog.hwnd)
+  // Pass win.hwnd (Notepad top-level), not dialog.hwnd — pressEnterInDialog
+  // finds the Save As dialog internally via subtree search. The dialog element
+  // may have a WinUI3 island HWND that is not a root child and cannot be
+  // found by NativeWindowHandleProperty at Children scope.
+  const enterResult = await desktopOps.pressEnterInDialog(win.hwnd)
   if (!enterResult.ok) {
     await closeNotepad(win.pid, win.hwnd)
     return { success: false, error: `notepad.saveText: Enter key failed: ${enterResult.reason}` }
   }
 
-  // 13. Wait for dialog to close; check for overwrite prompt after Enter.
-  //     Scoped to dialog.hwnd via findElementByHwnd.
-  await sleepOrAbort(800, signal)
-
-  const replaceAfter = await desktopOps.findButtonInDialog(dialog.hwnd, 'Replace')
-  if (replaceAfter) {
-    await closeNotepad(win.pid, win.hwnd)
-    return { success: false, error: 'notepad.saveText: Replace prompt appeared after Enter — dismissed and aborted' }
+  // 13. Poll for Save As dialog to close (confirms save was accepted, not ignored).
+  //     - signal.aborted  → cancel immediately, no file written
+  //     - Replace button  → overwrite prompt appeared, abort
+  //     - findSaveAsDialogOrThrow throws → PS error, not "dialog closed"; abort
+  //     - returns null    → dialog cleanly gone, save accepted
+  //     - returns dialog  → still open, keep polling
+  //     Timeout 5 s.
+  {
+    const deadline = Date.now() + 5000
+    let dialogGone = false
+    while (Date.now() < deadline) {
+      if (signal?.aborted) { await closeNotepad(win.pid, win.hwnd); return { success: false, error: 'cancelled' } }
+      const replaceAfter = await desktopOps.findButtonInDialog(dialog.hwnd, 'Replace')
+      if (replaceAfter) {
+        await closeNotepad(win.pid, win.hwnd)
+        return { success: false, error: 'notepad.saveText: Replace prompt appeared after Enter — dismissed and aborted' }
+      }
+      let stillOpen: { hwnd: number; pid: number; title: string } | null
+      try {
+        stillOpen = await desktopOps.findSaveAsDialogOrThrow(win.hwnd)
+      } catch (e) {
+        await closeNotepad(win.pid, win.hwnd)
+        return { success: false, error: `notepad.saveText: dialog-close poll error — ${String(e)}` }
+      }
+      if (!stillOpen) { dialogGone = true; break }
+      await sleepOrAbort(300, signal)
+    }
+    if (!dialogGone) {
+      await closeNotepad(win.pid, win.hwnd)
+      return { success: false, error: 'notepad.saveText: Save As dialog did not close after Enter — save may have been rejected' }
+    }
   }
 
-  // 14. Verify file content from disk
-  await sleepOrAbort(400, signal)
-
-  let savedContent: string
-  try {
-    savedContent = fsOps.readFileSync(destPath, 'utf-8')
-  } catch {
+  // 14. Poll for file to appear on disk (up to 3s — filesystem flush after dialog close).
+  let savedContent: string | null = null
+  {
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      if (signal?.aborted) { await closeNotepad(win.pid, win.hwnd); return { success: false, error: 'cancelled' } }
+      if (fsOps.existsSync(destPath)) {
+        try { savedContent = fsOps.readFileSync(destPath, 'utf-8'); break } catch { /* still flushing */ }
+      }
+      await sleepOrAbort(200, signal)
+    }
+  }
+  if (savedContent === null) {
     await closeNotepad(win.pid, win.hwnd)
     return { success: false, error: `notepad.saveText: file not found after save: ${destPath}` }
   }
@@ -392,6 +454,7 @@ reg.register({
 
   // 15. Close the Notepad window via WM_CLOSE + IsWindow poll
   const closeResult = await closeNotepad(win.pid, win.hwnd)
+  plannerDiagnostic('notepad.cleanup.result', { hwnd: win.hwnd, pid: win.pid, ...closeResult })
 
   return {
     success: true,

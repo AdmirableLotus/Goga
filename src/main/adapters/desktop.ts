@@ -2,6 +2,8 @@
 import screenshot from 'screenshot-desktop'
 import { mouse, keyboard, Key, Button, straightTo, Point } from '@nut-tree-fork/nut-js'
 import { spawn } from 'child_process'
+import { plannerDiagnostic } from '../services/plannerDiagnostics'
+import { FILENAME_INPUT_GUARD_PS } from './filenameInputGuard'
 
 export interface ScreenshotResult {
   base64: string
@@ -33,6 +35,13 @@ export interface UIElement {
   height: number
   value?: string
   enabled: boolean
+}
+
+export class WindowDiscoveryError extends Error {
+  constructor(public readonly kind: 'enumeration' | 'parsing', detail: string) {
+    super(`discovery_${kind}_error: ${detail}`)
+    this.name = 'WindowDiscoveryError'
+  }
 }
 
 export class DesktopAdapter implements ToolAdapter {
@@ -227,18 +236,33 @@ export class DesktopAdapter implements ToolAdapter {
     baselineHwnds: Set<number> = new Set()
   ): Promise<{ hwnd: number; pid: number; title: string } | null> {
     const escaped = titleSubstring.replace(/\\/g, '\\\\').replace(/'/g, "''")
+    const diagnostic = { discoveryId: `window-diff-${Date.now()}-${Math.random().toString(36).slice(2)}`, enumerationError: false }
+    const tracing = !!process.env.GOGA_PLANNER_TRACE
+    plannerDiagnostic('windows.discovery.start', { discoveryId: diagnostic.discoveryId, titleSubstring, baselineHwnds: [...baselineHwnds] })
     const ps = `
+      $ErrorActionPreference = 'Stop'
       Add-Type @"
         using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
         public static class WTD {
+          public class Observation { public long hwnd; public int pid; public string title; public string className; public bool visible; public string timestamp; }
+          public static List<Observation> Observations = new List<Observation>();
+          public static bool EnumerationSucceeded;
+          public static int EnumerationError;
           public delegate bool EWP(IntPtr h, IntPtr l);
-          [DllImport("user32.dll")] public static extern bool EnumWindows(EWP cb, IntPtr l);
+          [DllImport("user32.dll", SetLastError=true)] public static extern bool EnumWindows(EWP cb, IntPtr l);
           [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
           [DllImport("user32.dll")] public static extern int  GetWindowThreadProcessId(IntPtr h, out int p);
           [DllImport("user32.dll")] public static extern int  GetWindowText(IntPtr h, StringBuilder s, int n);
+          [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
           public static List<long[]> All() {
             var r = new List<long[]>();
-            EnumWindows((h, l) => {
+            EnumerationSucceeded = EnumWindows((h, l) => {
+              if (${tracing ? 'true' : 'false'}) {
+                int observedPid; GetWindowThreadProcessId(h, out observedPid);
+                var observedTitle = new StringBuilder(512); GetWindowText(h, observedTitle, 512);
+                var observedClass = new StringBuilder(256); GetClassName(h, observedClass, 256);
+                Observations.Add(new Observation { hwnd=h.ToInt64(), pid=observedPid, title=observedTitle.ToString(), className=observedClass.ToString(), visible=IsWindowVisible(h), timestamp=DateTime.UtcNow.ToString("o") });
+              }
               if (IsWindowVisible(h)) {
                 int p2 = 0; GetWindowThreadProcessId(h, out p2);
                 var sb = new StringBuilder(512); GetWindowText(h, sb, 512);
@@ -246,31 +270,73 @@ export class DesktopAdapter implements ToolAdapter {
               }
               return true;
             }, IntPtr.Zero);
+            EnumerationError = EnumerationSucceeded ? 0 : Marshal.GetLastWin32Error();
             return r;
           }
           public static string GetTitle(long hwnd) { var sb = new StringBuilder(512); GetWindowText(new IntPtr(hwnd), sb, 512); return sb.ToString(); }
         }
 "@
       $rows = [WTD]::All()
+      if (-not [WTD]::EnumerationSucceeded) { throw "EnumWindows failed: $([WTD]::EnumerationError)" }
       $out = @()
       foreach ($r in $rows) {
         $title = [WTD]::GetTitle($r[0])
         if ($title -match '${escaped}') { $out += [PSCustomObject]@{ hwnd = $r[0]; pid = [int]$r[1]; title = $title } }
       }
-      if ($out.Count -gt 0) { $out | ConvertTo-Json -Compress } else { Write-Output '[]' }
+      ${tracing ? `
+      $observations = @([WTD]::Observations | ForEach-Object {
+        [PSCustomObject]@{ hwnd=$_.hwnd; pid=$_.pid; title=$_.title; className=$_.className; visible=$_.visible; timestamp=$_.timestamp; titleMatches=($_.title -match '${escaped}') }
+      })
+      @{ matches=@($out); observations=$observations; enumerationSucceeded=[WTD]::EnumerationSucceeded; enumerationError=[WTD]::EnumerationError } | ConvertTo-Json -Depth 6 -Compress
+      ` : `if ($out.Count -gt 0) { $out | ConvertTo-Json -Compress } else { Write-Output '[]' }`}
     `
+    let stage = 'enumeration'
     try {
-      const raw = (await this.runPS(ps)).trim()
-      if (!raw || raw === '[]' || raw === 'null') return null
-      const parsed = JSON.parse(raw)
+      const raw = (await this.runPS(ps, diagnostic)).trim()
+      if (diagnostic.enumerationError) throw new WindowDiscoveryError('enumeration', 'PowerShell enumeration failed')
+      stage = 'parsing'
+      if (!raw) throw new WindowDiscoveryError('parsing', 'Empty enumeration output')
+      if (raw === '[]' || raw === 'null') {
+        plannerDiagnostic('windows.discovery.result', { discoveryId: diagnostic.discoveryId, outcome: diagnostic.enumerationError ? 'enumeration_error' : 'zero_candidates', candidateCount: 0 })
+        return null
+      }
+      let parsed = JSON.parse(raw)
+      if (tracing && parsed && !Array.isArray(parsed) && 'observations' in parsed) {
+        if (parsed.enumerationSucceeded === false) {
+          diagnostic.enumerationError = true
+          plannerDiagnostic('windows.enumeration_error', { discoveryId: diagnostic.discoveryId, win32Error: parsed.enumerationError })
+          throw new WindowDiscoveryError('enumeration', `EnumWindows failed: ${parsed.enumerationError}`)
+        }
+        const observations = parsed.observations.map((w: Record<string, unknown>) => {
+          const reasons: string[] = []
+          if (!w.visible) reasons.push('not_visible')
+          if (!String(w.title ?? '').length) reasons.push('empty_title')
+          if (!w.titleMatches) reasons.push('title_mismatch')
+          if (Number(w.hwnd) === 0) reasons.push('zero_hwnd')
+          if (baselineHwnds.has(Number(w.hwnd))) reasons.push('baseline_hwnd')
+          return { ...w, accepted: reasons.length === 0, rejectionReasons: reasons }
+        })
+        plannerDiagnostic('windows.discovery.candidates', { discoveryId: diagnostic.discoveryId, observations, matches: parsed.matches })
+        parsed = parsed.matches
+      }
       const arr: Array<{ hwnd: number; pid: number; title: string }> =
         (Array.isArray(parsed) ? parsed : [parsed])
-          .map((w: Record<string, unknown>) => ({ hwnd: Number(w.hwnd), pid: Number(w.pid), title: String(w.title ?? '') }))
+          .map((w: Record<string, unknown>) => {
+            if (!w || !Number.isSafeInteger(Number(w.hwnd)) || !Number.isSafeInteger(Number(w.pid)) || Number(w.pid) <= 0 || typeof w.title !== 'string') {
+              throw new WindowDiscoveryError('parsing', 'Invalid window HWND/PID/title output')
+            }
+            return { hwnd: Number(w.hwnd), pid: Number(w.pid), title: w.title }
+          })
           .filter((w: { hwnd: number }) => w.hwnd !== 0 && !baselineHwnds.has(w.hwnd))
       // Exactly one new HWND required — zero or multiple is ambiguous and unsafe
+      plannerDiagnostic('windows.discovery.result', { discoveryId: diagnostic.discoveryId, outcome: diagnostic.enumerationError ? 'enumeration_error' : arr.length === 0 ? 'zero_candidates' : arr.length === 1 ? 'unique_candidate' : 'multiple_candidates', candidateCount: arr.length, candidates: arr })
       if (arr.length !== 1) return null
       return arr[0]
-    } catch { return null }
+    } catch (err) {
+      const kind = err instanceof WindowDiscoveryError ? err.kind : stage as 'enumeration' | 'parsing'
+      plannerDiagnostic(`windows.${kind}_error`, { discoveryId: diagnostic.discoveryId, error: err instanceof Error ? err.message : String(err) })
+      throw err instanceof WindowDiscoveryError ? err : new WindowDiscoveryError(kind, err instanceof Error ? err.message : String(err))
+    }
   }
 
   /** SetForegroundWindow by HWND using the keybd_event trick to bypass
@@ -474,8 +540,8 @@ export class DesktopAdapter implements ToolAdapter {
    * and invoking it — no foreground required.
    */
   async pressEnterInDialog(hwnd: number): Promise<{ ok: boolean; reason?: string }> {
-    // Win11 Notepad Save As: the Save button is a Pane with AutomationId='1' and a real HWND.
-    // Use PostMessage WM_LBUTTONDOWN/UP on its HWND — no foreground required.
+    // Win11 Notepad Save As: Save button is a WinUI3 XAML element — NativeWindowHandle is 0.
+    // InvokePattern is the only reliable method. PostMessage WM_LBUTTONDOWN/UP is fallback only.
     const ps = `
       Add-Type -AssemblyName UIAutomationClient
       Add-Type -AssemblyName UIAutomationTypes
@@ -491,47 +557,42 @@ export class DesktopAdapter implements ToolAdapter {
         [System.Windows.Automation.AutomationElement]::NativeWindowHandleProperty, [int]${hwnd})
       $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $hwndCond)
       if (-not $win) { Write-Output 'err:window_not_found'; exit }
-      # Find Save As dialog window in subtree
+      # Find Save As dialog in subtree
       $dlgCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NameProperty, 'Save as')
       $dlg = $win.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $dlgCond)
       $searchRoot = if ($dlg) { $dlg } else { $win }
-      # Find Save button by AutomationId='1' (Win11 common dialog Save button)
-      $btnCond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1')
-      $btn = $searchRoot.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $btnCond)
-      if ($btn) {
-        $btnHwnd = [IntPtr]$btn.Current.NativeWindowHandle
-        if ($btnHwnd -ne [IntPtr]::Zero) {
-          [BtnClick]::PostMessage($btnHwnd, [BtnClick]::WM_LBUTTONDOWN, [IntPtr]1, [IntPtr]0) | Out-Null
-          [BtnClick]::PostMessage($btnHwnd, [BtnClick]::WM_LBUTTONUP,   [IntPtr]1, [IntPtr]0) | Out-Null
-          Write-Output 'ok:hwnd_click'
-          exit
-        }
-        # No HWND — try InvokePattern
-        try {
-          $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-          Write-Output 'ok:invoke'
-          exit
-        } catch {}
-      }
-      # Fallback: find by name
-      $names = @('Save', 'Open', 'OK')
-      foreach ($n in $names) {
-        $cond = New-Object System.Windows.Automation.PropertyCondition(
-          [System.Windows.Automation.AutomationElement]::NameProperty, $n)
-        $b = $searchRoot.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $cond)
-        if ($b) {
-          try { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Write-Output 'ok:name_invoke'; exit } catch {}
-          $bh = [IntPtr]$b.Current.NativeWindowHandle
-          if ($bh -ne [IntPtr]::Zero) {
-            [BtnClick]::PostMessage($bh, [BtnClick]::WM_LBUTTONDOWN, [IntPtr]1, [IntPtr]0) | Out-Null
-            [BtnClick]::PostMessage($bh, [BtnClick]::WM_LBUTTONUP,   [IntPtr]1, [IntPtr]0) | Out-Null
-            Write-Output 'ok:name_hwnd'; exit
-          }
+      # Find Save button by name='Save' AND AutomationId='1' — avoids matching
+      # file list items which also have AutomationId='1' but appear earlier in the tree.
+      $btn = $null
+      foreach ($el in $searchRoot.FindAll([System.Windows.Automation.TreeScope]::Subtree,
+          [System.Windows.Automation.Condition]::TrueCondition)) {
+        if ($el.Current.Name -eq 'Save' -and $el.Current.AutomationId -eq '1') {
+          $btn = $el; break
         }
       }
-      Write-Output 'err:button_not_found'
+      # Fallback: name='Save' only
+      if (-not $btn) {
+        $nc = New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::NameProperty, 'Save')
+        $btn = $searchRoot.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $nc)
+      }
+      if (-not $btn) { Write-Output 'err:button_not_found'; exit }
+      # Save button is role=Pane with a real HWND — use PostMessage, not InvokePattern
+      $btnHwnd = [IntPtr]$btn.Current.NativeWindowHandle
+      if ($btnHwnd -ne [IntPtr]::Zero) {
+        [BtnClick]::PostMessage($btnHwnd, [BtnClick]::WM_LBUTTONDOWN, [IntPtr]1, [IntPtr]0) | Out-Null
+        [BtnClick]::PostMessage($btnHwnd, [BtnClick]::WM_LBUTTONUP,   [IntPtr]1, [IntPtr]0) | Out-Null
+        Write-Output 'ok:hwnd_click'
+        exit
+      }
+      # HWND is zero — try InvokePattern as last resort
+      try {
+        $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Write-Output 'ok:invoke'
+        exit
+      } catch { $invokeErr = $_ }
+      Write-Output "err:no_hwnd_invoke_failed:$invokeErr"
     `
     try {
       const raw = (await this.runPS(ps)).trim()
@@ -566,18 +627,39 @@ export class DesktopAdapter implements ToolAdapter {
       } catch {
         Write-Output "err:file_invoke_$_"; exit
       }
-      Start-Sleep -Milliseconds 400
-      # Step 2: find 'Save as' in the now-expanded menu (search from root — it may be in a popup)
+      # Wait for menu to fully render before searching for Save as.
+      Start-Sleep -Milliseconds 500
+      # Step 2: find 'Save as' and invoke it. Re-find fresh each attempt.
+      # If InvokePattern throws, check whether the dialog appeared anyway
+      # (Win11 WinUI3 menus sometimes throw but still act on the invoke).
       $saveCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NameProperty, 'Save as')
-      $saveItem = $root.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $saveCond)
-      if (-not $saveItem) { Write-Output 'err:save_as_not_found'; exit }
-      try {
-        $saveItem.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        Write-Output 'ok:invoke'
-      } catch {
-        Write-Output "err:save_as_invoke_$_"
+      $dlgCheckCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, 'Save as')
+      $lastErr = ''
+      $invoked = $false
+      for ($attempt = 0; $attempt -lt 4; $attempt++) {
+        if ($attempt -gt 0) { Start-Sleep -Milliseconds 300 }
+        # Check if dialog already opened (previous attempt may have worked despite throwing)
+        $dlgCheck = $win.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $dlgCheckCond)
+        if ($dlgCheck -and $dlgCheck.Current.ControlType.ProgrammaticName -eq 'ControlType.Window') {
+          $invoked = $true; break
+        }
+        $saveItem = $root.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $saveCond)
+        if (-not $saveItem) { continue }
+        try {
+          $saveItem.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+          $invoked = $true; break
+        } catch { $lastErr = "$_" }
       }
+      # Final dialog check after last attempt
+      if (-not $invoked) {
+        $dlgFinal = $win.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $dlgCheckCond)
+        if ($dlgFinal -and $dlgFinal.Current.ControlType.ProgrammaticName -eq 'ControlType.Window') {
+          $invoked = $true
+        }
+      }
+      if ($invoked) { Write-Output 'ok:invoke' } else { Write-Output "err:save_as_invoke_$lastErr" }
     `
     try {
       const raw = (await this.runPS(ps)).trim()
@@ -654,24 +736,13 @@ export class DesktopAdapter implements ToolAdapter {
     }
   }
 
-  /** Set the filename field in Win11 Notepad's Save As dialog.
-   *  Targets AutomationId='1001' (FileNameControlHost child) on the Notepad
-   *  window HWND directly — never touches the Document text editor.
-   *  Sets via WM_SETTEXT on the field's own HWND, reads back to verify.
-   *  Returns { ok, actual } where actual is the value read back. */
-  async setFilenameInSaveAs(notepadHwnd: number, destPath: string): Promise<{ ok: boolean; actual?: string; reason?: string }> {
-    const escaped = destPath.replace(/\\/g, '\\\\').replace(/'/g, "''")
+  /** Read the current editable text of the filename field in the Save As dialog
+   *  via UIA Name property on the field element (AutomationId='1001', non-Address).
+   *  GetWindowText returns empty on WinUI3 Pane controls; UIA Name is authoritative. */
+  async readFilenameFromSaveAs(notepadHwnd: number): Promise<{ ok: boolean; value?: string; reason?: string }> {
     const ps = `
       Add-Type -AssemblyName UIAutomationClient
       Add-Type -AssemblyName UIAutomationTypes
-      Add-Type @"
-        using System; using System.Runtime.InteropServices;
-        public class STX {
-          public const int WM_SETTEXT = 0x000C;
-          [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-          public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
-        }
-"@
       $root = [System.Windows.Automation.AutomationElement]::RootElement
       $hwndCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NativeWindowHandleProperty, [int]${notepadHwnd})
@@ -681,32 +752,146 @@ export class DesktopAdapter implements ToolAdapter {
         [System.Windows.Automation.AutomationElement]::NameProperty, 'Save as')
       $dlg = $win.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $dlgCond)
       if (-not $dlg) { Write-Output 'err:dialog_not_found'; exit }
-      # Find filename pane by AutomationId='1001', skipping the Address bar
       $aidCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1001')
       $field = $null
       foreach ($el in $dlg.FindAll([System.Windows.Automation.TreeScope]::Subtree, $aidCond)) {
         if ($el.Current.Name -notmatch '^Address') { $field = $el; break }
       }
-      if (-not $field) { Write-Output 'err:filename_field_not_found'; exit }
-      $fieldHwnd = [IntPtr]$field.Current.NativeWindowHandle
-      if ($fieldHwnd -eq [IntPtr]::Zero) { Write-Output 'err:field_hwnd_zero'; exit }
-      # Set via WM_SETTEXT — re-fetch element after set to get fresh Name property
-      [STX]::SendMessage($fieldHwnd, [STX]::WM_SETTEXT, [IntPtr]::Zero, '${escaped}') | Out-Null
-      # Re-fetch the field element to get the updated Name (UIA caches stale values)
-      $field2 = $null
-      foreach ($el2 in $dlg.FindAll([System.Windows.Automation.TreeScope]::Subtree, $aidCond)) {
-        if ($el2.Current.Name -notmatch '^Address') { $field2 = $el2; break }
-      }
-      $actual = if ($field2) { $field2.Current.Name } else { $field.Current.Name }
-      Write-Output "ok:$actual"
+      if (-not $field) { Write-Output 'err:field_not_found'; exit }
+      Write-Output "ok:$($field.Current.Name)"
     `
     try {
       const raw = (await this.runPS(ps)).trim()
       if (!raw.startsWith('ok:')) return { ok: false, reason: raw }
+      return { ok: true, value: raw.slice(3) }
+    } catch (e) { return { ok: false, reason: String(e) } }
+  }
+
+  /** Set the filename field in Win11 Notepad's Save As dialog via synthesized
+   *  keyboard input — the only method that commits to the WinUI3 XAML internal
+   *  state. ValuePattern throws "Unsupported Pattern"; WM_SETTEXT only updates
+   *  the UIA accessibility cache, not the dialog's internal state.
+   *  Brings Notepad to foreground, clicks the field HWND, Ctrl+A, SendKeys path.
+   *  Reads back UIA Name to confirm. Returns { ok, actual }. */
+  async setFilenameInSaveAs(notepadHwnd: number, destPath: string, expectedPid: number, signal?: AbortSignal): Promise<{ ok: boolean; actual?: string; reason?: string }> {
+    if (signal?.aborted) return { ok: false, reason: 'filename_input_cancelled' }
+    if (!notepadHwnd || !expectedPid) return { ok: false, reason: 'filename_input_target_required' }
+    const fs = require('fs') as typeof import('fs')
+    const cancelPath = require('path').join(require('os').tmpdir(), `goga-filename-cancel-${require('crypto').randomUUID()}.flag`) as string
+    const cancel = () => { try { fs.writeFileSync(cancelPath, 'cancelled') } catch { /* runPS also aborts its own helper process */ } }
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) cancel()
+    // Escape SendKeys special chars: + ^ % ~ ( ) { } [ ]
+    const sendKeysEscaped = destPath.replace(/([+^%~(){}\[\]])/g, '{$1}')
+    // Escape single-quotes for PowerShell string literals
+    const psEscaped = destPath.replace(/'/g, "''")
+    const sendKeysPs = sendKeysEscaped.replace(/'/g, "''")
+    const ps = `
+      $ErrorActionPreference = 'Stop'
+      Add-Type -AssemblyName UIAutomationClient
+      Add-Type -AssemblyName UIAutomationTypes
+      Add-Type -AssemblyName System.Windows.Forms
+      Add-Type @"
+        using System; using System.Runtime.InteropServices;
+        public class SKHelper {
+          public const int WM_LBUTTONDOWN = 0x0201; public const int WM_LBUTTONUP = 0x0202;
+          [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+          [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+          [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+          [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+          [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+          [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+          [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+          public static void ForceForeground(IntPtr hwnd) {
+            uint myThread = GetCurrentThreadId();
+            IntPtr fg = GetForegroundWindow();
+            uint fgPid = 0;
+            uint fgThread = GetWindowThreadProcessId(fg, out fgPid);
+            if (fgThread != myThread) AttachThreadInput(myThread, fgThread, true);
+            SetForegroundWindow(hwnd);
+            if (fgThread != myThread) AttachThreadInput(myThread, fgThread, false);
+          }
+        }
+"@
+      ${FILENAME_INPUT_GUARD_PS}
+      function Get-FilenameForeground { [SKHelper]::GetForegroundWindow().ToInt64() }
+      function Get-FilenameOwner([long]$Handle) { [uint32]$owner = 0; [SKHelper]::GetWindowThreadProcessId([IntPtr]$Handle, [ref]$owner) | Out-Null; $owner }
+      function Send-FilenameKeys([string]$Keys) { [System.Windows.Forms.SendKeys]::SendWait($Keys) }
+      $cancelPath = '${cancelPath.replace(/'/g, "''")}'
+      if (Test-Path -LiteralPath $cancelPath) { throw 'filename_input_cancelled' }
+      if ((Get-FilenameOwner ${notepadHwnd}) -ne ${expectedPid}) { throw 'filename_input_target_mismatch' }
+      $root = [System.Windows.Automation.AutomationElement]::RootElement
+      $hwndCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NativeWindowHandleProperty, [int]${notepadHwnd})
+      $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $hwndCond)
+      if (-not $win) { Write-Output 'err:window_not_found'; exit }
+      $dlgCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, 'Save as')
+      $dlg = $win.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $dlgCond)
+      if (-not $dlg) { Write-Output 'err:dialog_not_found'; exit }
+      $aidCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1001')
+      # Filename field is ControlType.Pane with aid=1001 — exclude Address bar (Name starts
+      # with 'Address') and Document control (also aid=1001 in some states, role=Document).
+      $paneType = [System.Windows.Automation.ControlType]::Pane
+      $field = $null
+      foreach ($el in $dlg.FindAll([System.Windows.Automation.TreeScope]::Subtree, $aidCond)) {
+        if ($el.Current.ControlType -eq $paneType -and $el.Current.Name -notmatch '^Address') {
+          $field = $el; break
+        }
+      }
+      if (-not $field) { Write-Output 'err:filename_field_not_found'; exit }
+      $fieldHwnd = [IntPtr]$field.Current.NativeWindowHandle
+      if ($fieldHwnd -eq [IntPtr]::Zero) { Write-Output 'err:field_hwnd_zero'; exit }
+      # Bring Notepad to foreground so SendKeys reaches it
+      [SKHelper]::ForceForeground([IntPtr]${notepadHwnd})
+      Start-Sleep -Milliseconds 200
+      if (Test-Path -LiteralPath $cancelPath) { throw 'filename_input_cancelled' }
+      if ((Get-FilenameForeground) -ne ${notepadHwnd} -or
+          (Get-FilenameOwner ${notepadHwnd}) -ne ${expectedPid} -or
+          (Get-FilenameOwner $fieldHwnd.ToInt64()) -ne ${expectedPid}) { throw 'filename_input_target_mismatch' }
+      # Click the owned field to focus it
+      [SKHelper]::PostMessage($fieldHwnd, [SKHelper]::WM_LBUTTONDOWN, [IntPtr]1, [IntPtr]0) | Out-Null
+      [SKHelper]::PostMessage($fieldHwnd, [SKHelper]::WM_LBUTTONUP,   [IntPtr]1, [IntPtr]0) | Out-Null
+      Start-Sleep -Milliseconds 150
+      try { $field.SetFocus() } catch {}
+      Start-Sleep -Milliseconds 150
+      # Select all existing text and type the path
+      Invoke-GuardedFilenameKeys ${notepadHwnd} ${expectedPid} $cancelPath '^a'
+      Start-Sleep -Milliseconds 100
+      Invoke-GuardedFilenameKeys ${notepadHwnd} ${expectedPid} $cancelPath '${sendKeysPs}'
+      # Wait for SendKeys to finish before polling — path length determines typing time.
+      # 50ms per char is conservative; minimum 500ms regardless.
+      $minWait = [Math]::Max(500, '${psEscaped}'.Length * 50)
+      Start-Sleep -Milliseconds $minWait
+      # Poll UIA Name until it stabilizes or matches (up to 3s additional)
+      $expected = '${psEscaped}'
+      $actual = ''
+      for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
+        $field2 = $null
+        foreach ($el2 in $dlg.FindAll([System.Windows.Automation.TreeScope]::Subtree, $aidCond)) {
+          if ($el2.Current.ControlType -eq $paneType -and $el2.Current.Name -notmatch '^Address') {
+            $field2 = $el2; break
+          }
+        }
+        $actual = if ($field2) { $field2.Current.Name } else { '' }
+        if ($actual -eq $expected) { break }
+      }
+      Write-Output "ok:$actual"
+    `
+    try {
+      const raw = (await this.runPS(ps, undefined, signal)).trim()
+      if (signal?.aborted) return { ok: false, reason: 'filename_input_cancelled' }
+      if (!raw.startsWith('ok:')) return { ok: false, reason: raw }
       const actual = raw.slice(3)
       return { ok: true, actual }
-    } catch (e) { return { ok: false, reason: String(e) } }
+    } catch (e) { return { ok: false, reason: signal?.aborted ? 'filename_input_cancelled' : String(e) } }
+    finally {
+      signal?.removeEventListener('abort', cancel)
+      try { fs.unlinkSync(cancelPath) } catch { /* absent unless cancellation occurred */ }
+    }
   }
 
   /** Find the Save As dialog inside a Notepad window's UIA subtree.
@@ -715,6 +900,7 @@ export class DesktopAdapter implements ToolAdapter {
    *  Returns the dialog element's HWND and the Notepad window's PID. */
   async findSaveAsInSubtree(ownerHwnd: number): Promise<{ hwnd: number; pid: number; title: string } | null> {
     const ps = `
+      $ErrorActionPreference = 'Stop'
       Add-Type -AssemblyName UIAutomationClient
       Add-Type -AssemblyName UIAutomationTypes
       $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -731,16 +917,24 @@ export class DesktopAdapter implements ToolAdapter {
       if ($dlgHwnd -eq 0) { $dlgHwnd = ${ownerHwnd} }
       "$dlgHwnd|$($win.Current.ProcessId)|$($dlg.Current.Name)"
     `
+    let stage: 'enumeration' | 'parsing' = 'enumeration'
     try {
       const raw = (await this.runPS(ps)).trim()
-      if (!raw || raw === 'null') return null
+      stage = 'parsing'
+      if (raw === 'null') return null
+      if (!raw) throw new WindowDiscoveryError('parsing', 'Empty dialog enumeration output')
       const parts = raw.split('|')
       const hwnd = parseInt(parts[0] ?? '0', 10)
       const pid  = parseInt(parts[1] ?? '0', 10)
       const title = parts.slice(2).join('|')
-      if (!hwnd || !pid) return null
+      if (!/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1]) || !hwnd || !pid || parts.length < 3) {
+        throw new WindowDiscoveryError('parsing', 'Invalid dialog HWND/PID output')
+      }
       return { hwnd, pid, title }
-    } catch { return null }
+    } catch (err) {
+      plannerDiagnostic(`windows.${stage}_error`, { ownerHwnd, error: err instanceof Error ? err.message : String(err) })
+      throw err instanceof WindowDiscoveryError ? err : new WindowDiscoveryError(stage, err instanceof Error ? err.message : String(err))
+    }
   }
 
   /** Returns the PID that owns the given HWND via GetWindowThreadProcessId.
@@ -1247,7 +1441,8 @@ export class DesktopAdapter implements ToolAdapter {
     return { found: false, timedOut: true }
   }
 
-  private runPS(script: string): Promise<string> {
+  private runPS(script: string, diagnostic?: { discoveryId: string; enumerationError: boolean }, signal?: AbortSignal): Promise<string> {
+    if (signal?.aborted) return Promise.reject(new Error('cancelled'))
     // Write to a temp .ps1 file â€” EncodedCommand silently drops function
     // definitions in complex scripts; -File does not have this limitation.
     const os  = require('os')  as typeof import('os')
@@ -1263,14 +1458,25 @@ export class DesktopAdapter implements ToolAdapter {
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
         { windowsHide: true, env: { ...process.env } }
       )
+      const abort = () => {
+        proc.kill() // Only this owned PowerShell helper, never the Notepad host.
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
       proc.stdout.on('data', (d: Buffer) => { out += d.toString() })
       proc.stderr.on('data', (d: Buffer) => { err += d.toString() })
       proc.on('close', code => {
+        signal?.removeEventListener('abort', abort)
         try { fss.unlinkSync(tmp) } catch { /* ignore */ }
-        if (code !== 0 && err) reject(new Error(err.trim()))
+        if (diagnostic && (err || code !== 0)) {
+          diagnostic.enumerationError = true
+          plannerDiagnostic('windows.enumeration_error', { discoveryId: diagnostic.discoveryId, exitCode: code, stderr: err.trim() })
+        }
+        if (signal?.aborted) reject(new Error('cancelled'))
+        else if (code !== 0) reject(new Error(err.trim() || `PowerShell helper exited with code ${code}`))
         else resolve(out)
       })
-      proc.on('error', (e) => { try { fss.unlinkSync(tmp) } catch { /* ignore */ }; reject(e) })
+      proc.on('error', (e) => { signal?.removeEventListener('abort', abort); try { fss.unlinkSync(tmp) } catch { /* ignore */ }; reject(e) })
     })
   }
 }
