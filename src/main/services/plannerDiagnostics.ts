@@ -47,3 +47,19 @@ export function loadedModuleIdentity(filename: string) {
     return { path: filename, sha256: createHash('sha256').update(fs.readFileSync(filename)).digest('hex') }
   } catch { return { path: filename, sha256: 'unavailable' } }
 }
+
+// PowerShell emits metadata on stdout even when the helper subsequently fails.
+// Route it through the same opt-in recursive redactor; never write raw PS JSON.
+export function consumePowerShellDiagnostics(output: string): string {
+  return output.replace(/^GOGA_FILENAME_DIAGNOSTIC:([^\r\n]*)(?:\r?\n|$)/gm, (_line, json: string) => {
+    try {
+      const data = JSON.parse(json)
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Expected diagnostic object')
+      plannerDiagnostic('filename.input.check', data)
+    } catch {
+      // JSON parser messages can echo malformed secret-bearing input.
+      plannerDiagnostic('filename.input.diagnostic_error', { error: 'Invalid filename diagnostic record' })
+    }
+    return ''
+  })
+}

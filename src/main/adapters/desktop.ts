@@ -2,7 +2,7 @@
 import screenshot from 'screenshot-desktop'
 import { mouse, keyboard, Key, Button, straightTo, Point } from '@nut-tree-fork/nut-js'
 import { spawn } from 'child_process'
-import { plannerDiagnostic } from '../services/plannerDiagnostics'
+import { plannerDiagnostic, consumePowerShellDiagnostics } from '../services/plannerDiagnostics'
 import { FILENAME_INPUT_GUARD_PS } from './filenameInputGuard'
 
 export interface ScreenshotResult {
@@ -778,6 +778,7 @@ export class DesktopAdapter implements ToolAdapter {
     if (signal?.aborted) return { ok: false, reason: 'filename_input_cancelled' }
     if (!notepadHwnd || !expectedPid) return { ok: false, reason: 'filename_input_target_required' }
     const fs = require('fs') as typeof import('fs')
+    const traceEnabled = !!process.env.GOGA_PLANNER_TRACE && require('path').isAbsolute(process.env.GOGA_PLANNER_TRACE)
     const cancelPath = require('path').join(require('os').tmpdir(), `goga-filename-cancel-${require('crypto').randomUUID()}.flag`) as string
     const cancel = () => { try { fs.writeFileSync(cancelPath, 'cancelled') } catch { /* runPS also aborts its own helper process */ } }
     signal?.addEventListener('abort', cancel, { once: true })
@@ -803,6 +804,11 @@ export class DesktopAdapter implements ToolAdapter {
           [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
           [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
           [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+          [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
+          [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+          [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+          [DllImport("user32.dll")] public static extern bool IsChild(IntPtr parent, IntPtr child);
+          [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
           public static void ForceForeground(IntPtr hwnd) {
             uint myThread = GetCurrentThreadId();
             IntPtr fg = GetForegroundWindow();
@@ -817,10 +823,59 @@ export class DesktopAdapter implements ToolAdapter {
       ${FILENAME_INPUT_GUARD_PS}
       function Get-FilenameForeground { [SKHelper]::GetForegroundWindow().ToInt64() }
       function Get-FilenameOwner([long]$Handle) { [uint32]$owner = 0; [SKHelper]::GetWindowThreadProcessId([IntPtr]$Handle, [ref]$owner) | Out-Null; $owner }
+      function Test-FilenameWindow([long]$Handle) { [SKHelper]::IsWindow([IntPtr]$Handle) }
+      function Test-FilenameChild([long]$Parent, [long]$Child) { [SKHelper]::IsChild([IntPtr]$Parent,[IntPtr]$Child) }
       function Send-FilenameKeys([string]$Keys) { [System.Windows.Forms.SendKeys]::SendWait($Keys) }
+      $script:filenameStage = 'frame_before_lookup'
+      $script:filenameDialog = $null
+      $script:filenameField = $null
+      function Get-FilenameIdentity([long]$Handle) {
+        if ($Handle -eq 0) { return @{ hwnd=0; pid=$null; parentHwnd=$null; ownerHwnd=$null; rootHwnd=$null } }
+        return @{ hwnd=$Handle; pid=(Get-FilenameOwner $Handle); parentHwnd=[SKHelper]::GetParent([IntPtr]$Handle).ToInt64(); ownerHwnd=[SKHelper]::GetWindow([IntPtr]$Handle,4).ToInt64(); rootHwnd=[SKHelper]::GetAncestor([IntPtr]$Handle,2).ToInt64() }
+      }
+      function Test-FilenameOwnerChain([long]$Child, [long]$Ancestor) {
+        if ($Child -eq 0 -or $Ancestor -eq 0) { return $null }
+        $cursor = [IntPtr]$Child
+        for ($depth=0; $depth -lt 32; $depth++) {
+          $cursor = [SKHelper]::GetWindow($cursor,4)
+          if ($cursor -eq [IntPtr]::Zero) { return $false }
+          if ($cursor.ToInt64() -eq $Ancestor) { return $true }
+        }
+        return $false
+      }
+      function Get-FilenameContext {
+        if (${traceEnabled ? '$false' : '$true'}) { return @{} }
+        try {
+        $dialogHwnd = if ($script:filenameDialog) { [long]$script:filenameDialog.Current.NativeWindowHandle } else { 0 }
+        $controlHwnd = if ($script:filenameField) { [long]$script:filenameField.Current.NativeWindowHandle } else { 0 }
+        $foregroundHwnd = Get-FilenameForeground
+        return @{
+          observedAt=[DateTime]::UtcNow.ToString('o')
+          expected=@{ hwnd=${notepadHwnd}; pid=${expectedPid} }
+          frame=(Get-FilenameIdentity ${notepadHwnd})
+          dialog=(Get-FilenameIdentity $dialogHwnd)
+          filenameControl=(Get-FilenameIdentity $controlHwnd)
+          foreground=(Get-FilenameIdentity $foregroundHwnd)
+          dialogUiaPid=$(if ($script:filenameDialog) { $script:filenameDialog.Current.ProcessId } else { $null })
+          filenameControlUiaPid=$(if ($script:filenameField) { $script:filenameField.Current.ProcessId } else { $null })
+          relationships=@{
+            dialogFoundInExactFrameSubtree=($null -ne $script:filenameDialog)
+            filenameFoundInDialogSubtree=($null -ne $script:filenameField)
+            dialogWin32OwnerChainContainsFrame=(Test-FilenameOwnerChain $dialogHwnd ${notepadHwnd})
+            filenameIsChildOfFrame=$(if ($controlHwnd) { [SKHelper]::IsChild([IntPtr]${notepadHwnd},[IntPtr]$controlHwnd) } else { $null })
+            filenameIsChildOfDialog=$(if ($dialogHwnd -and $controlHwnd) { [SKHelper]::IsChild([IntPtr]$dialogHwnd,[IntPtr]$controlHwnd) } else { $null })
+            foregroundWin32OwnerChainContainsFrame=(Test-FilenameOwnerChain $foregroundHwnd ${notepadHwnd})
+          }
+        }
+        } catch { return @{ snapshotError=$_.Exception.Message } }
+      }
+      function Write-FilenameDiagnostic($Data) {
+        ${traceEnabled ? "try { Write-Output ('GOGA_FILENAME_DIAGNOSTIC:' + ($Data | ConvertTo-Json -Depth 10 -Compress)) } catch {}" : '# Trace disabled: no diagnostic output.'}
+      }
       $cancelPath = '${cancelPath.replace(/'/g, "''")}'
       if (Test-Path -LiteralPath $cancelPath) { throw 'filename_input_cancelled' }
-      if ((Get-FilenameOwner ${notepadHwnd}) -ne ${expectedPid}) { throw 'filename_input_target_mismatch' }
+      $framePid = Get-FilenameOwner ${notepadHwnd}
+      Assert-FilenameChecks 'frame_before_lookup' @(@{ reason='frame_pid'; expected=${expectedPid}; observed=$framePid; passed=($framePid -eq ${expectedPid}) }) (Get-FilenameContext)
       $root = [System.Windows.Automation.AutomationElement]::RootElement
       $hwndCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NativeWindowHandleProperty, [int]${notepadHwnd})
@@ -830,6 +885,11 @@ export class DesktopAdapter implements ToolAdapter {
         [System.Windows.Automation.AutomationElement]::NameProperty, 'Save as')
       $dlg = $win.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $dlgCond)
       if (-not $dlg) { Write-Output 'err:dialog_not_found'; exit }
+      $script:filenameDialog = $dlg
+      # Record the exact native dialog: never substitute the frame or another
+      # same-PID window when the dialog has no usable HWND.
+      $dialogHwnd = [long]$dlg.Current.NativeWindowHandle
+      Assert-FilenameChecks 'dialog_found' @(@{reason='dialog_hwnd_nonzero';expected='nonzero';observed=$dialogHwnd;passed=($dialogHwnd -ne 0)}) (Get-FilenameContext)
       $aidCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1001')
       # Filename field is ControlType.Pane with aid=1001 — exclude Address bar (Name starts
@@ -842,15 +902,18 @@ export class DesktopAdapter implements ToolAdapter {
         }
       }
       if (-not $field) { Write-Output 'err:filename_field_not_found'; exit }
+      $script:filenameField = $field
       $fieldHwnd = [IntPtr]$field.Current.NativeWindowHandle
-      if ($fieldHwnd -eq [IntPtr]::Zero) { Write-Output 'err:field_hwnd_zero'; exit }
-      # Bring Notepad to foreground so SendKeys reaches it
-      [SKHelper]::ForceForeground([IntPtr]${notepadHwnd})
+      $controlHwnd = $fieldHwnd.ToInt64()
+      Assert-FilenameChecks 'filename_control_found' @(@{ reason='filename_control_hwnd_nonzero'; expected='nonzero'; observed=$fieldHwnd.ToInt64(); passed=($fieldHwnd -ne [IntPtr]::Zero) }) (Get-FilenameContext)
+      # Validate ownership before focusing the exact recorded Save As dialog.
+      $identity = Get-FilenameInputChecks ${notepadHwnd} $dialogHwnd $controlHwnd ${expectedPid}
+      Assert-FilenameChecks 'before_dialog_focus' $identity.checks (Get-FilenameContext)
+      [SKHelper]::ForceForeground([IntPtr]$dialogHwnd)
       Start-Sleep -Milliseconds 200
       if (Test-Path -LiteralPath $cancelPath) { throw 'filename_input_cancelled' }
-      if ((Get-FilenameForeground) -ne ${notepadHwnd} -or
-          (Get-FilenameOwner ${notepadHwnd}) -ne ${expectedPid} -or
-          (Get-FilenameOwner $fieldHwnd.ToInt64()) -ne ${expectedPid}) { throw 'filename_input_target_mismatch' }
+      $script:filenameStage = 'before_field_click'
+      Assert-FilenameInputTarget ${notepadHwnd} $dialogHwnd $controlHwnd ${expectedPid}
       # Click the owned field to focus it
       [SKHelper]::PostMessage($fieldHwnd, [SKHelper]::WM_LBUTTONDOWN, [IntPtr]1, [IntPtr]0) | Out-Null
       [SKHelper]::PostMessage($fieldHwnd, [SKHelper]::WM_LBUTTONUP,   [IntPtr]1, [IntPtr]0) | Out-Null
@@ -858,9 +921,11 @@ export class DesktopAdapter implements ToolAdapter {
       try { $field.SetFocus() } catch {}
       Start-Sleep -Milliseconds 150
       # Select all existing text and type the path
-      Invoke-GuardedFilenameKeys ${notepadHwnd} ${expectedPid} $cancelPath '^a'
+      $script:filenameStage = 'select_all'
+      Invoke-GuardedFilenameKeys ${notepadHwnd} $dialogHwnd $controlHwnd ${expectedPid} $cancelPath '^a'
       Start-Sleep -Milliseconds 100
-      Invoke-GuardedFilenameKeys ${notepadHwnd} ${expectedPid} $cancelPath '${sendKeysPs}'
+      $script:filenameStage = 'filename_path'
+      Invoke-GuardedFilenameKeys ${notepadHwnd} $dialogHwnd $controlHwnd ${expectedPid} $cancelPath '${sendKeysPs}'
       # Wait for SendKeys to finish before polling — path length determines typing time.
       # 50ms per char is conservative; minimum 500ms regardless.
       $minWait = [Math]::Max(500, '${psEscaped}'.Length * 50)
@@ -882,7 +947,7 @@ export class DesktopAdapter implements ToolAdapter {
       Write-Output "ok:$actual"
     `
     try {
-      const raw = (await this.runPS(ps, undefined, signal)).trim()
+      const raw = (await this.runPS(ps, undefined, signal, true)).trim()
       if (signal?.aborted) return { ok: false, reason: 'filename_input_cancelled' }
       if (!raw.startsWith('ok:')) return { ok: false, reason: raw }
       const actual = raw.slice(3)
@@ -957,8 +1022,9 @@ export class DesktopAdapter implements ToolAdapter {
   }
 
   /** Win32 IsWindow — returns false once the HWND has been destroyed. */
-  async isWindow(hwnd: number): Promise<boolean> {
+  async isWindow(hwnd: number, strict = false): Promise<boolean> {
     const ps = `
+      $ErrorActionPreference = 'Stop'
       Add-Type @"
         using System; using System.Runtime.InteropServices;
         public class IW { [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h); }
@@ -967,24 +1033,30 @@ export class DesktopAdapter implements ToolAdapter {
     `
     try {
       const raw = (await this.runPS(ps)).trim()
+      if (strict && raw !== 'true' && raw !== 'false') throw new Error('Invalid IsWindow output')
       return raw === 'true'
-    } catch { return false }
+    } catch (err) { if (strict) throw err; return false }
   }
 
   /** Win32 PostMessage(hwnd, WM_CLOSE, 0, 0) — unconditional close, does not
    *  require the window to be in the foreground. */
-  async postClose(hwnd: number): Promise<void> {
+  async postClose(hwnd: number): Promise<{ requested: boolean; win32Error: number }> {
     const ps = `
+      $ErrorActionPreference = 'Stop'
       Add-Type @"
         using System; using System.Runtime.InteropServices;
         public class PC {
           public const int WM_CLOSE = 0x0010;
-          [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+          [DllImport("user32.dll", SetLastError=true)] public static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
         }
 "@
-      [PC]::PostMessage([IntPtr]${hwnd}, [PC]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+      $requested = [PC]::PostMessage([IntPtr]${hwnd}, [PC]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero)
+      $nativeError = if ($requested) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+      @{ requested=$requested; win32Error=$nativeError } | ConvertTo-Json -Compress
     `
-    await this.runPS(ps).catch(() => undefined)
+    const result = JSON.parse((await this.runPS(ps)).trim())
+    if (typeof result?.requested !== 'boolean' || !Number.isInteger(result.win32Error)) throw new Error('Invalid close-request output')
+    return result
   }
 
   /**
@@ -1057,10 +1129,12 @@ export class DesktopAdapter implements ToolAdapter {
    */
   async findElementByHwnd(
     hwnd: number,
-    name: string
+    name: string,
+    strict = false
   ): Promise<import('../../shared/types').AccessibilityNode | null> {
     const escapedName = name.replace(/'/g, "''")
     const ps = [
+      "$ErrorActionPreference = 'Stop'",
       'Add-Type -AssemblyName UIAutomationClient',
       'Add-Type -AssemblyName UIAutomationTypes',
       '$root = [System.Windows.Automation.AutomationElement]::RootElement',
@@ -1088,10 +1162,12 @@ export class DesktopAdapter implements ToolAdapter {
     ].join('\n')
     try {
       const raw = (await this.runPS(ps)).trim()
+      if (strict && !raw) throw new Error('Empty scoped dialog-lookup output')
       if (!raw || raw === 'null') return null
       const n = JSON.parse(raw) as Record<string, unknown>
+      if (strict && (!n || Array.isArray(n) || typeof n.name !== 'string' || typeof n.role !== 'string')) throw new Error('Invalid scoped dialog-lookup output')
       return this.mapNode({ ...n, children: [] })
-    } catch { return null }
+    } catch (err) { if (strict) throw err; return null }
   }
 
   async getCursorPos(): Promise<{ x: number; y: number }> {
@@ -1441,7 +1517,7 @@ export class DesktopAdapter implements ToolAdapter {
     return { found: false, timedOut: true }
   }
 
-  private runPS(script: string, diagnostic?: { discoveryId: string; enumerationError: boolean }, signal?: AbortSignal): Promise<string> {
+  private runPS(script: string, diagnostic?: { discoveryId: string; enumerationError: boolean }, signal?: AbortSignal, filenameDiagnostics = false): Promise<string> {
     if (signal?.aborted) return Promise.reject(new Error('cancelled'))
     // Write to a temp .ps1 file â€” EncodedCommand silently drops function
     // definitions in complex scripts; -File does not have this limitation.
@@ -1467,6 +1543,7 @@ export class DesktopAdapter implements ToolAdapter {
       proc.stderr.on('data', (d: Buffer) => { err += d.toString() })
       proc.on('close', code => {
         signal?.removeEventListener('abort', abort)
+        if (filenameDiagnostics) out = consumePowerShellDiagnostics(out)
         try { fss.unlinkSync(tmp) } catch { /* ignore */ }
         if (diagnostic && (err || code !== 0)) {
           diagnostic.enumerationError = true

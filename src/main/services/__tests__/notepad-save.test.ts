@@ -7,7 +7,7 @@
  *      unrelated window has a dialog. Assert zero input on the unrelated dialog.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import path from 'path'
 
 // ── Hoisted mock state ────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ vi.mock('../../adapters/desktop', () => ({
     focusAndGetForeground: vi.fn().mockResolvedValue({ pid: 0, hwnd: 0, title: '' }),
     activeWindowWithHwnd: vi.fn().mockResolvedValue({ pid: 0, hwnd: 0, title: '' }),
     isWindow:             vi.fn().mockResolvedValue(false),
-    postClose:            vi.fn().mockResolvedValue(undefined),
+    postClose:            vi.fn().mockResolvedValue({requested:true,win32Error:0}),
     pidOfHwnd:            vi.fn().mockResolvedValue(0),
     typeIntoHwnd:           vi.fn().mockResolvedValue({ ok: true }),
     saveAsViaMenu:          vi.fn().mockResolvedValue({ ok: true }),
@@ -75,7 +75,9 @@ vi.mock('child_process', () => ({ spawn: vi.fn() }))
 
 // ── Import module under test ──────────────────────────────────────────────────
 
-import { fsOps, docsDirOps, hookOps, desktopOps } from '../../tools/notepadSave'
+import { fsOps, docsDirOps, hookOps, desktopOps, closeOwnedNotepad } from '../../tools/notepadSave'
+import { plannerDiagnostic } from '../plannerDiagnostics'
+vi.mock('../plannerDiagnostics', () => ({plannerDiagnostic:vi.fn()}))
 
 // ── Shared test data ──────────────────────────────────────────────────────────
 
@@ -140,7 +142,7 @@ function setupDefaultMocks(overrides: {
     setFilenameInSaveAs: vi.fn().mockImplementation(async (_hwnd: number, p: string) => { _lastSetPath = p; return { ok: true, actual: p } }),
     readFilenameFromSaveAs: vi.fn().mockImplementation(async (_hwnd: number) => ({ ok: true, value: _lastSetPath })),
     isWindow:           vi.fn().mockResolvedValue(false),
-    postClose:          vi.fn().mockResolvedValue(undefined),
+    postClose:          vi.fn().mockResolvedValue({requested:true,win32Error:0}),
   })
 
   Object.assign(fsOps, {
@@ -173,6 +175,8 @@ beforeEach(() => {
   )
 })
 
+afterEach(() => vi.useRealTimers())
+
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 async function callSaveText(params: Record<string, unknown>, signal?: AbortSignal) {
@@ -188,6 +192,73 @@ async function callSaveText(params: Record<string, unknown>, signal?: AbortSigna
 function destPath(filename: string): string {
   return path.join(FAKE_DOCS, filename)
 }
+
+describe('scoped cleanup diagnostics and errors', () => {
+  async function cleanup() {
+    const pending = closeOwnedNotepad(WIN.pid, WIN.hwnd)
+    await vi.runAllTimersAsync()
+    return pending
+  }
+  beforeEach(() => { setupDefaultMocks(); vi.useFakeTimers() })
+
+  it('records request, polling and final closure on the exact owned HWND', async () => {
+    expect(await cleanup()).toMatchObject({closed:true,finalWindowState:'closed',errors:[]})
+    expect(desktopOps.postClose).toHaveBeenCalledTimes(1)
+    expect(desktopOps.postClose).toHaveBeenCalledWith(WIN.hwnd)
+    expect(plannerDiagnostic).toHaveBeenCalledWith('notepad.cleanup.close_request', expect.objectContaining({hwnd:WIN.hwnd,pid:WIN.pid,requested:true,win32Error:0}))
+    expect(plannerDiagnostic).toHaveBeenCalledWith('notepad.cleanup.poll', expect.objectContaining({hwnd:WIN.hwnd,alive:false}))
+    expect(plannerDiagnostic).toHaveBeenCalledWith('notepad.cleanup.result', expect.objectContaining({closed:true,finalWindowState:'closed'}))
+  })
+  it('preserves rejected close-request and native error rather than claiming closure', async () => {
+    vi.mocked(desktopOps.postClose).mockResolvedValue({requested:false,win32Error:5})
+    vi.mocked(desktopOps.isWindow).mockResolvedValue(true)
+    const result = await cleanup()
+    expect(result).toMatchObject({closed:false,finalWindowState:'open',errors:[{stage:'close_request',error:expect.stringContaining('Win32 error 5')}]})
+    expect(desktopOps.findDontSave).not.toHaveBeenCalled()
+    expect(toolCalls).toEqual([])
+  })
+  it('records lookup errors without falling back to another window or sending N', async () => {
+    vi.mocked(desktopOps.isWindow).mockResolvedValue(true)
+    vi.mocked(desktopOps.findDontSave).mockRejectedValue(new Error('fixture lookup error'))
+    expect(await cleanup()).toMatchObject({closed:false,finalWindowState:'open',errors:[{stage:'dialog_lookup',error:expect.stringContaining('fixture lookup error')}]})
+    expect(desktopOps.findDontSave).toHaveBeenCalledTimes(1)
+    expect(desktopOps.findDontSave).toHaveBeenCalledWith(WIN.hwnd)
+    expect(desktopOps.windowsByPid).not.toHaveBeenCalled()
+    expect(toolCalls).toEqual([])
+    expect(plannerDiagnostic).toHaveBeenCalledWith('notepad.cleanup.error', expect.objectContaining({stage:'dialog_lookup',hwnd:WIN.hwnd}))
+  })
+  it('keeps polling/final-state failures distinct from a closed window', async () => {
+    vi.mocked(desktopOps.isWindow).mockRejectedValue(new Error('fixture poll error'))
+    expect(await cleanup()).toMatchObject({closed:false,finalWindowState:'unknown',errors:[{stage:'closure_poll',error:expect.stringContaining('fixture poll error')},{stage:'final_state',error:expect.stringContaining('fixture poll error')}]})
+  })
+  it('records every absent-dialog poll and the final open state on timeout', async () => {
+    vi.mocked(desktopOps.isWindow).mockResolvedValue(true)
+    expect(await cleanup()).toMatchObject({closed:false,reason:expect.stringContaining('timeout'),finalWindowState:'open'})
+    expect(desktopOps.findDontSave).toHaveBeenCalledTimes(15)
+    expect(vi.mocked(plannerDiagnostic).mock.calls.filter(c=>c[0]==='notepad.cleanup.poll')).toHaveLength(15)
+    expect(desktopOps.postClose).toHaveBeenCalledTimes(1)
+  })
+  it('does not hide a failed exact-window cleanup dismissal', async () => {
+    vi.mocked(desktopOps.isWindow).mockResolvedValue(true)
+    vi.mocked(desktopOps.findDontSave).mockResolvedValue({name:"Don't Save"} as any)
+    toolOverrides.set('computer.key',{success:false,error:'fixture dismissal blocked'})
+    expect(await cleanup()).toMatchObject({closed:false,reason:expect.stringContaining('fixture dismissal blocked'),finalWindowState:'open'})
+    expect(toolCalls).toEqual([{name:'computer.key',params:{key:'N',pid:WIN.pid,hwnd:WIN.hwnd}}])
+  })
+  it('preserves cleanup failure alongside the original filename failure in the tool result', async () => {
+    vi.mocked(desktopOps.setFilenameInSaveAs).mockResolvedValue({ok:false,reason:'filename_input_target_mismatch:foreground_hwnd expected=100 observed=200'})
+    vi.mocked(desktopOps.postClose).mockRejectedValue(new Error('fixture close helper failed'))
+    const pending = callSaveText({text:'x',filename:'fixture-diagnostics.txt'})
+    await vi.runAllTimersAsync()
+    const result = await pending
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('filename_input_target_mismatch:foreground_hwnd expected=100 observed=200')
+    expect(result.error).toContain('fixture close helper failed')
+    expect(result.data).toMatchObject({cleanup:{closed:false,errors:[{stage:'close_request',error:expect.stringContaining('fixture close helper failed')}]}})
+    expect(desktopOps.pressEnterInDialog).not.toHaveBeenCalled()
+    expect(desktopOps.postClose).toHaveBeenCalledTimes(1)
+  })
+})
 
 // ── S1: Successful save ───────────────────────────────────────────────────────
 

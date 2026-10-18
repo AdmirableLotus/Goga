@@ -96,16 +96,16 @@ export const desktopOps = {
 
 
   findDontSave: (dialogHwnd: number): Promise<import('../../shared/types').AccessibilityNode | null> =>
-    _desktop.findElementByHwnd(dialogHwnd, "Don't Save").catch(() => null),
+    _desktop.findElementByHwnd(dialogHwnd, "Don't Save", true),
 
   findButtonInDialog: (dialogHwnd: number, name: string): Promise<import('../../shared/types').AccessibilityNode | null> =>
     _desktop.findElementByHwnd(dialogHwnd, name).catch(() => null),
 
   isWindow: (hwnd: number): Promise<boolean> =>
-    _desktop.isWindow(hwnd).catch(() => false),
+    _desktop.isWindow(hwnd, true),
 
-  postClose: (hwnd: number): Promise<void> =>
-    _desktop.postClose(hwnd).catch(() => undefined),
+  postClose: (hwnd: number): Promise<{ requested: boolean; win32Error: number }> =>
+    _desktop.postClose(hwnd),
 }
 
 export const hookOps: { preEnter: ((signal?: AbortSignal) => Promise<void>) | null } = {
@@ -166,32 +166,66 @@ function abortErr(): Error {
  * Returns { closed: true } on success, { closed: false, reason } on timeout.
  * hwnd=0 means ambiguous ownership — returns immediately without sending input.
  */
-async function closeNotepad(
+export interface NotepadCleanupResult {
+  closed: boolean
+  reason?: string
+  finalWindowState: 'open' | 'closed' | 'unknown'
+  errors: Array<{ stage: string; error: string }>
+}
+
+export async function closeOwnedNotepad(
   pid: number, hwnd: number
-): Promise<{ closed: boolean; reason?: string }> {
-  if (!hwnd) return { closed: false, reason: 'hwnd=0: ambiguous ownership, window left open' }
+): Promise<NotepadCleanupResult> {
+  const errors: NotepadCleanupResult['errors'] = []
+  let stage = 'close_request'
+  const finish = async (closed: boolean, reason?: string): Promise<NotepadCleanupResult> => {
+    let finalWindowState: NotepadCleanupResult['finalWindowState'] = 'unknown'
+    if (hwnd) {
+      try { finalWindowState = await desktopOps.isWindow(hwnd) ? 'open' : 'closed' }
+      catch (err) { errors.push({ stage: 'final_state', error: String(err) }) }
+    }
+    const result: NotepadCleanupResult = {
+      closed: closed && finalWindowState === 'closed' && errors.length === 0,
+      reason, finalWindowState, errors
+    }
+    if (!result.closed && !result.reason) result.reason = `Cleanup final window state: ${finalWindowState}`
+    plannerDiagnostic('notepad.cleanup.result', { hwnd, pid, ...result })
+    return result
+  }
+  if (!hwnd) return finish(false, 'hwnd=0: ambiguous ownership, window left open')
   plannerDiagnostic('notepad.cleanup.start', { hwnd, pid })
   try {
-    await desktopOps.postClose(hwnd)
+    const request = await desktopOps.postClose(hwnd)
+    plannerDiagnostic('notepad.cleanup.close_request', { hwnd, pid, ...request })
+    if (!request.requested) throw new Error(`WM_CLOSE rejected: Win32 error ${request.win32Error}`)
     for (let i = 0; i < 15; i++) {
       await new Promise(r => setTimeout(r, 200))
+      stage = 'closure_poll'
       const alive = await desktopOps.isWindow(hwnd)
-      if (!alive) return { closed: true }
+      plannerDiagnostic('notepad.cleanup.poll', { hwnd, pid, attempt: i + 1, alive })
+      if (!alive) return finish(true)
       // Check for "Don't Save" prompt owned by our window via owner-chain lookup
+      stage = 'dialog_lookup'
       const dontSave = await desktopOps.findDontSave(hwnd)
+      plannerDiagnostic('notepad.cleanup.dialog_lookup', { hwnd, pid, attempt: i + 1, found: !!dontSave })
       if (dontSave) {
-        await reg.execute('computer.key', { key: 'N', pid, hwnd }, { abortSignal: new AbortController().signal }).catch(() => null)
+        stage = 'scoped_dismissal'
+        const dismissal = await reg.execute('computer.key', { key: 'N', pid, hwnd }, { abortSignal: new AbortController().signal })
+        plannerDiagnostic('notepad.cleanup.dismissal', { hwnd, pid, success: dismissal.success, error: dismissal.error })
+        if (!dismissal.success) throw new Error(dismissal.error ?? 'Scoped dismissal failed')
         // Give it one more poll cycle to close
         await new Promise(r => setTimeout(r, 200))
+        stage = 'closure_poll'
         const stillAlive = await desktopOps.isWindow(hwnd)
-        return stillAlive
-          ? { closed: false, reason: 'window still open after Don\'t Save dismissal' }
-          : { closed: true }
+        plannerDiagnostic('notepad.cleanup.poll', { hwnd, pid, afterDismissal: true, alive: stillAlive })
+        return finish(!stillAlive, stillAlive ? 'window still open after Don\'t Save dismissal' : undefined)
       }
     }
-    return { closed: false, reason: `window HWND 0x${hwnd.toString(16)} still open after 3s cleanup timeout` }
-  } catch {
-    return { closed: false, reason: 'cleanup error' }
+    return finish(false, `window HWND 0x${hwnd.toString(16)} still open after 3s cleanup timeout`)
+  } catch (err) {
+    errors.push({ stage, error: String(err) })
+    plannerDiagnostic('notepad.cleanup.error', { hwnd, pid, stage, error: String(err) })
+    return finish(false, `cleanup ${stage} failed: ${String(err)}`)
   }
 }
 
@@ -216,6 +250,13 @@ reg.register({
   },
   riskLevel: 'medium', reversible: true, category: 'computer'
 }, async (p, ctx) => {
+  const cleanupState: { result?: NotepadCleanupResult } = {}
+  const closeNotepad = async (pid: number, hwnd: number) => {
+    const result = await closeOwnedNotepad(pid, hwnd)
+    cleanupState.result = result
+    return result
+  }
+  const runSave = async (): Promise<import('../../shared/types').ToolResult> => {
   try {
   const signal   = ctx.abortSignal
   const text     = p.text as string
@@ -454,7 +495,6 @@ reg.register({
 
   // 15. Close the Notepad window via WM_CLOSE + IsWindow poll
   const closeResult = await closeNotepad(win.pid, win.hwnd)
-  plannerDiagnostic('notepad.cleanup.result', { hwnd: win.hwnd, pid: win.pid, ...closeResult })
 
   return {
     success: true,
@@ -468,6 +508,16 @@ reg.register({
     if (e instanceof Error && e.name === 'AbortError') return { success: false, error: 'cancelled' }
     throw e
   }
+  }
+  const result = await runSave()
+  if (!result.success && cleanupState.result && !cleanupState.result.closed) {
+    return { ...result, error: `${result.error}; cleanup failed: ${cleanupState.result.reason}`,
+      data: { cleanup: cleanupState.result } }
+  }
+  if (cleanupState.result) {
+    return { ...result, data: { ...(result.data as Record<string, unknown> | undefined), cleanup: cleanupState.result } }
+  }
+  return result
 })
 
 export function registerNotepadSaveTools() {
