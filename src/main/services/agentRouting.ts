@@ -30,6 +30,17 @@ export const AGENT_TRIGGERS: RegExp[] = [
 
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
 
+/** A bounded observation route, separate from the general action planner. */
+export function isReadOnlyObservationRequest(message: string): boolean {
+  if (/^\s*(explain\b|how\b|tell me about\b|what is an? active window\b)/i.test(message)) return false
+  // Negative instructions are constraints, not requests to perform those actions.
+  const positive = message.replace(/\b(do not|don't|never|without)\b[^.!?;\n]*/gi, '').split(/[.!?;\n]/).filter(part =>
+    !/^\s*(do not|don't|never|without|no clicking)\b/i.test(part),
+  ).join(' ')
+  if (/\b(click|type|press|close|open|launch|focus|switch|move|drag|scroll|save|write|delete|change|modify|paste|fill|submit|make|create|run|execute)\b/i.test(positive)) return false
+  return /\b(active|focused|foreground)\s+(window|app)\b|\b(which|what)\s+(window|app)\b.{0,50}\b(active|focused|foreground)\b|\b(what|describe|observe|read|inspect|see|look at)\b.{0,50}\b(screen|desktop|window)\b/i.test(positive)
+}
+
 // Phrases that open a question or request an explanation — these stay on the
 // chat path even if they contain words that would otherwise trigger the agent.
 const CONVERSATIONAL_PREFIX = /^\s*(explain|how (do|does|to|can|would|should)|what (is|are|was|were|does|would)|why (is|does|would)|when (is|does|would)|tell me (about|how|what|why)|what'?s the best|should i|can you explain|could you explain)/i

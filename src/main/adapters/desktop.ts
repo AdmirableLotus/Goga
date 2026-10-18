@@ -4,6 +4,7 @@ import { mouse, keyboard, Key, Button, straightTo, Point } from '@nut-tree-fork/
 import { spawn } from 'child_process'
 import { plannerDiagnostic, consumePowerShellDiagnostics } from '../services/plannerDiagnostics'
 import { FILENAME_INPUT_GUARD_PS } from './filenameInputGuard'
+import { readActiveWindowIdentity, readActiveWindowText } from './readOnlyWindowText'
 
 export interface ScreenshotResult {
   base64: string
@@ -439,6 +440,14 @@ export class DesktopAdapter implements ToolAdapter {
     `
     const result = await this.runPS(ps)
     return { focused: result.trim().length > 0, title: result.trim() }
+  }
+
+  async observeWindowIdentity(signal?: AbortSignal) {
+    return readActiveWindowIdentity((script, abort) => this.runPS(script, undefined, abort), signal)
+  }
+
+  async observeWindowText(title: string, pid: number, hwnd: number, signal?: AbortSignal) {
+    return readActiveWindowText((script, abort) => this.runPS(script, undefined, abort), title, pid, hwnd, signal)
   }
 
   async uiElements(windowTitle?: string): Promise<UIElement[]> {

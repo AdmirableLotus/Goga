@@ -8,6 +8,8 @@ export type ToolExecutor = (params: Record<string, unknown>, context: ToolContex
 
 export interface ToolContext {
   abortSignal: AbortSignal
+  /** Fail-closed capability scope for the dedicated observation path. */
+  mode?: 'read-only-observation'
   // Set when agent is in security-research mode
   securityWorkspaceId?: string
 }
@@ -50,6 +52,13 @@ export class ToolRegistry {
   }
 
   async execute(name: string, params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    if (context.mode === 'read-only-observation') {
+      if (name !== 'computer.activeWindow' && name !== 'computer.uiElements') {
+        plannerDiagnostic('registry.blocked', { tool: name, mode: context.mode })
+        return { success: false, error: `read_only_observation: tool ${name} is not allowed` }
+      }
+      if (context.abortSignal.aborted) return { success: false, error: 'cancelled' }
+    }
     const tool = this.tools.get(name)
     if (!tool) return { success: false, error: `Unknown tool: ${name}` }
     try {

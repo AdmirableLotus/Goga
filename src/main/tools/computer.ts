@@ -22,7 +22,10 @@ reg.register({
   description: 'Get the title, owner app, PID and bounds of the currently focused window.',
   parameters: { type: 'object', properties: {} },
   riskLevel: 'low', reversible: true, category: 'computer'
-}, async () => {
+}, async (_p, ctx) => {
+  if (ctx.mode === 'read-only-observation') {
+    return { success: true, data: await desktop.observeWindowIdentity(ctx.abortSignal) }
+  }
   const r = await desktop.activeWindow()
   return { success: true, data: r }
 })
@@ -63,7 +66,11 @@ reg.register({
     }
   },
   riskLevel: 'low', reversible: true, category: 'computer'
-}, async (p) => {
+}, async (p, ctx) => {
+  if (ctx.mode === 'read-only-observation') {
+    const r = await desktop.observeWindowText(p.windowTitle as string, p.expectedPid as number, p.expectedHwnd as number, ctx.abortSignal)
+    return { success: true, data: r }
+  }
   const r = await desktop.uiElements(p.windowTitle as string | undefined)
   return { success: true, data: r }
 })
