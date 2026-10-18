@@ -76,7 +76,8 @@ export function applyMessage(
       ...state,
       finalResponse: msg.content,
       streamingText: '',
-      activityStatus: state.activityStatus === 'stopped' ? 'stopped' : 'completed',
+      activityStatus: state.activityStatus === 'stopped' || state.activityStatus === 'failed'
+        ? state.activityStatus : 'completed',
     },
     lastMsgId: msg.id,
   }
@@ -120,6 +121,8 @@ export function applyAgentState(
     next.loading = false
     next.currentStep = null
     next.activityStatus = state.activityStatus === 'stopped' ? 'stopped' : 'failed'
+  } else if (agentState.status === 'stopped') {
+    return applyStopped(state, agentState.error ?? 'Stopped')
   } else if (agentState.status === 'idle') {
     next.loading = false
     next.currentStep = null

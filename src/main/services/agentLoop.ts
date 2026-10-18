@@ -282,9 +282,14 @@ export class AgentLoop {
               + (d.cleanupWarning ? ` Note: ${d.cleanupWarning}` : '')
             this.setState({ status: 'done' })
             this.log.info('Agent auto-completed: notepad.saveText')
+          } else if (result.error === 'cancelled' || result.error === 'cancelled before save dispatch') {
+            // Match the tool's explicit cancellation results only. In particular,
+            // a cancellation with a cleanup failure must remain an error.
+            finalReply = 'Stopped.'
+            this.setState({ status: 'stopped', error: undefined, currentTool: undefined })
           } else {
             finalReply = `Save failed: ${result.error ?? 'unknown error'}`
-            this.setState({ status: 'error', error: finalReply })
+            this.setState({ status: 'error', error: finalReply, currentTool: undefined })
           }
           break
         }
@@ -337,7 +342,7 @@ export class AgentLoop {
       }
 
       // Save successful task pattern
-      if (completedSteps.length > 0 && this.state.status !== 'error') {
+      if (completedSteps.length > 0 && this.state.status !== 'error' && this.state.status !== 'stopped') {
         const activeWin = await this.desktop.activeWindow().catch(() => ({ owner: '' }))
         this.taskMemory.save_pattern(task, activeWin.owner || 'unknown', completedSteps.map(s => ({
           description: s.thought.slice(0, 100),
