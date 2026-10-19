@@ -31,16 +31,35 @@ export const AGENT_TRIGGERS: RegExp[] = [
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
 
 /** A bounded observation route, separate from the general action planner. */
-export function isReadOnlyObservationRequest(message: string): boolean {
+export function getObservationRoute(message: string): 'observation' | 'clarify' | null {
   // Normalize only the routing view; callers retain the original request text.
   const normalized = message.replace(/\u2019/g, "'")
-  if (/^\s*(explain\b|how\b|tell me about\b|what is an? active window\b)/i.test(normalized)) return false
-  // Negative instructions are constraints, not requests to perform those actions.
-  const positive = normalized.replace(/\b(do not|don't|never|without)\b[^.!?;\n]*/gi, '').split(/[.!?;\n]/).filter(part =>
-    !/^\s*(do not|don't|never|without|no clicking)\b/i.test(part),
-  ).join(' ')
-  if (/\b(click|type|press|close|open|launch|focus|switch|move|drag|scroll|save|write|delete|change|modify|paste|fill|submit|make|create|run|execute)\b/i.test(positive)) return false
-  return /\b(active|focused|foreground)\s+(window|app)\b|\b(which|what)\s+(window|app)\b.{0,50}\b(active|focused|foreground)\b|\b(what|describe|observe|read|inspect|see|look at)\b.{0,50}\b(screen|desktop|window)\b/i.test(positive)
+  if (/^\s*(explain\b|how\b|tell me about\b|what is an? active window\b)/i.test(normalized)) return null
+  // Split contrast/sequence clauses before classifying negative constraints.
+  // In particular, "don't scroll, but open Notepad" retains "open Notepad".
+  const negative = /^\s*(do not|don't|never|without|no clicking)\b/i
+  const clauses = normalized.split(/[.!?;\n]|\b(?:but|then|instead)\b/i)
+    .flatMap(clause => clause.split(/(?=\b(?:do not|don't|never|without|no clicking)\b)/i))
+  const positive = clauses.filter(clause => !negative.test(clause)).join(' ')
+  const observationIndex = positive.search(/\b(active|focused|foreground)\s+(window|app)\b|\b(which|what)\s+(window|app)\b.{0,50}\b(active|focused|foreground)\b|\b(what|describe|observe|read|inspect|see|look at)\b.{0,50}\b(screen|desktop|window)\b/i)
+  if (observationIndex < 0) return null
+  const action = /\b(click|type|press|close|open|launch|focus|switch|move|drag|scroll|save|write|delete|change|modify|paste|fill|submit|make|create|run|execute)\b/i
+  const actionIndex = positive.search(action)
+  // An action-led request keeps the existing action route and its safeguards.
+  // Observation-led mixed requests require clarification, never silent omission.
+  if (actionIndex >= 0) return actionIndex < observationIndex ? null : 'clarify'
+  const ambiguousConstraint = clauses.filter(clause => negative.test(clause)).some(clause => {
+    const remainder = clause.replace(/^\s*(?:do not|don't|never|without|no)\b/i, '')
+      .replace(new RegExp(action.source, 'gi'), '')
+      .replace(/\b(?:clicking|typing|changing|scrolling|interact(?:ing)?|touch(?:ing)?)\b/gi, '')
+      .replace(/\b(?:anything|else|or|and|with|at|all|it)\b/gi, '').replace(/[\s,]/g, '')
+    return remainder.length > 0
+  })
+  return ambiguousConstraint ? 'clarify' : 'observation'
+}
+
+export function isReadOnlyObservationRequest(message: string): boolean {
+  return getObservationRoute(message) === 'observation'
 }
 
 // Phrases that open a question or request an explanation — these stay on the

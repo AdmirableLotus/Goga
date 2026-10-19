@@ -7,7 +7,8 @@ vi.mock('../library', () => ({ LibraryService: { getInstance: () => ({}) } }))
 vi.mock('../actionStore', () => ({ ActionStore: { getInstance: () => ({}) } }))
 vi.mock('../localLlama', () => ({ LocalLlamaService: { getInstance: () => ({ isReady: () => true, chat: boundary.chat }) } }))
 vi.mock('../ollamaClient', () => ({ OllamaClient: vi.fn(() => ({ chat: boundary.ollama })) }))
-vi.mock('../agentLoop', () => ({ AgentLoop: { getInstance: () => ({ run: boundary.agent, runObservation: boundary.observation }) } }))
+vi.mock('../agentLoop', () => ({ AgentLoop: { getInstance: () => ({ run: boundary.agent, runObservation: boundary.observation,
+  getState: () => ({ status: 'done', task: '', steps: [] }) }) } }))
 vi.mock('../focusManager', () => ({ FocusManager: { getInstance: () => ({}) } }))
 vi.mock('../../adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({ activeWindow: boundary.legacyActive, observeWindowIdentity: boundary.active, observeWindowText: boundary.ui, uiElements: boundary.legacyUi })) }))
 vi.mock('../../index', () => ({ getMainWindow: () => null }))
@@ -24,6 +25,35 @@ beforeEach(() => {
   boundary.getHistory.mockReturnValue([{ role: 'assistant', content: 'Old invented terminal description' }])
 })
 describe('real orchestrator and registered observation tools', () => {
+  it.each([
+    "Describe my active window. Don't scroll, but open Notepad.",
+    'Describe my active window. Don\u2019t scroll, but open Notepad.',
+    'Describe my active window. Do not scroll, but open Notepad.',
+    "Describe my active window. Don't scroll and open Notepad.",
+  ])('clarifies mixed/ambiguous requests before any tool, planner, or action: %s', async content => {
+    const dispatch = vi.spyOn(ToolRegistry.getInstance(), 'execute')
+    const result = await new OrchestratorService().process({ id: 'mixed', role: 'user', content, timestamp: 1 })
+    expect(result.content).toContain('Should I only inspect the active window')
+    expect(result.content).toContain('state any action you want separately')
+    expect(boundary.addMessage.mock.calls[0][0].content).toBe(content)
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(boundary.agent).not.toHaveBeenCalled()
+    expect(boundary.observation).not.toHaveBeenCalled()
+    expect(boundary.chat).not.toHaveBeenCalled()
+    expect(boundary.ollama).not.toHaveBeenCalled()
+    expect(boundary.getHistory).not.toHaveBeenCalled()
+  })
+  it('retains the original action-led request and existing AgentLoop dispatch', async () => {
+    const content = 'Open Notepad and describe its window. Do not type anything.'
+    boundary.agent.mockResolvedValue('fixture task result')
+    const dispatch = vi.spyOn(ToolRegistry.getInstance(), 'execute')
+    const completed = vi.fn()
+    await new OrchestratorService().process({ id: 'action', role: 'user', content, timestamp: 1 }, undefined, completed)
+    expect(boundary.agent).toHaveBeenCalledWith(content)
+    expect(boundary.observation).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled() // The router never dispatches an action itself.
+    expect(completed).toHaveBeenCalledOnce()
+  })
   it.each([
     'Tell me which window is active and describe what you can actually observe in it. Do not click, type, or change anything.',
     "What is in my active window? Don't click, type, or change anything.",

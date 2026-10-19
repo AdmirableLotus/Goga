@@ -12,7 +12,7 @@ import { nanoid } from '../utils/nanoid'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest } from './agentRouting'
+import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, getObservationRoute } from './agentRouting'
 import { plannerDiagnostic } from './plannerDiagnostics'
 import { observeScreen, type ObservationMessages } from './screenObservation'
 
@@ -32,7 +32,15 @@ export class OrchestratorService {
     this.brain.addMessage(userMessage)
 
     const content = userMessage.content.trim()
-    if (isReadOnlyObservationRequest(content)) {
+    const observationRoute = getObservationRoute(content)
+    if (observationRoute === 'clarify') {
+      plannerDiagnostic('routing.decision', { task: content, route: 'clarify', reason: 'mixed_or_ambiguous_observation', agentTask: false })
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', timestamp: Date.now(),
+        content: 'Should I only inspect the active window without changing anything? Please state any action you want separately.' }
+      this.brain.addMessage(reply)
+      return reply
+    }
+    if (observationRoute === 'observation') {
       plannerDiagnostic('routing.decision', { task: content, route: 'observation', agentTask: false })
       const result = await this.agent.runObservation(content, (abort, progress) =>
         observeScreen(this.registry, (messages, answerSignal) => this.answerObservation(messages, answerSignal), content, abort, progress), signal)

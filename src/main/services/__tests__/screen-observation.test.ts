@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { isReadOnlyObservationRequest } from '../agentRouting'
+import { getObservationRoute, isReadOnlyObservationRequest, looksLikeAgentTask } from '../agentRouting'
 import { observeScreen } from '../screenObservation'
 import { ToolRegistry, type ToolContext } from '../../tools/registry'
 
@@ -23,6 +23,26 @@ beforeEach(() => {
 })
 
 describe('narrow observation routing', () => {
+  it.each(["Don't", 'Don\u2019t', 'Do not'])('preserves the affirmative clause after %s and requires clarification', constraint => {
+    const mixed = `Describe my active window. ${constraint} scroll, but open Notepad.`
+    expect(looksLikeAgentTask(mixed)).toBe(true)
+    expect(isReadOnlyObservationRequest(mixed)).toBe(false)
+    expect(getObservationRoute(mixed)).toBe('clarify')
+  })
+  it.each([
+    "Describe my active window. Don't scroll and open Notepad.",
+    'Describe my active window without scrolling and open Notepad.',
+    "Describe my active window. Don't scroll, then open Notepad.",
+    "Describe my active window. Don't scroll, instead type hello.",
+    "What is in my active window? Don't click anything and type hello.",
+  ])('clarifies ambiguous/mixed constraints without discarding a clause: %s', content => {
+    expect(getObservationRoute(content)).toBe('clarify')
+    expect(isReadOnlyObservationRequest(content)).toBe(false)
+  })
+  it.each(['Open Notepad and describe its window.', 'make a text file called fixture.txt with content "active window"'])('keeps action-led requests on the existing action classifier: %s', content => {
+    expect(getObservationRoute(content)).toBeNull()
+    expect(looksLikeAgentTask(content)).toBe(true)
+  })
   it.each(["don't", 'don\u2019t', 'Do not'])('routes the acceptance request with %s constraints', constraint => {
     expect(isReadOnlyObservationRequest(`What is in my active window? ${constraint} click, type, or change anything.`)).toBe(true)
   })
