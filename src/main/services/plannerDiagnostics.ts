@@ -2,20 +2,51 @@ import fs from 'fs'
 import path from 'path'
 import { createHash } from 'crypto'
 
+const OMITTED_PAYLOAD = '[OMITTED: unsafe diagnostic payload]'
+
 export function redactDiagnosticText(text: string): string {
     return redactText(text, new WeakSet<object>(), 0)
 }
 
-function redactText(text: string, seen: WeakSet<object>, serializedDepth: number): string {
-    // Raw planner/backend bodies can contain JSON (including JSON inside JSON
-    // strings). Inspect its keys just as we do native diagnostic objects.
+/** Raw/backend bodies are retained only when every record can be sanitized. */
+export function redactDiagnosticPayload(text: string): string {
+    return redactPayload(text, new WeakSet<object>(), 0)
+}
+
+function redactPayload(text: string, seen: WeakSet<object>, serializedDepth: number): string {
+    try { return redactSerialized(text, seen, serializedDepth, true) ?? OMITTED_PAYLOAD }
+    catch { return OMITTED_PAYLOAD }
+}
+
+function redactSerialized(text: string, seen: WeakSet<object>, serializedDepth: number, stringPayloads = false): string | undefined {
+    if (text === OMITTED_PAYLOAD) return text
     if (serializedDepth >= 8) return '[REDACTED: nested JSON limit]'
+    const trimmed = text.trim()
+    const fence = trimmed.match(/^```(jsonl?|ndjson)?\s*([\s\S]*?)\s*```$/i)
+    const content = fence ? fence[2] : trimmed
+    let records: unknown[]
     try {
-      const parsed: unknown = JSON.parse(text)
-      if ((parsed && typeof parsed === 'object') || typeof parsed === 'string') {
-        return JSON.stringify(redactValue(parsed, seen, serializedDepth + 1))
-      }
-    } catch { /* Non-JSON text still receives the existing text redaction. */ }
+      records = [JSON.parse(content)]
+    } catch {
+      // Parse all NDJSON records before retaining any content. A malformed line
+      // must not fall back to a partial regex scrub of a credential-bearing body.
+      const lines = content.split(/\r?\n/).filter(line => line.trim())
+      if (lines.length < 2) return undefined
+      try { records = lines.map(line => JSON.parse(line)) } catch { return undefined }
+    }
+    const redacted = records.map(value => JSON.stringify(
+      stringPayloads && typeof value === 'string' ? redactPayload(value, seen, serializedDepth + 1)
+        : redactValue(value, seen, serializedDepth + 1),
+    )).join('\n')
+    return fence ? '```' + (fence[1] ?? '') + '\n' + redacted + '\n```' : redacted
+}
+
+function redactText(text: string, seen: WeakSet<object>, serializedDepth: number): string {
+    const serialized = redactSerialized(text, seen, serializedDepth)
+    if (serialized !== undefined) return serialized
+    // A malformed structured value can also occur inside an error or nested
+    // diagnostic string. Do not expose its contents through the text fallback.
+    if (/^\s*(?:[\[{]|```)/.test(text)) return OMITTED_PAYLOAD
     let line = text
     for (const [key, value] of Object.entries(process.env)) {
       if (/key|token|secret|password|credential/i.test(key) && value && value.length >= 4) {
@@ -44,7 +75,9 @@ function redactValue(value: unknown, seen: WeakSet<object>, serializedDepth: num
     return Object.fromEntries(Object.entries(value).map(([key, item]) => {
       const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase()
       const secret = /password|passwd|passphrase|secret|token|credential|authorization|cookie|apikey|privatekey|accesskey|sessionkey/.test(normalized)
-      return [key, secret ? '[REDACTED]' : redactValue(item, seen, serializedDepth)]
+      return [key, secret ? '[REDACTED]' :
+        typeof item === 'string' && /^(raw|body)$/.test(normalized)
+          ? redactPayload(item, seen, serializedDepth) : redactValue(item, seen, serializedDepth)]
     }))
   } finally { seen.delete(value) }
 }

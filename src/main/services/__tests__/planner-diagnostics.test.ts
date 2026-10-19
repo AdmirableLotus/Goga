@@ -5,6 +5,94 @@ import path from 'path'
 import { plannerDiagnostic, redactDiagnosticText, redactDiagnosticValue } from '../plannerDiagnostics'
 
 describe('local planner diagnostics', () => {
+  it('uses recursive redaction for fenced JSON and every NDJSON record in actual trace output', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-wrapped-trace-'))
+    const file = path.join(dir, 'trace.jsonl')
+    const previous = process.env.GOGA_PLANNER_TRACE
+    const secretValues = ['fixture-fenced-token', 'fixture-fenced-auth', 'fixture-fenced-cookie', 'fixture-fenced-private']
+    const value = { nested: [{ token: secretValues[0], Authorization: secretValues[1], cookie: secretValues[2],
+      private_key: secretValues[3], label: 'keep-safe-evidence' }] }
+    const json = JSON.stringify(value)
+    const ndjson = json + '\r\n' + JSON.stringify([value]) + '\r\n'
+    const fixtures = ['```json\n' + JSON.stringify(value, null, 2) + '\n```', '```JSON\n' + json + '\n```',
+      '```\n' + json + '\n```', ndjson, '```ndjson\n' + ndjson + '```', '```jsonl\n' + ndjson + '```',
+      JSON.stringify({ nestedText: '```json\n' + json + '\n```', nestedBody: { body: ndjson } })]
+    try {
+      process.env.GOGA_PLANNER_TRACE = file
+      for (const raw of fixtures) plannerDiagnostic('planner.initialResponse', { raw, body: raw, nested: [{ body: raw }] })
+      const written = fs.readFileSync(file, 'utf8')
+      for (const secret of secretValues) expect(written).not.toContain(secret)
+      const records = written.trim().split('\n').map(line => JSON.parse(line))
+      expect(records).toHaveLength(fixtures.length)
+      for (const record of records) {
+        expect(record.raw).toContain('keep-safe-evidence')
+        expect(record.raw).toContain('[REDACTED]')
+        expect(record.body).toBe(record.raw)
+        expect(record.nested[0].body).toBe(record.raw)
+      }
+      const fenced = records[0].raw.replace(/^```json\n|\n```$/g, '')
+      expect(JSON.parse(fenced).nested[0]).toEqual({ token: '[REDACTED]', Authorization: '[REDACTED]',
+        cookie: '[REDACTED]', private_key: '[REDACTED]', label: 'keep-safe-evidence' })
+      expect(records[3].body.split('\n').map((line: string) => JSON.parse(line))).toHaveLength(2)
+    } finally {
+      if (previous === undefined) delete process.env.GOGA_PLANNER_TRACE
+      else process.env.GOGA_PLANNER_TRACE = previous
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+      fs.rmdirSync(dir)
+    }
+  })
+  it('omits unsafe raw/body content, including malformed fenced and NDJSON records, without dropping the event', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-unsafe-trace-'))
+    const file = path.join(dir, 'trace.jsonl')
+    const previous = process.env.GOGA_PLANNER_TRACE
+    const json = JSON.stringify({ nested: [{ token: 'fixture-malformed-token', authorization: 'fixture-malformed-auth', cookie: 'fixture-malformed-cookie' }] })
+    const broken = json.slice(0, -1)
+    const fixtures = [broken, '```json\n' + broken + '\n```', json + '\n' + broken, broken + '\n' + json,
+      '```ndjson\n' + json + '\n' + broken + '\n```', '```json\n' + json,
+      'prefix ' + json + ' suffix', 'token=fixture-malformed-token authorization=fixture-malformed-auth cookie=fixture-malformed-cookie']
+    try {
+      process.env.GOGA_PLANNER_TRACE = file
+      for (const body of fixtures) plannerDiagnostic('unsafe-fixture', { body, raw: body, nested: [{ body }], reason: 'Invalid backend JSON' })
+      const written = fs.readFileSync(file, 'utf8')
+      for (const secret of ['fixture-malformed-token', 'fixture-malformed-auth', 'fixture-malformed-cookie']) expect(written).not.toContain(secret)
+      const records = written.trim().split('\n').map(line => JSON.parse(line))
+      expect(records).toHaveLength(fixtures.length)
+      for (const record of records) {
+        expect(record.body).toBe('[OMITTED: unsafe diagnostic payload]')
+        expect(record.raw).toBe(record.body)
+        expect(record.nested[0].body).toBe(record.body)
+        expect(record.reason).toBe('Invalid backend JSON')
+      }
+    } finally {
+      if (previous === undefined) delete process.env.GOGA_PLANNER_TRACE
+      else process.env.GOGA_PLANNER_TRACE = previous
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+      fs.rmdirSync(dir)
+    }
+  })
+  it('does not let JSON-string encoding bypass omission of unstructured payloads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-encoded-trace-'))
+    const file = path.join(dir, 'trace.jsonl')
+    const previous = process.env.GOGA_PLANNER_TRACE
+    let raw = 'token=fixture-encoded-token authorization=fixture-encoded-auth cookie=fixture-encoded-cookie'
+    try {
+      process.env.GOGA_PLANNER_TRACE = file
+      for (let i = 0; i < 3; i++) {
+        raw = JSON.stringify(raw)
+        plannerDiagnostic('encoded-fixture', { raw, body: raw })
+      }
+      const output = fs.readFileSync(file, 'utf8')
+      for (const secret of ['fixture-encoded-token', 'fixture-encoded-auth', 'fixture-encoded-cookie']) expect(output).not.toContain(secret)
+      const records = output.trim().split('\n').map(line => JSON.parse(line))
+      expect(records).toHaveLength(3)
+      records.forEach(record => expect(record.raw).toContain('[OMITTED: unsafe diagnostic payload]'))
+    } finally {
+      if (previous === undefined) delete process.env.GOGA_PLANNER_TRACE
+      else process.env.GOGA_PLANNER_TRACE = previous
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+      fs.rmdirSync(dir)
+    }
+  })
   it('redacts credential fixtures in serialized raw/body JSON before writing', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-serialized-trace-'))
     const file = path.join(dir, 'trace.log')

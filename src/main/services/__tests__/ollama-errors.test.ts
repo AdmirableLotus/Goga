@@ -78,6 +78,18 @@ describe('Ollama response errors and cancellation', () => {
     }
     expect(String(error)).toContain('[REDACTED]')
   })
+  it.each(['fenced JSON', 'NDJSON', 'malformed NDJSON', 'unstructured body'])('sanitizes %s in surfaced backend errors', async format => {
+    const json = JSON.stringify({ nested: [{ token: 'fixture-wrapped-token', authorization: 'fixture-wrapped-auth', cookie: 'fixture-wrapped-cookie' }] })
+    const body = format === 'fenced JSON' ? '```json\n' + json + '\n```'
+      : format === 'NDJSON' ? json + '\n' + json
+      : format === 'malformed NDJSON' ? json + '\n' + json.slice(0, -1)
+      : 'token=fixture-wrapped-token authorization=fixture-wrapped-auth cookie=fixture-wrapped-cookie'
+    await serve((_req, res) => { res.writeHead(502); res.end(body) })
+    const error = await new OllamaClient().chat([]).catch(error => error as Error)
+    expect(String(error)).toContain('Ollama model "missing-model" (HTTP 502): Backend HTTP error:')
+    for (const secret of ['fixture-wrapped-token', 'fixture-wrapped-auth', 'fixture-wrapped-cookie']) expect(String(error)).not.toContain(secret)
+    expect(String(error)).toContain(format === 'malformed NDJSON' || format === 'unstructured body' ? '[OMITTED: unsafe diagnostic payload]' : '[REDACTED]')
+  })
   it('rejects a null NDJSON frame and emits no subsequent tokens', async () => {
     const tokens: string[] = []
     await serve((_req, res) => res.end('{"message":{"content":"before"}}\nnull\n{"message":{"content":"after"}}\n'))

@@ -1,6 +1,6 @@
 import http from 'http'
 import { SettingsService } from './settings'
-import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
+import { plannerDiagnostic, redactDiagnosticPayload, redactDiagnosticText } from './plannerDiagnostics'
 import type { ToolDefinition } from '../tools/registry'
 
 export interface OllamaMessage {
@@ -127,7 +127,7 @@ export class OllamaClient {
         reject(err)
       }
       const backendError = (status: number, raw: string, reason: string) => {
-        const safeBody = redactDiagnosticText(raw).slice(0, 4096)
+        const safeBody = redactDiagnosticPayload(raw).slice(0, 4096)
         plannerDiagnostic('ollama.error', { model, status, body: safeBody, reason })
         return new Error(`Ollama model "${redactDiagnosticText(model)}" (HTTP ${status}): ${reason}: ${safeBody}`)
       }
