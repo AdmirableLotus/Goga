@@ -37,6 +37,10 @@ describe('Ollama response errors and cancellation', () => {
       await serve((_req, res) => res.end(JSON.stringify({error:'model not found'})))
       await expect(call(new OllamaClient())).rejects.toThrow('HTTP 200): Backend API error')
     })
+    it(`${name}: rejects HTTP-200 null as a backend error instead of throwing outside the promise`, async () => {
+      await serve((_req, res) => res.end('null'))
+      await expect(call(new OllamaClient())).rejects.toThrow('Ollama model "missing-model" (HTTP 200): Invalid backend response: expected an object: null')
+    })
     it(`${name}: preserves cancellation before request`, async () => {
       const requests = vi.fn()
       await serve(requests)
@@ -51,6 +55,35 @@ describe('Ollama response errors and cancellation', () => {
       await expect(call(new OllamaClient(), controller.signal)).rejects.toThrow('aborted')
     })
   }
+  it.each([
+    [], 'unexpected scalar', 7, {}, { message: null }, { message: [] }, { message: { content: 7 } },
+    { message: { content: 'text' }, done: 'yes' },
+    { message: { content: '', tool_calls: [null] } },
+    { message: { content: '', tool_calls: [{ function: { name: 'tool', arguments: null } }] } }
+  ].map(payload => ({ payload })))('rejects an invalid response shape without emitting tokens: %j', async ({ payload }) => {
+    const tokens = vi.fn()
+    await serve((_req, res) => res.end(JSON.stringify(payload)))
+    await expect(new OllamaClient().chat([], tokens)).rejects.toThrow('HTTP 200): Invalid backend response')
+    expect(tokens).not.toHaveBeenCalled()
+  })
+  it('redacts serialized credential JSON in surfaced backend errors', async () => {
+    const body = JSON.stringify({ error: 'model unavailable', nested: [{ token: 'fixture-backend-token',
+      authorization: 'fixture-backend-auth', cookie: 'fixture-backend-cookie' }] })
+    await serve((_req, res) => { res.writeHead(404); res.end(body) })
+    const error = await new OllamaClient().chat([]).catch(error => error as Error)
+    expect(error).toBeInstanceOf(Error)
+    expect(String(error)).toContain('HTTP 404): Backend HTTP error')
+    for (const secret of ['fixture-backend-token', 'fixture-backend-auth', 'fixture-backend-cookie']) {
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(String(error)).toContain('[REDACTED]')
+  })
+  it('rejects a null NDJSON frame and emits no subsequent tokens', async () => {
+    const tokens: string[] = []
+    await serve((_req, res) => res.end('{"message":{"content":"before"}}\nnull\n{"message":{"content":"after"}}\n'))
+    await expect(new OllamaClient().chat([], token => tokens.push(token))).rejects.toThrow('Invalid backend response: expected an object')
+    expect(tokens).toEqual(['before'])
+  })
   it('buffers split NDJSON and surfaces a later streamed API error', async () => {
     const tokens: string[] = []
     await serve((_req, res) => {

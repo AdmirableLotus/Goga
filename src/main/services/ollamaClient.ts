@@ -18,6 +18,10 @@ export interface OllamaToolCall {
   function: { name: string; arguments: Record<string, unknown> }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 // Ollama native tool format (OpenAI-compatible)
 export interface OllamaTool {
   type: 'function'
@@ -142,9 +146,14 @@ export class OllamaClient {
         let last: OllamaResponse | undefined
         const consume = (line: string) => {
           if (!line.trim() || settled) return
-          let json: OllamaResponse & { error?: unknown }
+          let json: unknown
           try { json = JSON.parse(line) } catch {
             fail(backendError(status, line, 'Invalid backend JSON'))
+            res.destroy()
+            return
+          }
+          if (!isRecord(json)) {
+            fail(backendError(status, line, 'Invalid backend response: expected an object'))
             res.destroy()
             return
           }
@@ -153,8 +162,17 @@ export class OllamaClient {
             res.destroy()
             return
           }
-          last = json
-          const token = json.message?.content ?? ''
+          const message = json.message
+          if (!isRecord(message) || typeof message.content !== 'string' ||
+            (json.done !== undefined && typeof json.done !== 'boolean') ||
+            (message.tool_calls !== undefined && (!Array.isArray(message.tool_calls) || message.tool_calls.some(call =>
+              !isRecord(call) || !isRecord(call.function) || typeof call.function.name !== 'string' || !isRecord(call.function.arguments))))) {
+            fail(backendError(status, line, 'Invalid backend response: expected a chat message'))
+            res.destroy()
+            return
+          }
+          last = json as unknown as OllamaResponse
+          const token = message.content
           full += token
           if (onToken && token && !signal?.aborted) onToken(token)
         }
