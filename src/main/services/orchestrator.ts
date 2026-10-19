@@ -12,7 +12,9 @@ import { nanoid } from '../utils/nanoid'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS } from './agentRouting'
+import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, getObservationRoute } from './agentRouting'
+import { plannerDiagnostic } from './plannerDiagnostics'
+import { observeScreen, type ObservationMessages } from './screenObservation'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -30,12 +32,31 @@ export class OrchestratorService {
     this.brain.addMessage(userMessage)
 
     const content = userMessage.content.trim()
+    const observationRoute = getObservationRoute(content)
+    if (observationRoute === 'clarify') {
+      plannerDiagnostic('routing.decision', { task: content, route: 'clarify', reason: 'mixed_or_ambiguous_observation', agentTask: false })
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', timestamp: Date.now(),
+        content: 'Should I only inspect the active window without changing anything? Please state any action you want separately.' }
+      this.brain.addMessage(reply)
+      return reply
+    }
+    if (observationRoute === 'observation') {
+      plannerDiagnostic('routing.decision', { task: content, route: 'observation', agentTask: false })
+      const result = await this.agent.runObservation(content, (abort, progress) =>
+        observeScreen(this.registry, (messages, answerSignal) => this.answerObservation(messages, answerSignal), content, abort, progress), signal)
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: result, timestamp: Date.now() }
+      this.brain.addMessage(reply)
+      return reply
+    }
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
+    const vagueWebsite = isVagueOpenWebsite(content)
+    const agentTask = looksLikeAgentTask(content, lastAssistant)
+    plannerDiagnostic('routing.decision', { task: content, vagueWebsite, agentTask, route: vagueWebsite ? 'clarify' : agentTask ? 'agent' : 'chat' })
 
     // "Open a website" with no named site/URL → ask which one instead of
     // starting an agent loop that would flail on an unknown target.
-    if (isVagueOpenWebsite(content)) {
+    if (vagueWebsite) {
       const reply = {
         id: nanoid(), role: 'assistant' as const,
         content: 'Which website would you like me to open? Tell me the site name or URL (for example, "open youtube.com").',
@@ -46,7 +67,7 @@ export class OrchestratorService {
     }
 
     // Route to agent loop for multi-step tasks
-    if (looksLikeAgentTask(content, lastAssistant)) {
+    if (agentTask) {
       let task: string
       if (CONFIRM_TRIGGERS.test(content.trim())) {
         // "Proceed" is only valid when there is an identifiable pending user task:
@@ -139,6 +160,16 @@ export class OrchestratorService {
     const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: errorMsg, timestamp: Date.now() }
     this.brain.addMessage(reply)
     return reply
+  }
+
+  private async answerObservation(messages: ObservationMessages, signal: AbortSignal): Promise<string> {
+    if (signal.aborted) throw new Error('cancelled')
+    const settings = SettingsService.getInstance().get()
+    if (settings.primaryModel === 'ollama') return this.ollama.chat(messages, undefined, signal)
+    if (!this.llama.isReady() && this.llama.getState().status === 'loading') await this.waitForLlama(30_000)
+    if (signal.aborted) throw new Error('cancelled')
+    if (!this.llama.isReady()) throw new Error('Configured local observation answerer is not ready')
+    return this.llama.chat(messages, undefined, signal)
   }
 
   private waitForLlama(timeoutMs: number): Promise<boolean> {

@@ -117,6 +117,8 @@ export interface AgentState {
   steps: AgentStep[]
   currentTool?: string
   error?: string
+  /** Completed task text, retained with the latest state for UI reopening. */
+  reply?: string
 }
 
 export interface ChatMessage {

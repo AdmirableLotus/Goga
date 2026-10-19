@@ -31,7 +31,7 @@ import { AgentLoop } from '../agentLoop'
 import { TurnDeduplicator, SIDE_EFFECTING_TOOLS, canonicalizeParams } from '../agentResilience'
 import { BrowserAdapter, ShellSessionError, PageClosedError } from '../../adapters/browser'
 import { applyAgentState, INITIAL_ACTIVITY } from '../../../renderer/components/missionUtils'
-import type { AgentState } from '../../../../shared/types'
+import type { AgentState } from '../../../shared/types'
 
 // ── 1. normaliseToolName ──────────────────────────────────────────────────────
 
@@ -709,5 +709,37 @@ describe('agentLoop tool rewrite — browser.open → browser.openExternal on si
   it('browser.openExternal is not rewritten (already correct)', () => {
     // normaliseToolName passes it through unchanged
     expect(AgentLoop.normaliseToolName('browser.openExternal')).toBe('browser.openExternal')
+  })
+})
+
+// ── 17. agentRouting — make/create file routing (regression) ─────────────────
+// Regression for: "make a text file called X in my Documents with the content Y"
+// was silently falling through to the conversational LLM path.
+
+describe('agentRouting — make/create file routing', () => {
+  it('"make a text file called X in my Documents with the content Y" → agent path', () => {
+    expect(looksLikeAgentTask(
+      'make a text file called llm-routing-check-01.txt in my Documents with the content "routing check"'
+    )).toBe(true)
+  })
+  it('"create a file called notes.txt" → agent path', () => {
+    expect(looksLikeAgentTask('create a file called notes.txt')).toBe(true)
+  })
+  it('"put this in a .txt file" → agent path', () => {
+    expect(looksLikeAgentTask('put this in a .txt file')).toBe(true)
+  })
+  it('"make a document with my notes" → agent path', () => {
+    expect(looksLikeAgentTask('make a document with my notes')).toBe(true)
+  })
+
+  // Conversational negatives — must NOT route to agent
+  it('"How do I make a text file?" → chat path', () => {
+    expect(looksLikeAgentTask('How do I make a text file?')).toBe(false)
+  })
+  it('"What is the best way to create a file?" → chat path', () => {
+    expect(looksLikeAgentTask('What is the best way to create a file?')).toBe(false)
+  })
+  it('"Explain how to create a document" → chat path', () => {
+    expect(looksLikeAgentTask('Explain how to create a document')).toBe(false)
   })
 })

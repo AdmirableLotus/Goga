@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolResult, RiskLevel } from '../../shared/types'
 import type { OllamaTool } from '../services/ollamaClient'
+import { plannerDiagnostic } from '../services/plannerDiagnostics'
 
 export type { ToolDefinition, ToolResult }
 
@@ -7,6 +8,8 @@ export type ToolExecutor = (params: Record<string, unknown>, context: ToolContex
 
 export interface ToolContext {
   abortSignal: AbortSignal
+  /** Fail-closed capability scope for the dedicated observation path. */
+  mode?: 'read-only-observation'
   // Set when agent is in security-research mode
   securityWorkspaceId?: string
 }
@@ -49,10 +52,21 @@ export class ToolRegistry {
   }
 
   async execute(name: string, params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    if (context.mode === 'read-only-observation') {
+      if (name !== 'computer.activeWindow' && name !== 'computer.uiElements') {
+        plannerDiagnostic('registry.blocked', { tool: name, mode: context.mode })
+        return { success: false, error: `read_only_observation: tool ${name} is not allowed` }
+      }
+      if (context.abortSignal.aborted) return { success: false, error: 'cancelled' }
+    }
     const tool = this.tools.get(name)
     if (!tool) return { success: false, error: `Unknown tool: ${name}` }
     try {
-      return await tool.execute(params, context)
+      plannerDiagnostic('registry.dispatch', { tool: name, aborted: context.abortSignal.aborted })
+      const result = await tool.execute(params, context)
+      const data = result.data as { filePath?: string; bytes?: number } | undefined
+      plannerDiagnostic('registry.result', { tool: name, success: result.success, error: result.error, filePath: data?.filePath, bytes: data?.bytes })
+      return result
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
