@@ -1534,7 +1534,8 @@ export class DesktopAdapter implements ToolAdapter {
     const fss = require('fs')  as typeof import('fs')
     const path = require('path') as typeof import('path')
     const tmp = path.join(os.tmpdir(), 'goga-ps-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.ps1')
-    fss.writeFileSync(tmp, script, 'utf8')
+    // Windows PowerShell 5.1 treats BOM-less source as ANSI, corrupting Unicode literals.
+    fss.writeFileSync(tmp, '\uFEFF' + script, 'utf8')
     return new Promise((resolve, reject) => {
       let out = ''
       let err = ''
