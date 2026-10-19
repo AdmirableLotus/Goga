@@ -1,9 +1,21 @@
 import type { ToolRegistry, ToolContext } from '../tools/registry'
 import type { WindowTextObservation } from '../adapters/readOnlyWindowText'
+import type { ToolResult } from '../../shared/types'
 import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 
 export type ObservationMessages = { role: 'system' | 'user'; content: string }[]
 type Answerer = (messages: ObservationMessages, signal: AbortSignal) => Promise<string>
+type ObservationTool = 'computer.activeWindow' | 'computer.uiElements'
+export interface ObservationOutcome {
+  status: 'done' | 'error' | 'stopped'
+  reply: string
+  error?: string
+}
+export interface ObservationProgress {
+  toolStarted?(tool: ObservationTool, params: Record<string, unknown>): void
+  toolFinished?(tool: ObservationTool, params: Record<string, unknown>, result: ToolResult): void
+  completed?(outcome: ObservationOutcome): void
+}
 
 function checkCancellation(signal: AbortSignal) {
   if (signal.aborted) throw new Error('cancelled')
@@ -13,11 +25,27 @@ function checkCancellation(signal: AbortSignal) {
 export async function observeScreen(
   registry: ToolRegistry, answer: Answerer, request: string,
   signal: AbortSignal = new AbortController().signal,
+  progress?: ObservationProgress,
 ): Promise<string> {
   const context: ToolContext = Object.freeze({ abortSignal: signal, mode: 'read-only-observation' })
+  const execute = async (tool: ObservationTool, params: Record<string, unknown>) => {
+    progress?.toolStarted?.(tool, params)
+    try {
+      const result = await registry.execute(tool, params, context)
+      progress?.toolFinished?.(tool, params, result)
+      return result
+    } catch (error) {
+      progress?.toolFinished?.(tool, params, { success: false, error: redactDiagnosticText(error instanceof Error ? error.message : String(error)) })
+      throw error
+    }
+  }
+  const finish = (reply: string, status: ObservationOutcome['status'], error?: string) => {
+    progress?.completed?.({ reply, status, error })
+    return reply
+  }
   try {
     checkCancellation(signal)
-    const active = await registry.execute('computer.activeWindow', {}, context)
+    const active = await execute('computer.activeWindow', {})
     checkCancellation(signal)
     if (!active.success) throw new Error(active.error || 'Active-window observation failed')
     const data = active.data as { title: string; owner: string; pid: number; hwnd: number } | undefined
@@ -29,7 +57,7 @@ export async function observeScreen(
     let uiError: string | undefined
     let truncated = false
     try {
-      const ui = await registry.execute('computer.uiElements', { windowTitle: data.title, expectedPid: data.pid, expectedHwnd: data.hwnd }, context)
+      const ui = await execute('computer.uiElements', { windowTitle: data.title, expectedPid: data.pid, expectedHwnd: data.hwnd })
       checkCancellation(signal)
       if (!ui.success) throw new Error(ui.error || 'UI text observation failed')
       const observed = ui.data as WindowTextObservation | undefined
@@ -88,11 +116,11 @@ export async function observeScreen(
     }
     if (answerError) lines.push(`I could not validate the answering model's response: ${answerError}. Reporting retrieved evidence only.`)
     lines.push('No image was analyzed, so I cannot describe visual details.')
-    return lines.join('\n')
+    return finish(lines.join('\n'), uiError || answerError ? 'error' : 'done', uiError || answerError)
   } catch (error) {
-    if (signal.aborted) return 'Stopped.'
+    if (signal.aborted) return finish('Stopped.', 'stopped', 'cancelled')
     const detail = redactDiagnosticText(error instanceof Error ? error.message : String(error))
     plannerDiagnostic('observation.failed', { error: detail })
-    return `I could not observe the active window: ${detail}. No screen description is available.`
+    return finish(`I could not observe the active window: ${detail}. No screen description is available.`, 'error', detail)
   }
 }

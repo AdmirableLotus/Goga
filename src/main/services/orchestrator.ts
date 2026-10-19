@@ -34,7 +34,8 @@ export class OrchestratorService {
     const content = userMessage.content.trim()
     if (isReadOnlyObservationRequest(content)) {
       plannerDiagnostic('routing.decision', { task: content, route: 'observation', agentTask: false })
-      const result = await observeScreen(this.registry, (messages, abort) => this.answerObservation(messages, abort), content, signal)
+      const result = await this.agent.runObservation(content, (abort, progress) =>
+        observeScreen(this.registry, (messages, answerSignal) => this.answerObservation(messages, answerSignal), content, abort, progress), signal)
       const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: result, timestamp: Date.now() }
       this.brain.addMessage(reply)
       return reply

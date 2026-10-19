@@ -106,6 +106,10 @@ export function applyAgentState(
   agentState: AgentState,
 ): ActivityState {
   let next = { ...state }
+  if ((agentState.status === 'done' || agentState.status === 'error') && agentState.reply !== undefined && state.activityStatus !== 'stopped') {
+    next.finalResponse = agentState.reply
+    next.streamingText = ''
+  }
 
   if (agentState.status === 'running') {
     next.loading = true
@@ -184,8 +188,8 @@ export function applySend(state: ActivityState, text: string, turnId: string): A
 // voice:status → 'idle' handler. The audio pipeline has gone idle on the
 // backend (TTS finished). Reconciles a stuck 'running'/'approval' status to a
 // terminal state so the RUNNING badge and Stop button clear.
-// NEVER creates, erases, or finalises a chat message — that is exclusively
-// the job of chat:message. Never overrides a 'stopped' status.
+// NEVER creates, erases, or finalises answer text — that comes from chat:message
+// or a completed task snapshot. Never overrides a 'stopped' status.
 export function applyVoiceIdle(state: ActivityState, agentRunning: boolean): ActivityState {
   if (agentRunning) return state
   if (state.activityStatus !== 'running' && state.activityStatus !== 'approval') return state

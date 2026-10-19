@@ -72,6 +72,7 @@ export default function ActivityPage() {
             {selectedTool ? <p style={styles.detail}>{agent.status === 'waiting-approval' ? 'Last tool' : 'Selected tool'}: <code>{selectedTool}</code></p>
               : agent.status === 'running' && <p style={styles.detail}>Planning next action…</p>}
             {agent.error && <p style={styles.detail}>{agent.error}</p>}
+            {agent.reply && <p aria-label="Task result" style={{ ...styles.detail, whiteSpace: 'pre-wrap' }}>{agent.reply}</p>}
             {agent.steps.length > 0 && (
               <ol aria-label="Tool results" style={{ margin: '12px 0 0', paddingLeft: 20 }}>
                 {agent.steps.map(step => (

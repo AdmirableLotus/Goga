@@ -12,7 +12,8 @@ import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
 import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
-import { plannerDiagnostic } from './plannerDiagnostics'
+import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
+import type { ObservationOutcome, ObservationProgress } from './screenObservation'
 import type { AgentState, AgentStep, AgentStatus, ToolResult } from '../../shared/types'
 
 interface LLMToolCall {
@@ -67,6 +68,53 @@ export class AgentLoop {
       this.pendingApprovals.delete(actionId)
       pending.resolve(approved)
     }
+  }
+
+  /** Publish dedicated read-only work through the same state/step/Stop contracts. */
+  async runObservation(
+    task: string,
+    observe: (signal: AbortSignal, progress: ObservationProgress) => Promise<string>,
+    parentSignal?: AbortSignal,
+  ): Promise<string> {
+    if (this.isRunning()) return `I'm still working on the previous task. Please wait or press Stop first.`
+    const controller = new AbortController()
+    this.abortController = controller
+    const abort = () => controller.abort()
+    parentSignal?.addEventListener('abort', abort, { once: true })
+    if (parentSignal?.aborted) abort()
+    this.state = { status: 'running', task, steps: [] }
+    this.pushState()
+    let outcome: ObservationOutcome | undefined
+    let reply: string
+    try {
+      reply = await observe(controller.signal, {
+        toolStarted: tool => {
+          if (this.abortController === controller && !controller.signal.aborted) this.setState({ currentTool: tool })
+        },
+        toolFinished: (tool, params, result) => {
+          if (this.abortController !== controller) return
+          const step: AgentStep = { index: this.state.steps.length, thought: '', tool, params, result, verified: result.success, timestamp: Date.now() }
+          this.setState({ steps: [...this.state.steps, step], currentTool: undefined })
+          getMainWindow()?.webContents.send('agent:step', step)
+          this.log.info(`Observation tool ${tool}: ${result.success ? 'succeeded' : 'failed'}`)
+        },
+        completed: result => { outcome = result },
+      })
+    } catch (error) {
+      const detail = redactDiagnosticText(error instanceof Error ? error.message : String(error))
+      reply = `Observation failed: ${detail}`
+      outcome = { status: 'error', reply, error: detail }
+    } finally {
+      parentSignal?.removeEventListener('abort', abort)
+    }
+    // A cancelled older read must never overwrite a newer task's state.
+    if (this.abortController !== controller) return reply
+    const stopped = controller.signal.aborted || this.state.status === 'stopped'
+    if (stopped) reply = 'Stopped.'
+    this.setState({ status: stopped ? 'stopped' : outcome?.status ?? 'done', reply, currentTool: undefined,
+      error: stopped ? this.state.error || 'cancelled' : outcome?.error })
+    this.abortController = null
+    return reply
   }
 
   async run(task: string): Promise<string> {
