@@ -32,9 +32,11 @@ export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proc
 
 /** A bounded observation route, separate from the general action planner. */
 export function isReadOnlyObservationRequest(message: string): boolean {
-  if (/^\s*(explain\b|how\b|tell me about\b|what is an? active window\b)/i.test(message)) return false
+  // Normalize only the routing view; callers retain the original request text.
+  const normalized = message.replace(/\u2019/g, "'")
+  if (/^\s*(explain\b|how\b|tell me about\b|what is an? active window\b)/i.test(normalized)) return false
   // Negative instructions are constraints, not requests to perform those actions.
-  const positive = message.replace(/\b(do not|don't|never|without)\b[^.!?;\n]*/gi, '').split(/[.!?;\n]/).filter(part =>
+  const positive = normalized.replace(/\b(do not|don't|never|without)\b[^.!?;\n]*/gi, '').split(/[.!?;\n]/).filter(part =>
     !/^\s*(do not|don't|never|without|no clicking)\b/i.test(part),
   ).join(' ')
   if (/\b(click|type|press|close|open|launch|focus|switch|move|drag|scroll|save|write|delete|change|modify|paste|fill|submit|make|create|run|execute)\b/i.test(positive)) return false

@@ -23,6 +23,15 @@ beforeEach(() => {
 })
 
 describe('narrow observation routing', () => {
+  it.each(["don't", 'don\u2019t', 'Do not'])('routes the acceptance request with %s constraints', constraint => {
+    expect(isReadOnlyObservationRequest(`What is in my active window? ${constraint} click, type, or change anything.`)).toBe(true)
+  })
+  it.each(["Don't", 'Don\u2019t', 'Do not'])('keeps actual actions outside the %s constraint blocked', constraint => {
+    for (const action of ['Click Save', 'Type hello', 'Change the active window', 'Close the active window']) {
+      expect(isReadOnlyObservationRequest(`What is in my active window? ${action}. ${constraint} scroll.`)).toBe(false)
+      expect(isReadOnlyObservationRequest(`What is in my active window? ${constraint} scroll. ${action}.`)).toBe(false)
+    }
+  })
   it.each([request, 'Which window is active?', 'Describe the active window.', "What's on my screen?", 'Read the focused window. Do not type anything.', 'Tell me which window is active, but do not click or type.'])('observes %s', text => {
     expect(isReadOnlyObservationRequest(text)).toBe(true)
   })
@@ -32,7 +41,7 @@ describe('narrow observation routing', () => {
 })
 
 describe('dispatch capability enforcement', () => {
-  it.each(['computer.click', 'computer.type', 'computer.key', 'computer.scroll', 'computer.focusWindow', 'computer.focus.ensure', 'notepad.saveText', 'filesystem.write', 'process.start', 'shell.execute', 'vision.analyze', 'unknown.tool'])('blocks %s at the real registry before its handler runs', async name => {
+  it.each(['computer.click', 'computer.type', 'computer.key', 'computer.scroll', 'computer.focusWindow', 'computer.focus.ensure', 'computer.screenshot', 'computer.activeWindow.extra', 'notepad.saveText', 'filesystem.write', 'process.start', 'shell.execute', 'vision.analyze', 'unknown.tool'])('blocks %s at the real registry before its handler runs', async name => {
     const mutation = vi.fn().mockResolvedValue({ success: true })
     register(name, mutation)
     expect(await registry.execute(name, {}, { abortSignal: new AbortController().signal, mode: 'read-only-observation' })).toMatchObject({ success: false, error: expect.stringContaining('not allowed') })

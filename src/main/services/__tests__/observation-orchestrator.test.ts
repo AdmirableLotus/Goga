@@ -23,8 +23,17 @@ beforeEach(() => {
   boundary.getHistory.mockReturnValue([{ role: 'assistant', content: 'Old invented terminal description' }])
 })
 describe('real orchestrator and registered observation tools', () => {
-  it('routes the exact request to real read-only tool handlers, then passes live data rather than history', async () => {
-    const result = await new OrchestratorService().process({ id: 'request', role: 'user', content: 'Tell me which window is active and describe what you can actually observe in it. Do not click, type, or change anything.', timestamp: 1 })
+  it.each([
+    'Tell me which window is active and describe what you can actually observe in it. Do not click, type, or change anything.',
+    "What is in my active window? Don't click, type, or change anything.",
+    'What is in my active window? Don\u2019t click, type, or change anything.',
+    'What is in my active window? Do not click, type, or change anything.',
+  ])('routes the original request through only the two read-only handlers: %s', async content => {
+    const dispatch = vi.spyOn(ToolRegistry.getInstance(), 'execute')
+    const result = await new OrchestratorService().process({ id: 'request', role: 'user', content, timestamp: 1 })
+    expect(boundary.addMessage.mock.calls[0][0].content).toBe(content)
+    expect(dispatch.mock.calls.map(([name]) => name)).toEqual(['computer.activeWindow', 'computer.uiElements'])
+    expect(dispatch.mock.calls.every(([, , context]) => context.mode === 'read-only-observation')).toBe(true)
     expect(boundary.active).toHaveBeenCalledOnce()
     expect(boundary.ui).toHaveBeenCalledWith('Actual editor', 42, 100, expect.any(AbortSignal))
     expect(boundary.legacyUi).not.toHaveBeenCalled()
@@ -33,6 +42,7 @@ describe('real orchestrator and registered observation tools', () => {
     expect(boundary.ollama).not.toHaveBeenCalled()
     expect(boundary.chat).toHaveBeenCalledOnce()
     const delivered = boundary.chat.mock.calls[0][0]
+    expect(JSON.parse(delivered[1].content).request).toBe(content)
     expect(delivered.map((m: any) => m.content).join('\n')).toContain('Live UI text')
     expect(delivered.map((m: any) => m.content).join('\n')).not.toContain('Old invented terminal')
     expect(result.content).toContain('Live UI text')
