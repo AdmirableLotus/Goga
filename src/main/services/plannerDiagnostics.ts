@@ -3,6 +3,19 @@ import path from 'path'
 import { createHash } from 'crypto'
 
 export function redactDiagnosticText(text: string): string {
+    return redactText(text, new WeakSet<object>(), 0)
+}
+
+function redactText(text: string, seen: WeakSet<object>, serializedDepth: number): string {
+    // Raw planner/backend bodies can contain JSON (including JSON inside JSON
+    // strings). Inspect its keys just as we do native diagnostic objects.
+    if (serializedDepth >= 8) return '[REDACTED: nested JSON limit]'
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if ((parsed && typeof parsed === 'object') || typeof parsed === 'string') {
+        return JSON.stringify(redactValue(parsed, seen, serializedDepth + 1))
+      }
+    } catch { /* Non-JSON text still receives the existing text redaction. */ }
     let line = text
     for (const [key, value] of Object.entries(process.env)) {
       if (/key|token|secret|password|credential/i.test(key) && value && value.length >= 4) {
@@ -18,16 +31,20 @@ export function redactDiagnosticText(text: string): string {
 // Inspect keys before serialization so secrets remain redacted inside native
 // tool-call objects, arrays, and credentials whose values are not in the env.
 export function redactDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof value === 'string') return redactDiagnosticText(value)
+  return redactValue(value, seen, 0)
+}
+
+function redactValue(value: unknown, seen: WeakSet<object>, serializedDepth: number): unknown {
+  if (typeof value === 'string') return redactText(value, seen, serializedDepth)
   if (!value || typeof value !== 'object') return value
   if (seen.has(value)) return '[Circular]'
   seen.add(value)
   try {
-    if (Array.isArray(value)) return value.map(item => redactDiagnosticValue(item, seen))
+    if (Array.isArray(value)) return value.map(item => redactValue(item, seen, serializedDepth))
     return Object.fromEntries(Object.entries(value).map(([key, item]) => {
       const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase()
       const secret = /password|passwd|passphrase|secret|token|credential|authorization|cookie|apikey|privatekey|accesskey|sessionkey/.test(normalized)
-      return [key, secret ? '[REDACTED]' : redactDiagnosticValue(item, seen)]
+      return [key, secret ? '[REDACTED]' : redactValue(item, seen, serializedDepth)]
     }))
   } finally { seen.delete(value) }
 }

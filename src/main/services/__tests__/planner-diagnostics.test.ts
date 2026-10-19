@@ -2,9 +2,50 @@ import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { plannerDiagnostic, redactDiagnosticValue } from '../plannerDiagnostics'
+import { plannerDiagnostic, redactDiagnosticText, redactDiagnosticValue } from '../plannerDiagnostics'
 
 describe('local planner diagnostics', () => {
+  it('redacts credential fixtures in serialized raw/body JSON before writing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-serialized-trace-'))
+    const file = path.join(dir, 'trace.log')
+    const previous = process.env.GOGA_PLANNER_TRACE
+    const credentials = { nested: [{ token: 'fixture-token-01', Authorization: 'fixture-auth-02',
+      cookie: 'fixture-cookie-03', credentials: { value: 'fixture-credential-04' }, label: 'keep' }] }
+    const serialized = JSON.stringify(credentials)
+    const fixtures = [serialized, JSON.stringify([credentials]), JSON.stringify(serialized),
+      JSON.stringify({ nestedBody: serialized })]
+    try {
+      process.env.GOGA_PLANNER_TRACE = file
+      for (const body of fixtures) plannerDiagnostic('serialized-fixture', { raw: body, body, nested: [{ body }] })
+      const output = fs.readFileSync(file, 'utf8')
+      for (const secret of ['fixture-token-01', 'fixture-auth-02', 'fixture-cookie-03', 'fixture-credential-04']) {
+        expect(output).not.toContain(secret)
+      }
+      const records = output.trim().split('\n').map(line => JSON.parse(line))
+      expect(JSON.parse(records[0].raw).nested[0]).toEqual({ token: '[REDACTED]', Authorization: '[REDACTED]',
+        cookie: '[REDACTED]', credentials: '[REDACTED]', label: 'keep' })
+      expect(records).toHaveLength(fixtures.length)
+      for (const record of records) {
+        expect(typeof record.body).toBe('string')
+        expect(record.body).toContain('keep')
+        expect(() => JSON.parse(record.body)).not.toThrow()
+      }
+      expect(JSON.stringify(credentials)).toBe(serialized)
+    } finally {
+      if (previous === undefined) delete process.env.GOGA_PLANNER_TRACE
+      else process.env.GOGA_PLANNER_TRACE = previous
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+      fs.rmdirSync(dir)
+    }
+  })
+  it('bounds nested serialized JSON without leaking its credentials', () => {
+    let body = JSON.stringify({ token: 'fixture-deep-token' })
+    for (let i = 0; i < 12; i++) body = JSON.stringify({ body })
+    const output = redactDiagnosticText(body)
+    expect(output).not.toContain('fixture-deep-token')
+    expect(output).toContain('nested JSON limit')
+    expect(() => JSON.parse(output)).not.toThrow()
+  })
   it('recursively redacts structured native tool secrets before writing', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-structured-trace-'))
     const file = path.join(dir, 'trace.log')
