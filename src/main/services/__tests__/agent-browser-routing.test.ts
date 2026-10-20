@@ -32,6 +32,7 @@ import { TurnDeduplicator, SIDE_EFFECTING_TOOLS, canonicalizeParams } from '../a
 import { BrowserAdapter, ShellSessionError, PageClosedError } from '../../adapters/browser'
 import { applyAgentState, INITIAL_ACTIVITY } from '../../../renderer/components/missionUtils'
 import type { AgentState } from '../../../shared/types'
+import { prioritiesText, prioritiesFilename, prioritiesRequest, quotedPrioritiesText } from '../../../shared/__tests__/fixtures/prioritiesNote'
 
 // ── 1. normaliseToolName ──────────────────────────────────────────────────────
 
@@ -664,6 +665,26 @@ describe('confirm-task — pending-task guard', () => {
 // and from common variants, and returns null for non-save tasks.
 
 describe('AgentLoop.getHardcodedFirstStep — save-text pre-flight override', () => {
+  it('extracts the exact failed priorities sentence without its curly delimiters', () => {
+    const result = AgentLoop.getHardcodedFirstStep(prioritiesRequest)
+    expect(result?.tool).toBe('notepad.saveText')
+    expect(result?.params).toEqual({ text: prioritiesText, filename: prioritiesFilename })
+    expect(result?.done).toBe(false)
+  })
+
+  it.each([`"${prioritiesText}"`, `'${prioritiesText}'`, prioritiesText])('preserves existing text syntax: %s', text => {
+    expect(AgentLoop.getHardcodedFirstStep(`save ${text} to notes.txt`)?.params.text).toBe(prioritiesText)
+  })
+
+  it('removes only one matching delimiter pair, preserving literal inner quotes', () => {
+    expect(AgentLoop.getHardcodedFirstStep(`save "${quotedPrioritiesText}" to notes.txt`)?.params.text).toBe(quotedPrioritiesText)
+    expect(AgentLoop.getHardcodedFirstStep(`save “${prioritiesText}" to notes.txt`)?.params.text).toBe(`“${prioritiesText}"`)
+  })
+
+  it.each(['write the text "hello" as notes.txt', 'make a text file called notes.txt with the content "hello"'])('does not broaden the extractor: %s', task => {
+    expect(AgentLoop.getHardcodedFirstStep(task)).toBeNull()
+  })
+
   it('exact live test sentence → notepad.saveText with correct text and filename', () => {
     const result = AgentLoop.getHardcodedFirstStep(
       'Using Notepad, save the text "Hello from Goga live test" to a new file named goga-live-20260930-03.txt in my Documents folder. Do not overwrite an existing file.'

@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import path from 'path'
+import { prioritiesText, prioritiesFilename, quotedPrioritiesText, corruptedPrioritiesText } from '../../../shared/__tests__/fixtures/prioritiesNote'
 
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 
@@ -310,6 +311,22 @@ describe('S1 — notepad.saveText: successful save with content verification', (
     expect(desktopOps.findSaveAsDialogOrThrow).toHaveBeenCalledWith(WIN.hwnd)
     expect(fsOps.readFileSync).toHaveBeenCalledWith(DEST, 'utf-8')
     expect(desktopOps.findSaveAsDialog).toHaveBeenCalledWith(WIN.hwnd, WIN.pid)
+  })
+
+  it('passes the exact priorities sentence to the owned editor and verifies the same content', async () => {
+    setupDefaultMocks({ readFileContent: prioritiesText })
+    const result = await callSaveText({ text: prioritiesText, filename: prioritiesFilename })
+    expect(result.success).toBe(true)
+    expect(result.data?.filePath).toBe(destPath(prioritiesFilename))
+    expect(desktopOps.typeIntoHwnd).toHaveBeenCalledWith(WIN.hwnd, prioritiesText)
+  })
+
+  it.each([quotedPrioritiesText, corruptedPrioritiesText])('still rejects altered priorities content: %s', async saved => {
+    setupDefaultMocks({ readFileContent: saved })
+    const result = await callSaveText({ text: prioritiesText, filename: prioritiesFilename })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/content mismatch/)
+    expect(desktopOps.postClose).toHaveBeenCalledWith(WIN.hwnd)
   })
 
   it('S1j: PS error in dialog-close poll is distinct from dialog-closed — reports poll error', async () => {

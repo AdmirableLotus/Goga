@@ -635,13 +635,19 @@ What is the next single action to take?`
   static getHardcodedFirstStep(task: string): LLMToolCall | null {
     // notepad.saveText — matches: save "<text>" to <filename> in Documents
     const saveMatch = task.match(
-      /save\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s+to\s+(?:a\s+)?(?:new\s+)?(?:file\s+)?(?:named?\s+)?([\w.-]+\.txt)/i
+      /save\s+(?:the\s+)?(?:text\s+)?(.+?)\s+to\s+(?:a\s+)?(?:new\s+)?(?:file\s+)?(?:named?\s+)?([\w.-]+\.txt)/i
     )
     if (saveMatch) {
+      let text = saveMatch[1].trim()
+      // Remove one matching request delimiter pair; preserve quotes inside the content.
+      const closingQuote: Record<string, string> = { '"': '"', "'": "'", '“': '”' }
+      if (text.length >= 2 && closingQuote[text[0]] === text[text.length - 1]) {
+        text = text.slice(1, -1)
+      }
       return {
         thought: `Task is a direct save-text request — dispatching notepad.saveText without LLM planning.`,
         tool: 'notepad.saveText',
-        params: { text: saveMatch[1].trim(), filename: saveMatch[2].trim() },
+        params: { text, filename: saveMatch[2].trim() },
         done: false
       }
     }
