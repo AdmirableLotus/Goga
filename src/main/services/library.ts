@@ -4,6 +4,7 @@ import { createHash } from 'crypto'
 import { TextDecoder } from 'util'
 import type { BookMeta, BookChunk, BookLocation, LibraryAnswer } from '../../shared/types'
 import { nanoid } from '../utils/nanoid'
+import { extractEpubSections } from './epubExtraction'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MAX_INDEX_BYTES = 32 * 1024 * 1024
@@ -89,7 +90,7 @@ export class LibraryService {
     }
     return this.instance
   }
-  constructor(private persistence: LibraryPersistence) {
+  constructor(private persistence: LibraryPersistence, private epubExtractor:(bytes:Buffer)=>Promise<Section[]> = extractEpubSections) {
     try {
       const index=persistence.load()
       if(!validIndex(index))throw new Error('Unsupported or damaged library index. Existing index was preserved.')
@@ -172,29 +173,7 @@ export class LibraryService {
       }catch{throw new Error('PDF extraction failed: invalid, encrypted, unsupported, or timed-out PDF. No index was changed.')}
       finally{if(timer)clearTimeout(timer);await pdf.destroy().catch(()=>{})}
     }
-    // Reuse epub2, preserve chapter boundaries; EPUB does not have stable physical pages.
-    try{
-      const {EPub}=require('epub2')
-      return await new Promise<Section[]>((resolve,reject)=>{
-        const epub=new EPub(filePath)
-        const timer=setTimeout(()=>reject(Error('EPUB extraction timed out. No index was changed.')),30_000)
-        epub.once('error',()=>{clearTimeout(timer);reject(Error('EPUB extraction failed. No index was changed.'))})
-        epub.once('end',async()=>{
-          try{
-            const sections:Section[]=[]
-            for(let n=0;n<epub.flow.length;n++){
-              const chapter=epub.flow[n]
-              const html:string=await new Promise((res,rej)=>epub.getChapter(chapter.id,(err:Error,text:string)=>err?rej(err):res(text)))
-              sections.push({text:html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&'),location:{kind:'chapter',start:n+1}})
-              if(sections.reduce((sum,s)=>sum+s.text.length,0)>MAX_TEXT)throw Error('size')
-            }
-            resolve(sections)
-          }catch{reject(Error('EPUB chapter extraction failed or exceeded text limits. No index was changed.'))}
-          finally{clearTimeout(timer)}
-        })
-        try{epub.parse()}catch{clearTimeout(timer);reject(Error('EPUB extraction failed. No index was changed.'))}
-      })
-    }catch{throw new Error('EPUB extraction failed: invalid, encrypted, unsupported, or timed-out EPUB. No index was changed.')}
+    return this.epubExtractor(bytes)
   }
   search(query:string,topK=5,bookId?:string):BookChunk[]{
     this.ready()

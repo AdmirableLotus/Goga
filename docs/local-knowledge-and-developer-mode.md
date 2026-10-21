@@ -173,3 +173,21 @@ recovery requires stopping all writers and inspecting/removing the orphaned lock
 Regression coverage: competing imports, deletion followed by a stale import, lock ownership
 through revision read/rename, and contention with a separate process. The 19 library tests
 and both builds passed for this fix. No live book-answer demonstration was repeated.
+
+## Review fix: terminable EPUB extraction
+
+EPUB parsing runs in a dedicated worker thread with a 30-second deadline and a 128 MB
+old-generation heap limit. The parent makes a private temporary copy of the exact source
+bytes already hashed by ingestion, so the parser cannot reread a changed source file.
+On result, parser error, or timeout, the parent stops the worker and awaits its exit event
+before removing the temporary copy and resolving/rejecting extraction. The import guard
+therefore remains held until extraction has actually stopped. Late messages cannot commit
+results once shutdown starts. Even if termination reports an error, the guard stays held
+until the worker exits; an index is never written on that path.
+
+Coverage includes a deferred worker shutdown with late success callbacks, rejection of a
+second import while shutdown is pending, byte-for-byte unchanged existing index, temporary
+file cleanup, a subsequent successful EPUB import, termination errors, parser errors, and a
+real non-returning worker followed by real EPUB extraction. Final affected run: 26 tests
+across library, worker-lifecycle, and Library UI suites passed. Both builds passed with only
+existing Vite warnings. The successful live PDF/book-answer demonstration was not repeated.
