@@ -253,6 +253,29 @@ export type BookLocation = { kind: 'page' | 'lines' | 'chapter'; start: number; 
 export interface LibraryPassage { id: string; text: string; title: string; filename: string; reference: string }
 export interface LibraryAnswer { mode: 'extractive'; answer: string; passages: LibraryPassage[] }
 
+export interface DeveloperReference { spanId?: string; startLine: number; endLine: number; quote: string }
+export interface DeveloperSourceSpan { id:string; startLine:number; endLine:number; quote:string }
+export interface DeveloperInspection {
+  id: string; baseCommit: string; file: string; functionName: string; startLine: number; endLine: number
+  sourceHash: string; functionText: string; numberedSource: string
+  explanation?: string; references?: DeveloperReference[]; uncertainty?: string
+}
+export interface DeveloperValidation {
+  kind: 'pure-helper-interpreter'; syntaxPassed: boolean; passed: boolean; durationMs: number; policyHash: string; limitation: string
+  cases: {name:string;expected:string;actual:string;passed:boolean}[]
+}
+export interface DeveloperProposal {
+  id: string; baseCommit: string; file: string; sourceHash: string; candidateHash: string
+  patchHash: string; validationHash: string; manifestHash: string; candidateDirectory: string
+  diff: string; explanation: string; references: DeveloperReference[]; uncertainty: string
+  baseline: DeveloperValidation; validation: DeveloperValidation; reviewable: boolean; createdAt: number
+}
+export interface DeveloperApprovalReceipt {
+  id: string; proposalId: string; baseCommit: string; patchHash: string; candidateHash: string
+  validationHash: string; manifestHash: string; approvedAt: number
+  scope: 'proposal-review-only'
+}
+
 export interface BookChunk {
   bookId: string
   chunkIndex: number

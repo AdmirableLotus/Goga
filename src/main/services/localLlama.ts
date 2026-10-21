@@ -2,6 +2,7 @@ import fs from 'fs'
 import { LogService } from './logs'
 import { SettingsService } from './settings'
 import { plannerDiagnostic } from './plannerDiagnostics'
+import { developerModelSchema } from './developerModelSchema'
 
 export type LocalModelStatus = 'uninitialized' | 'loading' | 'ready' | 'error'
 
@@ -139,6 +140,34 @@ export class LocalLlamaService {
     } finally {
       await ctx.dispose().catch(() => {})
     }
+  }
+
+  private async developerRuntime(): Promise<Any> { return esmImport('node-llama-cpp') }
+
+  /** Developer proposals are local, bounded JSON generation, never agent/tool dispatch. */
+  async generateDeveloper(system: string, context: string, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted()
+    if (!this.isReady() || !this.model) throw Error('Local model is not ready; developer mode has no remote fallback.')
+    const configured=SettingsService.getInstance().get().localModelContextSize ?? 4096
+    const ctx=await this.model.createContext({contextSize:Math.min(configured,4096)})
+    let session: Any
+    try {
+      signal.throwIfAborted()
+      const {LlamaChatSession}=await this.developerRuntime()
+      session=new LlamaChatSession({contextSequence:ctx.getSequence(),systemPrompt:system,forceAddSystemPrompt:true,
+        contextShift:{strategy:()=>{throw Error('Developer context budget exceeded.')}}})
+      const count=session.chatWrapper.generateContextState({chatHistory:[...session.getChatHistory(),
+        {type:'user',text:context},{type:'model',response:[]}]}).contextText.tokenize(this.model.tokenizer).length
+      if(count>Math.min(2880,Math.min(configured,ctx.contextSize)-1216))throw Error('Developer source exceeds the formatted local-model input budget.')
+      const spans=JSON.parse(context).sourceSpans
+      if(!Array.isArray(spans))throw Error('Developer source-span catalog is missing.')
+      const grammar=await this.llama.createGrammarForJsonSchema(developerModelSchema(spans.map((s:{id:string})=>s.id)))
+      signal.throwIfAborted()
+      const raw=await session.prompt(context,{maxTokens:1152,grammar,signal,temperature:0.1})
+      signal.throwIfAborted()
+      if(typeof raw!=='string'||raw.length>20_000)throw Error('Invalid developer model output.')
+      return raw.trim()
+    } finally {try{session?.dispose()}finally{await ctx.dispose().catch(()=>{})}}
   }
 
   async dispose() {
