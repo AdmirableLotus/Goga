@@ -64,6 +64,7 @@ export interface MainHandlers {
 
   // Library
   'library:ingest': (filePath?: string) => Promise<import('./types').BookMeta>
+  'library:answer': (bookId: string, question: string) => Promise<import('./types').LibraryAnswer>
   'library:list': () => Promise<import('./types').BookMeta[]>
   'library:delete': (bookId: string) => Promise<void>
   'library:search': (query: string, topK?: number) => Promise<import('./types').BookChunk[]>

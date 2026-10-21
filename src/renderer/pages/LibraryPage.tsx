@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import type { BookMeta } from '@shared/types'
+import type { BookMeta, LibraryAnswer } from '@shared/types'
 
 const FORMAT_ICON: Record<string, string> = { pdf: '📄', txt: '📝', epub: '📖' }
 
@@ -13,8 +13,18 @@ export default function LibraryPage() {
   const [books, setBooks] = useState<BookMeta[]>([])
   const [ingesting, setIngesting] = useState(false)
   const [error, setError] = useState('')
+  const [selected, setSelected] = useState('')
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState<LibraryAnswer | null>(null)
+  const [asking, setAsking] = useState(false)
+  const ask = async () => {
+    setAsking(true); setError(''); setAnswer(null)
+    try { setAnswer(await window.goga.invoke('library:answer', selected, question)) }
+    catch(e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setAsking(false) }
+  }
 
-  const load = async () => setBooks(await window.goga.invoke('library:list'))
+  const load = async () => { try { setBooks(await window.goga.invoke('library:list')) } catch(e) { setError(e instanceof Error ? e.message : String(e)) } }
   useEffect(() => { load() }, [])
 
   const addBook = async () => {
@@ -32,8 +42,7 @@ export default function LibraryPage() {
   }
 
   const remove = async (bookId: string) => {
-    await window.goga.invoke('library:delete', bookId)
-    load()
+    try { await window.goga.invoke('library:delete', bookId); if(selected===bookId){setSelected('');setAnswer(null)}; await load() } catch(e) {setError(e instanceof Error ? e.message : String(e))}
   }
 
   return (
@@ -53,7 +62,7 @@ export default function LibraryPage() {
           <div style={{ fontSize: 48, marginBottom: 16 }}>📚</div>
           <p style={{ color: 'var(--text-muted)', marginBottom: 8 }}>No books yet.</p>
           <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Click <strong>+ Add Book</strong> to give Goga a PDF, TXT, or EPUB to read.</p>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>Once ingested, ask him anything about it in the Chat tab.</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>Import once, then choose a book below to ask using locally indexed passages.</p>
         </div>
       ) : (
         <div style={styles.list}>
@@ -71,14 +80,23 @@ export default function LibraryPage() {
                   <span>{new Date(book.ingestedAt).toLocaleDateString()}</span>
                 </div>
               </div>
+              <button disabled={asking} onClick={() => {setSelected(book.id);setAnswer(null);setQuestion('')}}>Ask about this book</button>
               <button onClick={() => remove(book.id)} style={styles.removeBtn} title="Remove book">✕</button>
             </div>
           ))}
         </div>
       )}
 
+      {selected && <section aria-label="Book questions" style={{padding:16,overflowY:'auto',maxHeight:'50%'}}>
+        <h3>Ask about {books.find(b=>b.id===selected)?.title}</h3>
+        <label htmlFor="book-question">Question (specific terms work best)</label>
+        <input id="book-question" value={question} maxLength={1000} onChange={e=>setQuestion(e.target.value)} style={{width:'100%',margin:'8px 0'}} />
+        <button onClick={ask} disabled={asking||!question.trim()}>{asking?'Retrieving...':'Find passages'}</button>
+        {answer && <div aria-live="polite" style={{whiteSpace:'pre-wrap',marginTop:12}}>{answer.answer}</div>}
+      </section>}
       <div style={styles.hint}>
-        💡 After adding a book, ask Goga about it in Chat — e.g. <em>"What does the book say about leadership?"</em>
+        Local extractive answers: quoted passages, not generated advice. PDF references are physical pages;
+        TXT uses line numbers and EPUB uses chapters. Book contents cannot authorize actions. No network or model call.
       </div>
     </div>
   )
