@@ -5,6 +5,11 @@ export type { ScreenshotResult, ActiveWindowResult }
 
 // Channels: renderer -> main (invoke)
 export interface MainHandlers {
+  'developer:files': () => Promise<string[]>
+  'developer:inspect': (file:string, functionName:string, feedback?:string) => Promise<import('./types').DeveloperInspection>
+  'developer:propose': (inspectionId:string, request:string) => Promise<import('./types').DeveloperProposal>
+  'developer:review': (proposalId:string) => Promise<import('./types').DeveloperProposal>
+  'developer:stop': () => Promise<void>
   // Chat
   'chat:send': (message: string) => Promise<ChatMessage>
 

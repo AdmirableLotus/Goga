@@ -4,6 +4,7 @@ import { LogService } from '../services/logs'
 import { getMainWindow } from '../index'
 import { nanoid } from '../utils/nanoid'
 import type { ChatMessage } from '../../shared/types'
+import { stopDeveloper } from './developer'
 
 const agent = AgentLoop.getInstance()
 const log = LogService.getInstance()
@@ -35,6 +36,7 @@ export function registerAgentHandlers(ipcMain: IpcMain) {
 
   ipcMain.handle('agent:stop', async () => {
     agent.stop('Stopped by user')
+    stopDeveloper()
   })
 
   ipcMain.handle('agent:state', async () => {

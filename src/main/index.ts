@@ -15,6 +15,7 @@ import { registerMissionHandlers } from './handlers/mission'
 import { registerSttHandlers } from './handlers/stt'
 import { registerVoiceHandlers } from './handlers/voice'
 import { registerModelHandlers } from './handlers/model'
+import { registerDeveloperHandlers, stopDeveloper } from './handlers/developer'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -90,6 +91,7 @@ app.whenReady().then(() => {
   registerMissionHandlers(ipcMain)
   registerVoiceHandlers(ipcMain, getMainWindow)
   registerModelHandlers(ipcMain, getMainWindow)
+  registerDeveloperHandlers(ipcMain)
   createWindow()
 
   // Start loading the primary local model immediately (non-blocking)
@@ -99,6 +101,7 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+Escape', () => {
     ActionStore.getInstance().stopAll()
     AgentLoop.getInstance().stop('Emergency stop (Ctrl+Shift+Escape)')
+    stopDeveloper()
     mainWindow?.webContents.send('agent:stopped', { reason: 'Emergency stop (Ctrl+Shift+Escape)' })
   })
 })
@@ -107,6 +110,7 @@ app.on('will-quit', async (event) => {
   // Synchronous guard — must be checked and set before any await.
   if (quitting) return   // second entry from app.exit(0): let Electron proceed
   quitting = true
+  stopDeveloper()
   // preventDefault() must remain here, before any await, because Electron does
   // not await the async callback. Moving it below an await would let the quit
   // proceed before cleanup finishes.
