@@ -33,7 +33,12 @@ export default function DeveloperPage(){
     if(token===revision.current){setProposal(value);setStatus(value.reviewable?'Proposal prepared for review. No update applied.':'Patch prepared, but validation is not passing. No update applied.')}
   })
   const stop=async()=>{revision.current++;setInspection(null);setProposal(null);setApproval(null);setStatus('Stop requested; the request guard stays held until work stops.');try{await window.goga.invoke('developer:stop')}catch{setError('Stop could not be requested.')}}
-  const verify=()=>run(async()=>{if(!proposal)return;await window.goga.invoke('developer:review',proposal.id);setStatus('Candidate, complete patch, manifest, and base hashes verified again. Still proposal-only.')})
+  const verify=()=>run(async()=>{
+    if(!proposal)return
+    try{await window.goga.invoke('developer:review',proposal.id)}
+    catch(error){setApproval(null);setStatus('Proposal verification failed. Any prior review receipt is historical only; review a fresh proposal.');throw error}
+    setStatus('Candidate, complete patch, manifest, and base hashes verified again. Still proposal-only.')
+  })
   const approve=()=>run(async()=>{
     if(!proposal)return
     const token=revision.current;setApproval(null)
@@ -68,7 +73,7 @@ export default function DeveloperPage(){
       <h4>Complete diff</h4><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{proposal.diff}</pre>
       <button disabled={busy} onClick={verify}>Verify proposal hashes again</button>
       <button disabled={busy||!proposal.reviewable||!!approval} onClick={approve}>Record review approval…</button>
-      {approval&&<p>Review approval receipt: <code>{approval.id}</code>. Scope: proposal review only. This receipt cannot activate an update.</p>}
+      {approval&&<p>Historical review approval receipt: <code>{approval.id}</code>. Scope: proposal review only. This receipt cannot activate an update. Changes to the candidate require a fresh review.</p>}
       <p>Full application and integration validation remain unrun. Everyday Goga has not been changed. Applying or activating an update is unavailable and would require separate approval.</p>
     </section>}
   </div>

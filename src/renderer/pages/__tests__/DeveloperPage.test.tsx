@@ -35,6 +35,11 @@ it('requests main-owned confirmation for the displayed manifest and shows a revi
   fireEvent.click(screen.getByText('Record review approval…'));await screen.findByText('receipt-id')
   expect(invoke).toHaveBeenCalledWith('developer:request-review-approval',proposal.id,proposal.manifestHash)
   expect(screen.getByText(/This receipt cannot activate an update/)).toBeTruthy()
+  invoke.mockImplementation(async(channel:string)=>{if(channel==='developer:review')throw Error('Proposal bytes changed');return undefined})
+  fireEvent.click(screen.getByText('Verify proposal hashes again'))
+  await screen.findByText('Proposal bytes changed')
+  expect(screen.queryByText('receipt-id')).toBeNull()
+  expect(screen.getByText(/Any prior review receipt is historical only/)).toBeTruthy()
 })
 
 it('does not display a late approval receipt after Stop',async()=>{
