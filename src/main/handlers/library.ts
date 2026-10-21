@@ -24,6 +24,8 @@ export function registerLibraryHandlers(ipcMain: IpcMain) {
     return library.ingest(target)
   })
 
+  ipcMain.handle('library:answer', async (_e, bookId: string, question: string) => library.answer(bookId, question))
+
   ipcMain.handle('library:list', async () => library.list())
 
   ipcMain.handle('library:delete', async (_e, bookId: string) => library.delete(bookId))

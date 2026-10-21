@@ -249,9 +249,14 @@ export interface MissionEvent {
   meta?: Record<string, string | number | boolean>
 }
 
+export type BookLocation = { kind: 'page' | 'lines' | 'chapter'; start: number; end?: number; label?: string }
+export interface LibraryPassage { id: string; text: string; title: string; filename: string; reference: string }
+export interface LibraryAnswer { mode: 'extractive'; answer: string; passages: LibraryPassage[] }
+
 export interface BookChunk {
   bookId: string
   chunkIndex: number
+  location?: BookLocation
   text: string
 }
 
@@ -261,6 +266,7 @@ export interface BookMeta {
   filename: string
   format: 'pdf' | 'txt' | 'epub'
   chunkCount: number
+  contentHash?: string
   ingestedAt: number
   sizeBytes: number
 }
