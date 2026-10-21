@@ -2,7 +2,8 @@
 
 This milestone adds a working Developer page to an isolated build based on `6a4e7f7`.
 It does not include the separate uncommitted book-discussion work or browser research.
-There is no developer approval, apply, install, merge, restart or activation endpoint.
+Review approval can be recorded through an application-owned confirmation dialog.
+There is no apply, install, merge, restart or activation endpoint.
 
 ## Working path and deliberate limits
 
@@ -73,6 +74,42 @@ review. This is an integrity check, not user approval or an authenticated update
 The current UI review session is in memory; saved artifacts remain on disk after restart but
 are not automatically promoted into trusted approval state. Later approval/activation must
 add its own revision-bound, single-use grant and revalidation.
+
+### Review approval receipts
+
+The user can choose Record review approval after viewing the complete diff and results.
+Main verifies the displayed manifest hash and current proposal before opening a native
+confirmation dialog owned by the application window. Cancel is the default. Only the
+main frame can request that dialog; the renderer cannot submit a confirmation boolean,
+and the local model has no approval tool. Main verifies the proposal again after a positive
+confirmation, so changes to the source, candidate, patch or manifest reject the decision.
+Failed validation cannot be approved. Stop or the request deadline rejects late confirmation,
+and the request guard remains held until the dialog and underlying work settle.
+
+A successful decision saves a uniquely named review-approval JSON receipt beside the
+manifest. It binds the proposal ID, base revision, patch, candidate, validation and manifest
+hashes plus the decision time. It is historical review evidence only, with scope
+`proposal-review-only`: it is never loaded as authorization, never consumed by an update
+endpoint, and cannot authorize apply or activation. The UI clears its receipt display on
+Stop, source selection or another proposal. Restart does not restore a trusted review session.
+Approval for actual application or activation, rollback and full application validation
+remain separate future work. Automated tests mock the native dialog; no real user approval
+is claimed from those tests.
+
+### Future update boundary (design only)
+
+An eventual updater must prepare a versioned build outside the running checkout, record
+the complete candidate revision, artifact hashes and bounded application validation, and
+show that final revision to the user. A review receipt from this milestone is insufficient.
+The updater must obtain a new, single-use approval for those exact artifacts and recheck
+them under its update lock before any apply operation. Any revision or artifact change
+requires a fresh review and approval. Neither model output nor a saved receipt can grant it.
+
+Before activation, preserve the previous executable/build, launcher target and a consistent
+backup of settings and book data. A rollback must restore the previous launcher/build and
+compatible data together; a failed preparation leaves the existing app running. Activation
+or restart requires its own explicit user decision. General code execution, application
+validation, backup compatibility and that update mechanism are not implemented here.
 
 Git calls use structured arguments, bounded output/time, a reduced environment and disabled
 hooks/external diff/text conversion. Candidate source is never a command. Partial preparation

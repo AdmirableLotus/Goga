@@ -270,6 +270,11 @@ export interface DeveloperProposal {
   diff: string; explanation: string; references: DeveloperReference[]; uncertainty: string
   baseline: DeveloperValidation; validation: DeveloperValidation; reviewable: boolean; createdAt: number
 }
+export interface DeveloperApprovalReceipt {
+  id: string; proposalId: string; baseCommit: string; patchHash: string; candidateHash: string
+  validationHash: string; manifestHash: string; approvedAt: number
+  scope: 'proposal-review-only'
+}
 
 export interface BookChunk {
   bookId: string

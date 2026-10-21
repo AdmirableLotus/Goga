@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import ts from 'typescript'
-import type { DeveloperInspection, DeveloperProposal, DeveloperReference } from '../../shared/types'
+import type { DeveloperApprovalReceipt, DeveloperInspection, DeveloperProposal, DeveloperReference } from '../../shared/types'
 import { DeveloperRepository, assertSafeText, sha256 } from './developerRepository'
 import { validateFormatter } from './developerValidation'
 import { sourceSpans } from './developerSourceSpans'
@@ -124,5 +124,25 @@ export class DeveloperProposalService {
       ||JSON.stringify(JSON.parse(fs.readFileSync(path.join(folder,'manifest.json'),'utf8')))!==JSON.stringify(proposal)
       ||pinned.view.sourceHash!==proposal.sourceHash||pinned.view.baseCommit!==proposal.baseCommit)throw Error('Proposal bytes, manifest or pinned source changed. Prepare a fresh review; no update can be applied.')
     return proposal
+  }
+  async requestReviewApproval(id:string,manifestHash:string,confirm:(proposal:Readonly<DeveloperProposal>)=>Promise<boolean>):Promise<DeveloperApprovalReceipt|null>{
+    return this.job(async signal=>{
+      const proposal=await this.review(id)
+      signal.throwIfAborted()
+      if(proposal.manifestHash!==manifestHash)throw Error('The displayed revision changed. Review the complete proposal again.')
+      if(!proposal.reviewable||!proposal.validation.passed)throw Error('A failing proposal cannot be approved.')
+      // Only main supplies this callback. Renderer/model text cannot supply a confirmation.
+      const accepted=await confirm(structuredClone(proposal))
+      signal.throwIfAborted()
+      if(!accepted)return null
+      await this.review(id)
+      signal.throwIfAborted()
+      const receipt:DeveloperApprovalReceipt={id:randomUUID(),proposalId:proposal.id,baseCommit:proposal.baseCommit,
+        patchHash:proposal.patchHash,candidateHash:proposal.candidateHash,validationHash:proposal.validationHash,
+        manifestHash:proposal.manifestHash,approvedAt:Date.now(),scope:'proposal-review-only'}
+      // Audit evidence only: never loaded as permission or consumed by an update endpoint.
+      fs.writeFileSync(path.join(path.dirname(proposal.candidateDirectory),'review-approval-'+receipt.id+'.json'),JSON.stringify(receipt,null,2),{flag:'wx',mode:0o600})
+      return receipt
+    })
   }
 }

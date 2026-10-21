@@ -125,6 +125,63 @@ describe('repository inspection and reviewable isolated proposals',()=>{
     await expect(service.propose(view.id,'invalid size guard')).rejects.toThrow('Source revision changed')
     expect(model.generateDeveloper).toHaveBeenCalledTimes(1)
   })
+  it('records review approval only after explicit main confirmation of the displayed revision',async()=>{
+    const proposal=await propose(),confirm=vi.fn(async()=>true)
+    const receipt=await service.requestReviewApproval(proposal.id,proposal.manifestHash,confirm)
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(receipt).toMatchObject({scope:'proposal-review-only',proposalId:proposal.id,baseCommit:proposal.baseCommit,
+      patchHash:proposal.patchHash,candidateHash:proposal.candidateHash,validationHash:proposal.validationHash,manifestHash:proposal.manifestHash})
+    expect(JSON.parse(fs.readFileSync(path.join(proposal.candidateDirectory,'..','review-approval-'+receipt!.id+'.json'),'utf8'))).toEqual(receipt)
+    expect(git(['status','--porcelain'])).toBe('')
+    expect(model.generateDeveloper).toHaveBeenCalledTimes(2)
+  })
+  it('canceled confirmation writes no approval receipt',async()=>{
+    const proposal=await propose()
+    expect(await service.requestReviewApproval(proposal.id,proposal.manifestHash,async()=>false)).toBeNull()
+    expect(fs.readdirSync(path.dirname(proposal.candidateDirectory)).some(f=>f.startsWith('review-approval-'))).toBe(false)
+  })
+  it('rejects a different displayed manifest before asking for approval',async()=>{
+    const proposal=await propose(),confirm=vi.fn(async()=>true)
+    await expect(service.requestReviewApproval(proposal.id,'stale',confirm)).rejects.toThrow('displayed revision')
+    expect(confirm).not.toHaveBeenCalled()
+  })
+  it('does not ask for approval when the independent candidate tests fail',async()=>{
+    model.generateDeveloper.mockImplementation(async(_s:string,c:string)=>response(JSON.parse(c).phase==='PROPOSE'?"function formatBytes(b: number) { return '0 B' }":null))
+    const proposal=await propose(),confirm=vi.fn(async()=>true)
+    expect(proposal.reviewable).toBe(false)
+    await expect(service.requestReviewApproval(proposal.id,proposal.manifestHash,confirm)).rejects.toThrow('failing proposal')
+    expect(confirm).not.toHaveBeenCalled()
+  })
+  it.each(['file','patch','manifest','source'])('rejects %s changes made while the confirmation is open',async kind=>{
+    const proposal=await propose(),parent=path.dirname(proposal.candidateDirectory)
+    await expect(service.requestReviewApproval(proposal.id,proposal.manifestHash,async()=>{
+      if(kind==='file')fs.appendFileSync(path.join(proposal.candidateDirectory,relative),'// changed')
+      if(kind==='patch')fs.appendFileSync(path.join(parent,'proposal.patch'),'changed')
+      if(kind==='manifest')fs.writeFileSync(path.join(parent,'manifest.json'),'{}')
+      if(kind==='source')fs.appendFileSync(path.join(root,relative),'// changed')
+      return true
+    })).rejects.toThrow()
+    expect(fs.readdirSync(parent).some(f=>f.startsWith('review-approval-'))).toBe(false)
+  })
+  it('Stop rejects late confirmation and holds the request guard until it settles',async()=>{
+    const proposal=await propose()
+    let finish!:(value:boolean)=>void
+    const confirm=vi.fn(()=>new Promise<boolean>(resolve=>{finish=resolve}))
+    const pending=service.requestReviewApproval(proposal.id,proposal.manifestHash,confirm)
+    const rejected=expect(pending).rejects.toThrow('stopped or timed out')
+    await vi.waitFor(()=>expect(confirm).toHaveBeenCalledOnce())
+    service.stop()
+    await expect(inspected()).rejects.toThrow('still running')
+    finish(true);await rejected
+    expect(fs.readdirSync(path.dirname(proposal.candidateDirectory)).some(f=>f.startsWith('review-approval-'))).toBe(false)
+  })
+  it('does not restore saved approvals or proposals as authority after a new service starts',async()=>{
+    const proposal=await propose()
+    await service.requestReviewApproval(proposal.id,proposal.manifestHash,async()=>true)
+    const fresh=new DeveloperProposalService(repository,model),confirm=vi.fn(async()=>true)
+    await expect(fresh.requestReviewApproval(proposal.id,proposal.manifestHash,confirm)).rejects.toThrow('current review session')
+    expect(confirm).not.toHaveBeenCalled()
+  })
   it.each(['stop','timeout'])('blocks late model output and retains the single-request guard after %s',async kind=>{
     vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
     let finish!:(value:string)=>void
