@@ -13,9 +13,11 @@ const CHUNK_SIZE = 800
 const STEP = 700
 interface Section { text: string; location: BookLocation }
 interface Index { version: 1; books: BookMeta[]; chunks: BookChunk[] }
-export interface LibraryPersistence { load(): unknown; save(index: Index): void }
+export interface LibraryPersistence { load(): unknown; save(index: Index, expected: Index): void }
 
-/** One atomic snapshot: disk succeeds before in-memory state changes. */
+export class LibraryWriteConflict extends Error {}
+
+/** Exclusive lock + revision check + atomic replacement; memory follows disk. */
 export class LocalLibraryIndex implements LibraryPersistence {
   constructor(readonly filename: string) {}
   load(): unknown {
@@ -24,16 +26,30 @@ export class LocalLibraryIndex implements LibraryPersistence {
     try { return JSON.parse(fs.readFileSync(this.filename,'utf8')) }
     catch { throw new Error('Library index could not be read. Existing index was preserved; restore a backup before importing.') }
   }
-  save(index: Index) {
+  save(index: Index, expected: Index) {
     const text=JSON.stringify(index)
     if (Buffer.byteLength(text)>MAX_INDEX_BYTES) throw new Error('Library index exceeds the 32 MB limit.')
     fs.mkdirSync(path.dirname(this.filename),{recursive:true})
+    const lock=this.filename+'.lock'
+    let lockFd:number
+    try { lockFd=fs.openSync(lock,'wx',0o600) }
+    catch(error) {
+      if((error as NodeJS.ErrnoException).code==='EEXIST')throw new LibraryWriteConflict('Library write is locked by another or interrupted instance. Retry after other instances close; an interrupted lock requires recovery after all writers stop.')
+      throw error
+    }
     const temporary=this.filename+'.'+nanoid()+'.tmp'
     try {
+      // Read/check the revision only AFTER acquiring the same lock held through rename.
+      if(JSON.stringify(this.load())!==JSON.stringify(expected)) {
+        throw new LibraryWriteConflict('Library index changed in another instance. Restart this instance to reload before importing or deleting; no changes were written.')
+      }
       const fd=fs.openSync(temporary,'wx',0o600)
       try {fs.writeFileSync(fd,text,'utf8');fs.fsyncSync(fd)} finally {fs.closeSync(fd)}
       fs.renameSync(temporary,this.filename)
-    } finally { if(fs.existsSync(temporary))fs.unlinkSync(temporary) }
+    } finally {
+      try {if(fs.existsSync(temporary))fs.unlinkSync(temporary)}
+      finally {try{fs.closeSync(lockFd)}finally{fs.unlinkSync(lock)}}
+    }
   }
 }
 
@@ -84,7 +100,10 @@ export class LibraryService {
   private commit(index: Index) {
     this.ready()
     if(!validIndex(index))throw new Error('Extracted index has invalid source references. Existing books were preserved.')
-    try {this.persistence.save(index)} catch {throw new Error('Library index could not be saved. Existing books were preserved.')}
+    try {this.persistence.save(index,this.index)} catch(error) {
+      if(error instanceof LibraryWriteConflict)throw error
+      throw new Error('Library index could not be saved. Existing books were preserved.')
+    }
     this.index=index
   }
   async ingest(filePath: string): Promise<BookMeta> {

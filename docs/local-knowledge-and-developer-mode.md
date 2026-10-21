@@ -160,3 +160,16 @@ protection files are unchanged. The existing browser-research milestone remains 
 these library checks do not complete it. Developer mode remains a design, not executable apply.
 
 Final precommit regression run: 165 tests across seven files passed, including the new generic-overlap abstention case. Renderer/main builds passed with existing Vite warnings.
+
+## Review fix: cross-instance index writes
+
+Each write acquires an exclusive create-only `library-index.json.lock`, then reads and
+compares the on-disk snapshot to the caller's loaded revision while still holding that lock.
+The lock stays held through atomic rename. A stale instance receives an explicit reload/
+restart error instead of overwriting another instance's imports or resurrecting a deletion.
+Lock contention fails closed. A lock left by a crashed writer is not automatically stolen;
+recovery requires stopping all writers and inspecting/removing the orphaned lock.
+
+Regression coverage: competing imports, deletion followed by a stale import, lock ownership
+through revision read/rename, and contention with a separate process. The 19 library tests
+and both builds passed for this fix. No live book-answer demonstration was repeated.

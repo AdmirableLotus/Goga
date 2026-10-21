@@ -2,6 +2,8 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import {spawn} from 'child_process'
+import {once} from 'events'
 import { LibraryService, LocalLibraryIndex } from '../library'
 let folder:string,index:LocalLibraryIndex,lib:LibraryService
 beforeEach(()=>{folder=fs.mkdtempSync(path.join(os.tmpdir(),'goga-library-'));index=new LocalLibraryIndex(path.join(folder,'index.json'));lib=new LibraryService(index)})
@@ -100,4 +102,50 @@ it('abstains when generic lexical overlap exists but the question topic is unsup
  expect(answer.passages).toEqual([])
  expect(answer.answer).toContain('I do not have supporting evidence')
  expect(answer.answer).not.toContain('identifier length')
+})
+
+
+describe('cross-instance write protection',()=>{
+ it('rejects a competing import rather than replacing the other instance corpus',async()=>{
+  const other=new LibraryService(new LocalLibraryIndex(index.filename))
+  const results=await Promise.allSettled([lib.ingest(txt('first.txt','Orchard source')),other.ingest(txt('second.txt','Glacier source'))])
+  expect(results.map(r=>r.status).sort()).toEqual(['fulfilled','rejected'])
+  const failure=results.find(r=>r.status==='rejected') as PromiseRejectedResult
+  expect(failure.reason.message).toContain('changed in another instance')
+  const winner=results.find(r=>r.status==='fulfilled') as PromiseFulfilledResult<any>
+  expect(new LibraryService(new LocalLibraryIndex(index.filename)).list()).toEqual([winner.value])
+  expect(fs.existsSync(index.filename+'.lock')).toBe(false)
+ })
+ it('rejects a stale write after another instance deletes a book, without resurrecting it',async()=>{
+  const book=await lib.ingest(txt('book.txt','Orchard source'))
+  const stale=new LibraryService(new LocalLibraryIndex(index.filename))
+  lib.delete(book.id)
+  const deleted=fs.readFileSync(index.filename,'utf8')
+  await expect(stale.ingest(txt('new.txt','Glacier source'))).rejects.toThrow('changed in another instance')
+  expect(fs.readFileSync(index.filename,'utf8')).toBe(deleted)
+  expect(new LibraryService(new LocalLibraryIndex(index.filename)).list()).toEqual([])
+  // Reopening explicitly reloads the new revision; a subsequent import succeeds.
+  const fresh=new LibraryService(new LocalLibraryIndex(index.filename))
+  await fresh.ingest(path.join(folder,'new.txt'))
+  expect(fresh.list()).toHaveLength(1);expect(fresh.list()[0].id).not.toBe(book.id)
+ })
+ it('holds the same exclusive lock across revision read and atomic rename',async()=>{
+  const load=index.load.bind(index),rename=fs.renameSync.bind(fs)
+  vi.spyOn(index,'load').mockImplementation(()=>{expect(fs.existsSync(index.filename+'.lock')).toBe(true);return load()})
+  vi.spyOn(fs,'renameSync').mockImplementation((from,to)=>{expect(fs.existsSync(index.filename+'.lock')).toBe(true);rename(from,to)})
+  await lib.ingest(txt('book.txt','Orchard source'))
+  expect(fs.existsSync(index.filename+'.lock')).toBe(false)
+ })
+ it('does not steal a write lock held by a separate process and permits retry after release',async()=>{
+  const lock=index.filename+'.lock'
+  const child=spawn(process.execPath,['-e',`const fs=require('fs');const p=process.argv[1];const fd=fs.openSync(p,'wx');process.send('locked');process.once('message',()=>{fs.closeSync(fd);fs.unlinkSync(p);process.exit(0)});`,lock],{stdio:['ignore','ignore','ignore','ipc']})
+  try {
+    await once(child,'message')
+    await expect(lib.ingest(txt('book.txt','Orchard source'))).rejects.toThrow('write is locked')
+    expect(fs.existsSync(index.filename)).toBe(false);expect(fs.existsSync(lock)).toBe(true)
+    const exit=once(child,'exit');child.send('release');await exit
+    await lib.ingest(path.join(folder,'book.txt'))
+    expect(lib.list()).toHaveLength(1)
+  }finally{if(child.exitCode===null){const exit=once(child,'exit');child.kill();await exit}}
+ })
 })
