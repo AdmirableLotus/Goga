@@ -229,10 +229,25 @@ export class MissionEngine extends EventEmitter {
         // ── Security scope enforcement ─────────────────────────────────────
         if (mission.securityWorkspaceId) {
           const target = this.extractTarget(plan.args)
+          const toolDefinition = this.registry.get(plan.tool)?.definition
+          const targetRequired = !!toolDefinition && ['browser', 'web', 'shell'].includes(toolDefinition.category)
+          if (!target && targetRequired) {
+            this.log.warn(`MissionEngine: security action blocked because no explicit target was provided: ${plan.tool}`)
+            this.security.logAudit(mission.securityWorkspaceId, { tool: plan.tool, target: '', params: plan.args, result: 'blocked: missing explicit target', inScope: false })
+            replanCount++
+            if (replanCount >= MAX_REPLANS) {
+              this.finishMission(mission, 'failed', undefined, 'Security action blocked: an explicit in-scope target is required')
+              return
+            }
+            mission.observations.push({ ...obs, lastActionResult: 'BLOCKED: security actions require an explicit target that can be checked against the active workspace scope.', verificationResult: 'scope_violation' })
+            this.emit('mission:event', this.event('mission.replanning', mission.id))
+            continue
+          }
           if (target) {
             const scope = this.security.checkScope(mission.securityWorkspaceId, target)
             if (!scope.inScope) {
               this.log.warn(`MissionEngine: out-of-scope action blocked: ${plan.tool} → ${target}: ${scope.reason}`)
+              this.security.logAudit(mission.securityWorkspaceId, { tool: plan.tool, target, params: plan.args, result: `blocked: ${scope.reason}`, inScope: false })
               // Inject scope violation into next observation as a hard constraint
               mission.observations.push({
                 ...obs,
