@@ -228,9 +228,9 @@ export class MissionEngine extends EventEmitter {
 
         // ── Security scope enforcement ─────────────────────────────────────
         if (mission.securityWorkspaceId) {
-          const target = this.extractTarget(plan.args)
           const toolDefinition = this.registry.get(plan.tool)?.definition
-          const targetRequired = !!toolDefinition && ['browser', 'web', 'shell'].includes(toolDefinition.category)
+          const target = this.extractTarget(plan.args) ?? (toolDefinition?.category === 'browser' ? obs.browserUrl : undefined)
+          const targetRequired = !!toolDefinition && ['browser', 'web', 'shell', 'process', 'android'].includes(toolDefinition.category)
           if (!target && targetRequired) {
             this.log.warn(`MissionEngine: security action blocked because no explicit target was provided: ${plan.tool}`)
             this.security.logAudit(mission.securityWorkspaceId, { tool: plan.tool, target: '', params: plan.args, result: 'blocked: missing explicit target', inScope: false })
