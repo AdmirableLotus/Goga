@@ -1,9 +1,18 @@
 import type { IpcMain } from 'electron'
 import { SecurityWorkspaceService } from '../services/securityWorkspace'
+import { HackerOneService } from '../services/hackerOne'
 import type { SecurityFinding, EvidenceEntry, SecurityWorkspace } from '../../shared/types'
 
 export function registerSecurityHandlers(ipcMain: IpcMain) {
   const svc = SecurityWorkspaceService.getInstance()
+  const hackerOne = HackerOneService.getInstance()
+  ipcMain.handle('security:h1Status', () => hackerOne.status())
+  ipcMain.handle('security:h1SaveCredentials', (_e, username: string, token: string) => hackerOne.saveCredentials(username, token))
+  ipcMain.handle('security:h1ClearCredentials', () => hackerOne.clearCredentials())
+  ipcMain.handle('security:h1Import', async (_e, handle: string) => {
+    const imported = await hackerOne.importProgram(handle)
+    return svc.create(imported)
+  })
   ipcMain.handle('security:list', () => svc.list())
   ipcMain.handle('security:get', (_e, id: string) => svc.get(id))
   ipcMain.handle('security:getActive', () => svc.getActive())
