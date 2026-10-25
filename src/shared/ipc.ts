@@ -98,6 +98,10 @@ export interface MainHandlers {
   }>
 
   // Security workspace
+  'security:h1Status': () => Promise<{ configured: boolean; encryptionAvailable: boolean }>
+  'security:h1SaveCredentials': (username: string, token: string) => Promise<{ configured: true }>
+  'security:h1ClearCredentials': () => Promise<void>
+  'security:h1Import': (handle: string) => Promise<SecurityWorkspace>
   'security:list': () => Promise<SecurityWorkspace[]>
   'security:get': (id: string) => Promise<SecurityWorkspace | null>
   'security:create': (data: Omit<SecurityWorkspace, 'id' | 'findings' | 'evidence' | 'auditLog' | 'createdAt' | 'updatedAt'>) => Promise<SecurityWorkspace>
