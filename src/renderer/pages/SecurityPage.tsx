@@ -31,6 +31,13 @@ export default function SecurityPage() {
   const [newFinding, setNewFinding] = useState<Partial<SecurityFinding> | null>(null)
   const [newNote, setNewNote] = useState('')
   const [saved, setSaved] = useState(false)
+  const [h1Configured, setH1Configured] = useState(false)
+  const [h1EncryptionAvailable, setH1EncryptionAvailable] = useState(false)
+  const [h1Username, setH1Username] = useState('')
+  const [h1Token, setH1Token] = useState('')
+  const [h1Handle, setH1Handle] = useState('')
+  const [h1Message, setH1Message] = useState('')
+  const [h1Busy, setH1Busy] = useState(false)
 
   const load = async () => {
     const [all, active] = await Promise.all([
@@ -45,7 +52,38 @@ export default function SecurityPage() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    window.goga.invoke('security:h1Status').then(s => {
+      setH1Configured(s.configured)
+      setH1EncryptionAvailable(s.encryptionAvailable)
+    }).catch(e => setH1Message(String(e)))
+  }, [])
+
+  const saveHackerOneCredentials = async () => {
+    setH1Busy(true); setH1Message('')
+    try {
+      await window.goga.invoke('security:h1SaveCredentials', h1Username, h1Token)
+      const status = await window.goga.invoke('security:h1Status')
+      setH1Configured(status.configured); setH1EncryptionAvailable(status.encryptionAvailable)
+      setH1Token(''); setH1Message('Encrypted HackerOne credentials saved on this computer.')
+    } catch (e) { setH1Message(String(e)) } finally { setH1Busy(false) }
+  }
+
+  const importHackerOneProgram = async () => {
+    setH1Busy(true); setH1Message('')
+    try {
+      const ws = await window.goga.invoke('security:h1Import', h1Handle)
+      await load(); setSelected(ws); setSection('scope')
+      setH1Message(`Imported ${ws.authorizedAssets.length} explicitly eligible assets. Review policy and scope before activating.`)
+    } catch (e) { setH1Message(String(e)) } finally { setH1Busy(false) }
+  }
+
+  const clearHackerOneCredentials = async () => {
+    await window.goga.invoke('security:h1ClearCredentials')
+    setH1Configured(false); setH1Username(''); setH1Token('')
+    setH1Message('Saved HackerOne credentials removed from this computer.')
+  }
 
   const activate = async (id: string | null) => {
     await window.goga.invoke('security:setActive', id)
@@ -155,6 +193,24 @@ export default function SecurityPage() {
 
       {/* Main content */}
       <div style={styles.main}>
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>HackerOne · read-only program import</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 8 }}>Imports policy and assets HackerOne marks eligible for submission. Goga will not submit reports or start testing from this panel.</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {!h1Configured ? <>
+              <input value={h1Username} onChange={e => setH1Username(e.target.value)} placeholder="HackerOne username" aria-label="HackerOne username" style={{ width: 180 }} />
+              <input value={h1Token} onChange={e => setH1Token(e.target.value)} placeholder="Personal API token" aria-label="HackerOne personal API token" type="password" style={{ width: 210 }} />
+              <button onClick={saveHackerOneCredentials} disabled={h1Busy || !h1EncryptionAvailable} style={styles.smallBtn}>Save encrypted token</button>
+            </> : <>
+              <span style={{ color: 'var(--success)', fontSize: 12 }}>● Token stored encrypted on this computer</span>
+              <button onClick={clearHackerOneCredentials} disabled={h1Busy} style={styles.smallBtn}>Disconnect</button>
+            </>}
+            <input value={h1Handle} onChange={e => setH1Handle(e.target.value)} placeholder="Program handle (e.g. acme)" aria-label="HackerOne program handle" style={{ width: 220 }} />
+            <button onClick={importHackerOneProgram} disabled={h1Busy || !h1Configured || !h1Handle.trim()} style={styles.primaryBtn}>{h1Busy ? 'Working…' : 'Import program'}</button>
+          </div>
+          {!h1EncryptionAvailable && <div style={{ color: 'var(--warn)', fontSize: 11, marginTop: 6 }}>Secure OS credential storage is unavailable. Goga will not save an API token until it is available.</div>}
+          {h1Message && <div role="status" style={{ color: h1Message.startsWith('Error') ? 'var(--danger)' : 'var(--text-muted)', fontSize: 11, marginTop: 6 }}>{h1Message}</div>}
+        </div>
         {/* Create form */}
         {creating && (
           <div style={styles.createForm}>
