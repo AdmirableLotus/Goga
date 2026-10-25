@@ -69,6 +69,12 @@ export class AuthorizationService {
       return { allowed: true, requiresApproval: false, reason: 'read-only observation' }
     }
 
+    // In bounty/security mode, every state-changing or probing action requires a
+    // fresh user approval, regardless of the user's normal-mode auto-approve setting.
+    if (ctx.mode === 'security-research') {
+      return { allowed: true, requiresApproval: true, reason: 'security research actions always require explicit approval' }
+    }
+
     // 2. Critical risk — always requires approval
     if (tool.riskLevel === 'critical') {
       return { allowed: true, requiresApproval: true, reason: 'critical risk level' }
