@@ -60,6 +60,12 @@ describe('actual planner parser, bounded retry and failure state', () => {
     expect(agent.parseToolCall('{"done":true,"reply":"literal {value}"}')).toMatchObject({done:true,reply:'literal {value}'})
     expect(agent.parseToolCall('```json\n'+validTool+'\n```')).toMatchObject({done:false,tool:'notepad.saveText'})
   })
+  it('accepts a reply with raw line breaks inside the string, but still rejects JSON wrapped in prose', () => {
+    const agent = new AgentLoop() as any
+    const multiline = '{"thought":"done","done":true,"reply":"Here is how to sell it:\n1. Etsy\n\t2. Saatchi Art"}'
+    expect(agent.parseToolCall(multiline)).toMatchObject({ done: true, reply: 'Here is how to sell it:\n1. Etsy\n\t2. Saatchi Art' })
+    expect(agent.parseToolCall('Sure!\n' + multiline)._planningFailed).toBe(true)
+  })
   it('Stop after the first response suppresses retry and dispatch', async () => {
     const agent = new AgentLoop()
     boundary.chat.mockImplementationOnce(async (_messages, _onToken, signal: AbortSignal) => {

@@ -13,6 +13,7 @@ const AGENT_STATUS: Record<AgentState['status'], string> = {
 }
 
 function stepStatus(step: AgentStep): string {
+  if (step.result.success && step.check?.outcome === 'failed') return 'Ran, but check failed'
   if (step.result.success) return 'Succeeded'
   return step.result.error === 'cancelled' || step.result.error === 'cancelled before save dispatch'
     ? 'Stopped' : 'Failed'
@@ -80,6 +81,7 @@ export default function ActivityPage() {
                     <code>{step.tool}</code> — {stepStatus(step)}
                     {returnedPath(step) && <div style={styles.detail}>File: <code>{returnedPath(step)}</code></div>}
                     {step.result.error && <div style={styles.detail}>{step.result.error}</div>}
+                    {step.result.success && step.check?.outcome === 'failed' && <div style={styles.detail}>{step.check.detail}</div>}
                   </li>
                 ))}
               </ol>

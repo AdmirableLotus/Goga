@@ -16,6 +16,9 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(open|launch|start|show)\b.{0,40}\b(browser|brave|chrome|firefox|edge|app|terminal|notepad|explorer|spotify|discord|slack|vscode|code)\b/i,
   /\b(show|open|visit|go to|navigate to|browse to)\b.{0,60}https?:\/\//i,
   /\b(show|open|visit|go to|navigate to|browse to)\b.{0,60}www\./i,
+  // Bare domains ("can you open google.com") — without this they fell through to chat,
+  // which narrated a tool call instead of performing it.
+  /\b(show|open|visit|go to|navigate to|browse to|pull up|bring up)\b.{0,40}\b[a-z0-9-]+\.(com|org|net|io|ai|dev|app|co|edu|gov|tv|me|us|uk)\b/i,
   /\b(go to|navigate to|browse to)\b/i,
   /\b(find|search for|look up|research)\b/i,
   /\b(organize|sort|move|rename|delete)\b.{0,30}\b(files?|folders?)\b/i,

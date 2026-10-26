@@ -4,6 +4,10 @@ import { SettingsService } from './settings'
 import { plannerDiagnostic } from './plannerDiagnostics'
 import { runLocalConversation } from './localConversation'
 
+// A cold load of the local brain from disk takes ~1 minute; callers wait this long rather
+// than answering with the weaker backup model.
+export const BRAIN_LOAD_WAIT_MS = 120_000
+
 export type LocalModelStatus = 'uninitialized' | 'loading' | 'ready' | 'error'
 
 export interface LocalModelState {
@@ -104,6 +108,25 @@ export class LocalLlamaService {
       if (!signal?.aborted) this.log.error(`LocalLlama: chat error — ${msg}`)
       throw new Error(msg)
     }
+  }
+
+  /** While the model is loading, wait for the load to finish (bounded by timeoutMs and Stop).
+   *  A cold load of a 6 GB model from disk takes ~1 minute. Returns whether it is ready. */
+  async waitWhileLoading(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+    if (this.state.status !== 'loading' || !this.initPromise) return this.isReady()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onAbort: (() => void) | undefined
+    await Promise.race([
+      this.initPromise.catch(() => {}),
+      new Promise<void>(resolve => {
+        timer = setTimeout(resolve, timeoutMs)
+        onAbort = resolve
+        signal?.addEventListener('abort', onAbort, { once: true })
+      }),
+    ])
+    clearTimeout(timer)
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
+    return this.isReady()
   }
 
   /** Unload the current model and load whatever the settings now point at. */

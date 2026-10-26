@@ -43,7 +43,7 @@ export interface VerificationResult {
 export interface VerificationSpec {
   type: 'url_contains' | 'title_contains' | 'dom_text_exists' | 'dom_text_gone'
        | 'window_exists' | 'window_active' | 'element_exists' | 'element_gone'
-       | 'file_exists' | 'process_running' | 'dialog_gone' | 'none'
+       | 'file_exists' | 'file_gone' | 'process_running' | 'dialog_gone' | 'none'
   expected?: string
   windowTitle?: string
   elementName?: string
@@ -88,6 +88,7 @@ export class VerificationEngine {
         case 'dialog_gone':
           return this.verifyDialogGone(spec)
         case 'file_exists':
+        case 'file_gone':
           return this.verifyFile(spec)
         case 'process_running':
           return this.verifyProcess(spec)
@@ -261,8 +262,9 @@ export class VerificationEngine {
     if (!spec.filePath) return { outcome: 'inconclusive', method: 'filesystem', detail: 'no filePath' }
     const fs = require('fs') as typeof import('fs')
     const exists = fs.existsSync(spec.filePath)
+    const wantGone = spec.type === 'file_gone'
     return {
-      outcome: exists ? 'passed' : 'failed', method: 'filesystem',
+      outcome: exists !== wantGone ? 'passed' : 'failed', method: 'filesystem',
       detail: `file "${spec.filePath}" ${exists ? 'exists' : 'not found'}`
     }
   }

@@ -431,6 +431,13 @@ describe('agentRouting — show verb and URL triggers', () => {
   it('plain chat question is not an agent task', () => {
     expect(looksLikeAgentTask('What is the capital of France?')).toBe(false)
   })
+  it('"can you open google.com" (bare domain) is an agent task', () => {
+    expect(looksLikeAgentTask('can you open google.com')).toBe(true)
+    expect(looksLikeAgentTask('pull up youtube.com for me')).toBe(true)
+  })
+  it('mentioning a domain without an open verb stays chat', () => {
+    expect(looksLikeAgentTask('I read an article on wikipedia.org yesterday')).toBe(false)
+  })
 })
 
 // ── 10. agentRouting — form/fill/submit routing requirement ─────────────────

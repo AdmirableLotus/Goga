@@ -4,7 +4,7 @@ import { LogService } from './logs'
 import { BrainService } from './brain'
 import { LibraryService } from './library'
 import { OllamaClient } from './ollamaClient'
-import { LocalLlamaService } from './localLlama'
+import { BRAIN_LOAD_WAIT_MS, LocalLlamaService } from './localLlama'
 import { SettingsService } from './settings'
 import { AgentLoop } from './agentLoop'
 import { ToolRegistry } from '../tools/registry'
@@ -130,11 +130,11 @@ export class OrchestratorService {
       return reply
     }
 
-    // If still loading, wait up to 30s for it to become ready
+    // If still loading, wait for it rather than answering with the weaker backup model
     const llamaState = this.llama.getState()
     if (llamaState.status === 'loading') {
-      this.log.info('LocalLlama still loading — waiting up to 30s…')
-      const ready = await this.waitForLlama(30_000)
+      this.log.info(`LocalLlama still loading — waiting up to ${BRAIN_LOAD_WAIT_MS / 1000}s…`)
+      const ready = await this.llama.waitWhileLoading(BRAIN_LOAD_WAIT_MS, signal)
       if (ready) {
         const reply = await this.thinkWithLocalLlama(content, onToken, signal)
         this.brain.addMessage(reply)
@@ -177,23 +177,10 @@ export class OrchestratorService {
     if (signal.aborted) throw new Error('cancelled')
     const settings = SettingsService.getInstance().get()
     if (settings.primaryModel === 'ollama') return this.ollama.chat(messages, undefined, signal)
-    if (!this.llama.isReady() && this.llama.getState().status === 'loading') await this.waitForLlama(30_000)
+    if (!this.llama.isReady()) await this.llama.waitWhileLoading(BRAIN_LOAD_WAIT_MS, signal)
     if (signal.aborted) throw new Error('cancelled')
     if (!this.llama.isReady()) throw new Error('Configured local observation answerer is not ready')
     return this.llama.chat(messages, undefined, signal)
-  }
-
-  private waitForLlama(timeoutMs: number): Promise<boolean> {
-    return new Promise(resolve => {
-      const start = Date.now()
-      const check = () => {
-        if (this.llama.isReady()) return resolve(true)
-        if (this.llama.getState().status === 'error') return resolve(false)
-        if (Date.now() - start > timeoutMs) return resolve(false)
-        setTimeout(check, 500)
-      }
-      check()
-    })
   }
 
   private startAgentTask(task: string, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void): ChatMessage {

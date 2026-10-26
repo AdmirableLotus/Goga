@@ -36,8 +36,29 @@ function stripHtml(html: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
     .replace(/\s{2,}/g, ' ')
     .trim()
+}
+
+/**
+ * Page text without site chrome: drops nav/header/footer/aside/form blocks and
+ * prefers the page's <article> or <main>, so the planner's limited budget goes
+ * to the content rather than menus.
+ */
+export function readableText(html: string): string {
+  const cleaned = html
+    .replace(/<(script|style|noscript|svg|template)\b[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, ' ')
+  const pick = (tag: string) => {
+    const blocks = cleaned.match(new RegExp(`<${tag}\\b[\\s\\S]*?<\\/${tag}>`, 'gi')) ?? []
+    return blocks.sort((a, b) => b.length - a.length)[0]
+  }
+  const main = pick('article') ?? pick('main')
+  const text = stripHtml(main ?? cleaned)
+  // Some pages wrap only a teaser in <article>; fall back when it is too thin to be the content.
+  return main && text.length < 500 ? stripHtml(cleaned) : text
 }
 
 reg.register({
@@ -117,7 +138,7 @@ reg.register({
       html = Buffer.concat(chunks).toString('utf8')
     } else html = await fetchUrl(p.url as string)
     const max = (p.maxChars as number | undefined) ?? 8000
-    const content = p.raw ? html.slice(0, max) : stripHtml(html).slice(0, max)
+    const content = p.raw ? html.slice(0, max) : readableText(html).slice(0, max)
     return { success: true, data: { url: p.url, content, truncated: content.length >= max } }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }

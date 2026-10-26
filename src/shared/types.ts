@@ -143,6 +143,16 @@ export interface AgentStep {
   result: ToolResult
   verified: boolean
   timestamp: number
+  /** How the step's effect was checked after the tool ran. */
+  check?: StepCheck
+}
+
+/** passed/failed come from a tool error or a deterministic check; doubtful is a vision
+ *  model's negative opinion (advisory only); unchecked means nothing could confirm it. */
+export interface StepCheck {
+  outcome: 'passed' | 'failed' | 'doubtful' | 'unchecked'
+  method: string
+  detail: string
 }
 
 export type AgentStatus = 'idle' | 'running' | 'waiting-approval' | 'done' | 'error' | 'stopped'
