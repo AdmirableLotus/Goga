@@ -3,6 +3,7 @@ import { LogService } from './logs'
 import { SettingsService } from './settings'
 import { plannerDiagnostic } from './plannerDiagnostics'
 import { runLocalConversation } from './localConversation'
+import { exposeCudaRuntime } from './cudaRuntime'
 
 // A cold load of the local brain from disk takes ~1 minute; callers wait this long rather
 // than answering with the weaker backup model.
@@ -67,6 +68,8 @@ export class LocalLlamaService {
     }
 
     try {
+      const cudaDirs = exposeCudaRuntime()
+      if (cudaDirs.length > 0) this.log.info(`LocalLlama: CUDA runtime folders added to PATH: ${cudaDirs.join('; ')}`)
       const { getLlama } = await esmImport('node-llama-cpp')
 
       this.log.info('LocalLlama: getLlama() — requesting best available GPU backend (auto)')
