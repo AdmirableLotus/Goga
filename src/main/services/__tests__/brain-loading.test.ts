@@ -57,6 +57,15 @@ describe('planner while the local brain is loading', () => {
     expect(messages.map(m => m.content).join('\n')).not.toContain('Screenshot attached')
   })
 
+  it('builds the planner prompt from Goga\'s shared identity, with no other assistant\'s persona', async () => {
+    boundary.ready = true
+    await plan(new AgentLoop())
+    const system = (boundary.localChat.mock.calls[0][0] as { role: string; content: string }[])[0].content
+    expect(system.startsWith("You are Goga, Fixture's own AI.")).toBe(true)
+    expect(system).toContain('Honest above all')
+    expect(system).not.toMatch(/Rabbit|Perplexity/)
+  })
+
   it('Stop during the wait ends planning without calling any model', async () => {
     const abort = new AbortController()
     boundary.wait.mockImplementation(async () => { abort.abort(); return false })

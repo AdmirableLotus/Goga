@@ -15,6 +15,7 @@ import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDedupli
 import { nanoid } from '../utils/nanoid'
 import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import { VerificationEngine } from './verificationEngine'
+import { gogaIdentity } from './persona'
 import { READ_ONLY_TOOLS, checkSpecFor, describeStepForPlanner, honestyNote, unresolvedFailures } from './stepVerification'
 import type { ObservationOutcome, ObservationProgress } from './screenObservation'
 import type { AgentState, AgentStep, AgentStatus, StepCheck, ToolResult } from '../../shared/types'
@@ -506,8 +507,9 @@ export class AgentLoop {
     const stepHistory = recent.map((s, i) =>
       describeStepForPlanner(s, i + 1, i === recent.length - 1 ? LATEST_RESULT_CHARS : OLDER_RESULT_CHARS)).join('\n')
 
-    const systemPrompt = `You are Goga, an autonomous computer-use agent running on ${settings.userName}'s Windows PC.
-You behave like Rabbit R1 or Perplexity: when asked about any topic, you IMMEDIATELY search the web and synthesize a helpful answer. Never ask for permission to search — just do it.
+    const systemPrompt = `${gogaIdentity(settings.userName)}
+
+Right now you are carrying out a task on the computer, one tool call at a time. For questions about a topic, search the web right away and answer from what you find — no need to ask permission to search.
 
 AVAILABLE TOOLS:
 ${toolSchema}

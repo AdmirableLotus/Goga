@@ -17,6 +17,7 @@ import { getMainWindow } from '../index'
 import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest } from './agentRouting'
 import { plannerDiagnostic } from './plannerDiagnostics'
 import { observeScreen, type ObservationMessages } from './screenObservation'
+import { gogaIdentity } from './persona'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -229,18 +230,17 @@ export class OrchestratorService {
     const facts = await this.brain.findRelevantFacts(userInput)
     const books = this.library.list()
     const bookChunks = this.library.search(userInput, 3)
-    const toolSummary = this.registry.toPromptSummary()
 
     const now = new Date()
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
     const currentDate = new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz }).format(now)
     const currentTime = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZone: tz }).format(now)
 
-    return `You are Goga, a loyal, intelligent AI assistant and computer operator living on ${settings.userName}'s PC.
+    return `${gogaIdentity(settings.userName)}
+
+Right now you are chatting with ${settings.userName} (by text, voice or Telegram).
 
 Current date and time: ${currentDate}, ${currentTime} (${tz})
-
-Your personality: direct, warm, honest, proactive. You speak like a trusted friend who happens to be brilliant.
 
 What you know about ${settings.userName}:
 ${facts.length > 0 ? facts.map(f => `- ${f.content}`).join('\n') : '- Still getting to know them.'}
@@ -250,11 +250,9 @@ ${books.length > 0 ? books.map(b => `- "${b.title}"`).join('\n') : '- None yet.'
 
 ${bookChunks.length > 0 ? `Relevant book passages:\n${bookChunks.map(c => c.text).join('\n---\n').slice(0, 1200)}` : ''}
 
-Your computer-use capabilities (you can do all of these autonomously):
-${toolSummary}
+You can also operate this PC — browser, files, apps, desktop — but that happens in a separate task mode, not in this chat. In this chat you cannot run tools: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer. If ${settings.userName} wants an action, say you can do it and suggest phrasing it as a task (for example "open google.com" or "search for canvas selling tips").
 
-IMPORTANT: You have full conversation history. Always read it before responding — never ignore context from earlier in the conversation.
-Address ${settings.userName} by name occasionally. Keep responses concise unless detail is needed.`
+You have the full conversation history. Read it before replying and don't ignore earlier context.`
   }
 
   private async thinkWithLocalLlama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {

@@ -29,6 +29,7 @@ import { BrowserAdapter } from '../adapters/browser'
 import { FocusManager } from './focusManager'
 import { VerificationEngine } from './verificationEngine'
 import { PromptInjectionGuard } from './promptInjectionGuard'
+import { gogaIdentity } from './persona'
 import { getMainWindow } from '../index'
 import type {
   Mission, MissionStep, MissionStatus, MissionStepStatus,
@@ -486,7 +487,9 @@ export class MissionEngine extends EventEmitter {
     })
 
     // SYSTEM PROMPT — outside any UNTRUSTED_DATA tags
-    const systemPrompt = `You are Goga, an autonomous desktop operator on ${settings.userName}'s Windows PC.
+    const systemPrompt = `${gogaIdentity(settings.userName)}
+
+Right now you are running a Mission: operating the desktop step by step toward the goal below.
 
 MISSION: ${mission.userGoal}
 
