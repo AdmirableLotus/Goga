@@ -44,7 +44,9 @@ export function tickParticles(sys: ParticleSystem, amp: number, targetColor: THR
 
   for (let i = 0; i < COUNT; i++) {
     const px = pos[i*3], py = pos[i*3+1]
-    const angle = Math.atan2(py, px) + sys.velocities[i] * speedBoost
+    // Undo the 0.88 vertical squash before measuring the angle; otherwise it compounds
+    // every frame and the cloud collapses into a flat line within seconds.
+    const angle = Math.atan2(py / 0.88, px) + sys.velocities[i] * speedBoost
     // Amplitude burst: push particles outward slightly
     const r = sys.radii[i] + amp * 0.4
     pos[i*3]   = Math.cos(angle) * r

@@ -9,6 +9,7 @@ import { createAudioState, tickAudio } from './livingTriangle/audioReactive'
 import { buildMembranePoints, buildMembraneGeometry, updateMembraneGeometry, tickMembrane } from './livingTriangle/energyMembrane'
 import { createParticles, tickParticles } from './livingTriangle/particles'
 import { createWaveSystem, tickWaves } from './livingTriangle/energyWaves'
+import { createEdgeFlow, tickEdgeFlow, type EdgeFlow } from './livingTriangle/edgeFlow'
 import type { AudioReactiveState } from './livingTriangle/types'
 import type { ParticleSystem } from './livingTriangle/particles'
 import type { WaveSystem } from './livingTriangle/energyWaves'
@@ -77,8 +78,13 @@ interface SR {
   particleSys: ParticleSystem
   waveSys: WaveSystem
   membraneLines: Array<{ line: THREE.Line; pts: MembranePoint[] }>
+  edgeFlow: EdgeFlow
   prevTime: number
 }
+
+// Core energy stream: between the inner (0.46) and outer (0.72) core halos, just in front of them.
+const CORE_STREAM_SIZE = 0.6
+const CORE_STREAM_Z = 1.2
 
 export function useGogaScene(
   canvasRef: React.RefObject<HTMLCanvasElement>,
@@ -98,7 +104,9 @@ export function useGogaScene(
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    renderer.setSize(canvas.clientWidth, canvas.clientHeight)
+    // updateStyle=false: keep the CSS 100% size. Letting three.js write a fixed pixel
+    // width froze the canvas at its first size, so a maximized window left a dead band.
+    renderer.setSize(canvas.clientWidth, canvas.clientHeight, false)
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = 1.15
 
@@ -242,6 +250,9 @@ export function useGogaScene(
     // Energy wave system
     const waveSys = createWaveSystem(scene)
 
+    // Energy streaming along the outer edge and around the core
+    const edgeFlow = createEdgeFlow(group, scene, outerSize, CORE_STREAM_SIZE)
+
     // ── BLOOM ─────────────────────────────────────────────────────────────────
     const composer = new EffectComposer(renderer)
     composer.addPass(new RenderPass(scene, camera))
@@ -261,6 +272,7 @@ export function useGogaScene(
       particleSys,
       waveSys,
       membraneLines,
+      edgeFlow,
       prevTime: 0,
     }
 
@@ -272,7 +284,7 @@ export function useGogaScene(
       // Adjust FOV so triangle always fits — taller container = narrower FOV
       r.current.camera.fov = Math.max(28, Math.min(55, 38 * (400 / Math.max(h, 100))))
       r.current.camera.updateProjectionMatrix()
-      r.current.renderer.setSize(w, h)
+      r.current.renderer.setSize(w, h, false)
       r.current.composer.setSize(w, h)
       r.current.bloom.setSize(w, h)
     })
@@ -317,11 +329,12 @@ export function useGogaScene(
         s.group.position.y = Math.sin(t * 0.4) * 0.04
 
       } else if (vs === 'listening') {
-        bloomTarget = 2.1; rotSpeed = 0.002
-        outerCol = new THREE.Color(C.cyan); innerCol = new THREE.Color(C.coreWhite)
+        // Attentive cyan glow; kept below the white-out point so the layers stay visible.
+        bloomTarget = 1.75; rotSpeed = 0.002
+        outerCol = new THREE.Color(C.cyan); innerCol = new THREE.Color(C.lavender).lerp(new THREE.Color(C.cyan), 0.5)
         coreCol = new THREE.Color(C.cyan); haloCol = new THREE.Color(C.cyan)
-        h1Opacity = 0.25; h2Opacity = 0.12
-        coreScale = 1.2 + Math.sin(t * 5) * 0.1
+        h1Opacity = 0.2; h2Opacity = 0.09
+        coreScale = 1.1 + Math.sin(t * 5) * 0.08
         pCol = new THREE.Color(C.cyan); pSpeed = 0.0006
 
       } else if (vs === 'transcribing') {
@@ -359,13 +372,14 @@ export function useGogaScene(
         pCol = new THREE.Color(C.cyan); pSpeed = 0.002
 
       } else if (vs === 'speaking') {
+        // Tuned for the real voice envelope (peaks reach 1.0): pulse with words, never blow out.
         const a = s.audioState.envelope
-        bloomTarget = 1.6 + a * 2.2
-        coreScale = 1.0 + a * 2.0
-        h1Opacity = 0.14 + a * 0.36
-        h2Opacity = 0.06 + a * 0.18
+        bloomTarget = 1.5 + a * 0.6
+        coreScale = 1.0 + a * 0.45
+        h1Opacity = 0.14 + a * 0.2
+        h2Opacity = 0.06 + a * 0.1
         outerCol = new THREE.Color(C.elecPurple).lerp(new THREE.Color(C.cyan), a * 0.7)
-        innerCol = new THREE.Color(C.lavender).lerp(new THREE.Color(C.coreWhite), a * 0.5)
+        innerCol = new THREE.Color(C.lavender).lerp(new THREE.Color(C.coreWhite), a * 0.25)
       } else if (vs === 'waitingApproval') {
         bloomTarget = 1.6; rotSpeed = 0.0005
         outerCol = new THREE.Color(C.amber); innerCol = new THREE.Color(C.amber)
@@ -475,14 +489,14 @@ export function useGogaScene(
 
       // ── Energy membrane ──────────────────────────────────────────────────────
       const preset = STATE_PRESETS[vs]
-      const turbulence = preset.edgeTurbulence + (vs === 'speaking' ? audioEnv * 0.35 : 0)
+      const turbulence = preset.edgeTurbulence + (vs === 'speaking' ? audioEnv * 0.12 : 0)
       for (let mi = 0; mi < s.membraneLines.length; mi++) {
         const { line, pts } = s.membraneLines[mi]
-        tickMembrane(pts, t, turbulence * (1 - mi * 0.2), audioEnv)
+        tickMembrane(pts, t, turbulence * (1 - mi * 0.2), audioEnv * 0.35)
         updateMembraneGeometry(line.geometry as THREE.BufferGeometry, pts)
         const mmat = line.material as THREE.LineBasicMaterial
         mmat.color.lerp(new THREE.Color(outerCol), 0.06)
-        mmat.opacity = (0.18 - mi * 0.04) + audioEnv * 0.25
+        mmat.opacity = (0.18 - mi * 0.04) + audioEnv * 0.15
       }
 
       // ── New particles ─────────────────────────────────────────────────────────
@@ -495,8 +509,13 @@ export function useGogaScene(
         tickWaves(s.waveSys, wdt, audioEnv, vs === 'speaking' ? C.cyan : C.teal)
       }
 
+      // ── Edge energy streams ──────────────────────────────────────────────────
+      const outerZ = (s.group.children[0] as THREE.Group).position.z
+      const flowCol = new THREE.Color(pCol).lerp(new THREE.Color(C.coreWhite), 0.4)
+      tickEdgeFlow(s.edgeFlow, wdt, vs, audioEnv, flowCol, outerZ, CORE_STREAM_Z)
+
       // Speaking: amplitude drives bloom and outer scale
-      if (vs === 'speaking') { bloomTarget = 1.8 + audioEnv * 2.0 }
+      if (vs === 'speaking') { bloomTarget = 1.5 + audioEnv * 0.6 }
 
       // ── Bloom ─────────────────────────────────────────────────────────────
       s.bloom.strength += (bloomTarget - s.bloom.strength) * 0.05

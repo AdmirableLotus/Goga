@@ -27,9 +27,12 @@ import { spawn, ChildProcess } from 'child_process'
 import type { ITtsProvider } from './ISpeechProvider'
 import { LogService } from '../logs'
 import { MANIFEST_HASH } from '../modelManager'
+import { wavEnvelope } from './wavEnvelope'
 
 export const KOKORO_MODEL_DIR = 'kokoro-v1.0'
 const VERIFIED_SENTINEL = '.verified'
+// Voice-level updates to the visual: fine enough to follow syllables, cheap over IPC.
+const AMPLITUDE_WINDOW_MS = 50
 
 export class KokoroModelMissingError extends Error {
   readonly code = 'KOKORO_MODEL_MISSING'
@@ -257,6 +260,10 @@ env.cacheDir          = modelDir
     return new Promise((resolve, reject) => {
       if (this.gen !== myGen) { resolve(); return }
 
+      // Real loudness of this clip, replayed in sync so the visual moves with the words.
+      let envelope: number[] = []
+      try { envelope = wavEnvelope(fs.readFileSync(wavPath), AMPLITUDE_WINDOW_MS) } catch { /* fall back to a gentle pulse */ }
+
       // Constant script — WAV path comes from the environment, not the script string.
       const script = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -290,11 +297,14 @@ $player.PlaySync()
           if (line.trim() === 'PLAYBACK_STARTED' && !started) {
             started = true
             this.onPlaybackStart?.()
+            const startedAt = Date.now()
             let tick = 0
             ampInterval = setInterval(() => {
               if (this.gen !== myGen || !this.proc) { clearAmp(); return }
-              this.onAmplitude?.(Math.sin(tick++ * 0.3) * 0.3 + 0.35)
-            }, 100)
+              if (envelope.length === 0) { this.onAmplitude?.(Math.sin(tick++ * 0.3) * 0.3 + 0.35); return }
+              const i = Math.floor((Date.now() - startedAt) / AMPLITUDE_WINDOW_MS)
+              this.onAmplitude?.(envelope[Math.min(i, envelope.length - 1)] ?? 0)
+            }, AMPLITUDE_WINDOW_MS)
           }
         }
       })
