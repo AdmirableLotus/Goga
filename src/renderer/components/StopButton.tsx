@@ -8,6 +8,7 @@ export default function StopButton() {
     setStopping(true)
     await Promise.all([
       window.goga.invoke('action:stop'),
+      window.goga.invoke('developer:stop'),
       window.goga.invoke('agent:stop')
     ])
     setStopping(false)

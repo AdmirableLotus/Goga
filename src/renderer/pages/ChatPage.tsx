@@ -5,6 +5,7 @@ import { useGogaVisual } from '../context/GogaVisualContext'
 import { agentStateToVisual } from '../components/GogaCore/GogaVisualState'
 import GogaTriangleScene from '../components/GogaCore/GogaTriangleScene'
 import ChatComposer from '../components/ChatComposer'
+import type { ChatAttachment } from '../../shared/attachments'
 
 interface DisplayMessage extends ChatMessage { screenshot?: ScreenshotResult }
 
@@ -143,9 +144,9 @@ export default function ChatPage() {
   }, [setVisualState])
 
   // ── Send ──────────────────────────────────────────────────────────────────
-  const sendText = async (text: string) => {
+  const sendText = async (text: string, attachments: ChatAttachment[] = []) => {
     // Block if loading (non-agent) OR if a send is already in flight
-    if (!text || sendInFlight.current || (loading && !isAgentRunning)) return
+    if ((!text && !attachments.length) || sendInFlight.current || (loading && !isAgentRunning)) return false
     sendInFlight.current = true
 
     // A new typed request stops any current speech immediately.
@@ -156,11 +157,11 @@ export default function ChatPage() {
     setStreamingTurns(new Map())
     setVisualState('thinking')
 
-    const userMsg: DisplayMessage = { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }
+    const userMsg: DisplayMessage = { id: Date.now().toString(), role: 'user', content: text, attachments, timestamp: Date.now() }
     setMessages(prev => [...prev, userMsg])
 
     try {
-      const reply = await window.goga.invoke('chat:send', text)
+      const reply = await window.goga.invoke('chat:send', text, attachments)
       // Exactly-once guard: the chat:message event may have already committed this
       if (!committedMsgIds.current.has(reply.id)) {
         committedMsgIds.current.add(reply.id)
@@ -180,8 +181,10 @@ export default function ChatPage() {
         }
         setMessages(prev => [...prev, dm])
       }
+      return true
     } catch (e) {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${e}`, timestamp: Date.now() }])
+      return false
     } finally {
       setLoading(false)
       sendInFlight.current = false
@@ -247,6 +250,10 @@ export default function ChatPage() {
           <div key={m.id} style={{ ...S.bubble, ...(m.role === 'user' ? S.user : m.role === 'system' ? S.system : S.assistant) }}>
             <span style={S.role}>{m.role}</span>
             <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.content}</p>
+            {m.attachments?.map(a => <div key={a.id} style={{ marginTop: 10 }}>
+              <span style={{ fontSize: 11 }}>{a.name}{a.kind === 'video' ? ` · ${a.images.length} sampled frames (no audio)` : ''}</span>
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{a.images.map((image, i) => <figure key={i} style={{ margin: 0 }}><img src={image} alt={`${a.name}${a.kind === 'video' ? ` frame ${i + 1}` : ''}`} style={{ maxWidth: a.kind === 'video' ? 150 : 380, maxHeight: 240, width: '100%', borderRadius: 6 }} />{a.kind === 'video' && <figcaption style={{ fontSize: 10 }}>{a.sampledAtSeconds?.[i].toFixed(1)}s</figcaption>}</figure>)}</div>
+            </div>)}
             {m.screenshot && <img src={`data:image/png;base64,${m.screenshot.base64}`} alt="Screenshot" style={S.screenshot} />}
           </div>
         ))}
@@ -268,6 +275,7 @@ export default function ChatPage() {
 
       {/* Composer — mic + input + send (shared with MissionMode) */}
       <ChatComposer
+        allowAttachments
         onSend={sendText}
         loading={loading}
         isAgentRunning={isAgentRunning}

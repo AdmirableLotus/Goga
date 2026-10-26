@@ -2,6 +2,7 @@ import fs from 'fs'
 import { LogService } from './logs'
 import { SettingsService } from './settings'
 import { plannerDiagnostic } from './plannerDiagnostics'
+import { runLocalConversation } from './localConversation'
 
 export type LocalModelStatus = 'uninitialized' | 'loading' | 'ready' | 'error'
 
@@ -93,52 +94,22 @@ export class LocalLlamaService {
       throw new Error(`LocalLlama not ready: ${this.state.status} — ${this.state.error ?? ''}`)
     }
 
-    const settings = SettingsService.getInstance().get()
-    const contextSize = settings.localModelContextSize ?? 4096
-    // Create a fresh context per call — avoids "No sequences left" from reuse
-    const ctx = await this.model.createContext({ contextSize })
-
     try {
+      signal?.throwIfAborted()
       const { LlamaChatSession } = await esmImport('node-llama-cpp')
-
-      const session = new LlamaChatSession({
-        contextSequence: ctx.getSequence(),
-      })
-
-      const systemMsg = messages.find(m => m.role === 'system')?.content ?? ''
-      const history   = messages.filter(m => m.role !== 'system')
-      const lastUser  = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
-
-      // Replay prior turns so the model has conversation context
-      const priorTurns = history.slice(0, -1)
-      for (const msg of priorTurns) {
-        if (msg.role === 'user') {
-          await session.prompt(msg.content, { onTextChunk: () => {} })
-        }
-      }
-
-      // Final prompt: system context prepended to user message
-      const finalPrompt = systemMsg ? `${systemMsg}\n\n${lastUser}` : lastUser
-
-      let result = ''
-      await session.prompt(finalPrompt, {
-        onTextChunk: (chunk: string) => {
-          // node-llama-cpp has no abort API: suppress tokens after abort
-          // but cannot stop the underlying computation.
-          if (signal?.aborted) return
-          result += chunk
-          onToken?.(chunk)
-        },
-      })
-
-      return result.trim()
+      return await runLocalConversation(this.model, LlamaChatSession, messages,
+        SettingsService.getInstance().get().localModelContextSize ?? 4096, onToken, signal)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      this.log.error(`LocalLlama: chat error — ${msg}`)
+      if (!signal?.aborted) this.log.error(`LocalLlama: chat error — ${msg}`)
       throw new Error(msg)
-    } finally {
-      await ctx.dispose().catch(() => {})
     }
+  }
+
+  /** Unload the current model and load whatever the settings now point at. */
+  async reload(): Promise<void> {
+    await this.dispose()
+    return this.initialize()
   }
 
   async dispose() {

@@ -11,11 +11,13 @@ import MissionPage from './pages/MissionPage'
 import DesktopPage from './pages/DesktopPage'
 import StopButton from './components/StopButton'
 import MissionMode from './components/MissionMode'
+import DeveloperPage from './pages/DeveloperPage'
 import { GogaVisualProvider } from './context/GogaVisualContext'
 
-type Tab = 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
+type Tab = 'developer' | 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'developer', label: 'Developer' },
   { id: 'chat',      label: '💬 Chat' },
   { id: 'mission',   label: '⚡ Mission' },
   { id: 'desktop',   label: '🖥 Desktop' },
@@ -29,7 +31,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 export default function App() {
   // Default to mission-mode (cinematic primary view)
-  const [tab, setTab] = useState<Tab>('mission-mode')
+  const [tab, setTab] = useState<Tab>('chat')
 
   return (
     <GogaVisualProvider>
@@ -59,6 +61,7 @@ export default function App() {
         )}
 
         <main style={styles.main}>
+          {tab === 'developer' && <DeveloperPage />}
           {tab === 'mission-mode' && (
             <MissionMode
               onOpenChat={()     => setTab('chat')}
@@ -93,7 +96,7 @@ const styles: Record<string, ElectronCSSProperties> = {
     background: 'transparent', border: 'none', marginRight: 8,
     WebkitAppRegion: 'no-drag', cursor: 'pointer',
   },
-  nav:       { display: 'flex', gap: 4, WebkitAppRegion: 'no-drag', flex: 1 },
+  nav:       { display: 'flex', gap: 4, WebkitAppRegion: 'no-drag', flex: 1, minWidth: 0, overflowX: 'auto' },
   tab:       { background: 'transparent', color: 'var(--text-muted)', padding: '5px 12px' },
   tabActive: { background: 'var(--surface2)', color: 'var(--text)' },
   main:      { flex: 1, overflow: 'hidden', display: 'flex' },

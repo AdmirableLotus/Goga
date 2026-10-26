@@ -8,12 +8,12 @@ import {
 const boundary = vi.hoisted(() => ({ execute: vi.fn(), send: vi.fn(), savePattern: vi.fn() }))
 vi.mock('../logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
 vi.mock('../settings', () => ({ SettingsService: { getInstance: () => ({ get: () => ({ agentMaxSteps: 20 }) }) } }))
-vi.mock('../brain', () => ({ BrainService: { getInstance: () => ({ getRelevantFacts: () => [] }) } }))
+vi.mock('../brain', () => ({ BrainService: { getInstance: () => ({ getRelevantFacts: () => [], findRelevantFacts: async () => [] }) } }))
 vi.mock('../actionStore', () => ({ ActionStore: { getInstance: () => ({ stopAll: vi.fn() }) } }))
 vi.mock('../localLlama', () => ({ LocalLlamaService: { getInstance: () => ({}) } }))
 vi.mock('../ollamaClient', () => ({ OllamaClient: vi.fn(() => ({})) }))
 vi.mock('../taskMemory', () => ({ TaskMemoryService: { getInstance: () => ({ findRelevant: () => [], save_pattern: boundary.savePattern }) } }))
-vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null }) } }))
+vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: () => {} }) } }))
 vi.mock('../authorization', () => ({ AuthorizationService: { getInstance: () => ({ evaluateAndLog: () => ({ allowed: true, requiresApproval: false }) }) } }))
 vi.mock('../../adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({
   screenshot: vi.fn().mockRejectedValue(new Error('No desktop in unit test')),

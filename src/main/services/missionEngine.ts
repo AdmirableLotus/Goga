@@ -19,6 +19,7 @@ import { nanoid } from '../utils/nanoid'
 import { ToolRegistry } from '../tools/registry'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
+import { SECURITY_TASK } from './securityScope'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
 import { LocalLlamaService } from './localLlama'
@@ -111,6 +112,7 @@ export class MissionEngine extends EventEmitter {
   }
 
   stop(missionId: string) {
+    this.security.invalidateApprovals()
     const ac = this.abortControllers.get(missionId)
     if (ac) { ac.abort(); this.abortControllers.delete(missionId) }
     const mission = this.missions.get(missionId)
@@ -182,7 +184,7 @@ export class MissionEngine extends EventEmitter {
 
     // ── Security workspace check for security-testing missions ────────────────
     const securityKeywords = /\b(hack|pentest|exploit|vuln|recon|xss|sqli|rce|ssrf|lfi|idor|bounty|bug.?bounty|ctf|security.?test)\b/i
-    if (securityKeywords.test(mission.userGoal)) {
+    if (SECURITY_TASK.test(mission.userGoal) || this.security.getActive()) {
       const activeWs = this.security.getActive()
       if (!activeWs) {
         // Ask user for authorization before proceeding
@@ -228,29 +230,14 @@ export class MissionEngine extends EventEmitter {
 
         // ── Security scope enforcement ─────────────────────────────────────
         if (mission.securityWorkspaceId) {
-          const target = this.extractTarget(plan.args)
-          if (target) {
-            const scope = this.security.checkScope(mission.securityWorkspaceId, target)
-            if (!scope.inScope) {
-              this.log.warn(`MissionEngine: out-of-scope action blocked: ${plan.tool} → ${target}: ${scope.reason}`)
-              // Inject scope violation into next observation as a hard constraint
-              mission.observations.push({
-                ...obs,
-                lastActionResult: `BLOCKED: out-of-scope target "${target}". ${scope.reason}`,
-                verificationResult: 'scope_violation'
-              })
-              replanCount++
-              if (replanCount >= MAX_REPLANS) {
-                this.finishMission(mission, 'failed', undefined, `Repeated out-of-scope attempts blocked`)
-                return
-              }
-              this.emit('mission:event', this.event('mission.replanning', mission.id))
-              continue
-            }
+          const scope = this.security.evaluateAction(plan.tool, plan.args, mission.securityWorkspaceId)
+          if (!scope.allowed) {
+            this.security.logAudit(mission.securityWorkspaceId, { tool: plan.tool, target: scope.target, params: {}, result: `blocked: ${scope.reason}`, inScope: false })
+            this.finishMission(mission, 'failed', undefined, scope.reason)
+            return
           }
         }
 
-        // ── Build step ─────────────────────────────────────────────────────
         const step: MissionStep = {
           id: nanoid(),
           goal: plan.thought,
@@ -286,6 +273,7 @@ export class MissionEngine extends EventEmitter {
           return
         }
 
+        let securityApproval: object | undefined
         if (decision.requiresApproval) {
           this.setMissionStatus(mission, 'waiting_approval')
           this.emit('mission:event', this.event('step.authorizing', mission.id, step.id,
@@ -297,6 +285,7 @@ export class MissionEngine extends EventEmitter {
           }
           this.emit('mission:event', this.event('step.approved', mission.id, step.id))
           this.setMissionStatus(mission, 'running')
+          if (mission.securityWorkspaceId && !signal.aborted) securityApproval = this.security.issueApproval(mission.securityWorkspaceId, plan.tool, plan.args)
         }
 
         if (signal.aborted) { this.finishMission(mission, 'cancelled', 'Stopped by user'); return }
@@ -311,7 +300,7 @@ export class MissionEngine extends EventEmitter {
           // session will be in result.data.sessionId
         }
 
-        const toolCtx = { abortSignal: signal, securityWorkspaceId: authCtx.securityWorkspaceId }
+        const toolCtx = { abortSignal: signal, securityWorkspaceId: authCtx.securityWorkspaceId, securityApproval }
         const result = await this.registry.execute(plan.tool, plan.args, toolCtx)
 
         if (signal.aborted) { this.finishMission(mission, 'cancelled', 'Stopped by user'); return }

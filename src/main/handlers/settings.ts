@@ -1,13 +1,22 @@
 import type { IpcMain } from 'electron'
 import { SettingsService } from '../services/settings'
 import { VoiceOrchestrator } from '../services/voiceOrchestrator'
+import { LocalLlamaService } from '../services/localLlama'
+import type { AppSettings } from '../../shared/types'
+
+const LOCAL_MODEL_KEYS: (keyof AppSettings)[] = ['localModelPath', 'localModelContextSize', 'localModelGpuLayers']
 
 const settings = SettingsService.getInstance()
 
 export function registerSettingsHandlers(ipcMain: IpcMain) {
   ipcMain.handle('settings:get', async () => settings.get())
   ipcMain.handle('settings:set', async (_e, patch: Record<string, unknown>) => {
+    const previous = settings.get()
     const updated = settings.set(patch)
+    // The renderer saves the whole form, so reload the brain only when its config really changed.
+    if (LOCAL_MODEL_KEYS.some(k => previous[k] !== updated[k])) {
+      LocalLlamaService.getInstance().reload().catch(() => { /* errors logged inside */ })
+    }
     if ('sttProvider' in patch || 'whisperModel' in patch || 'whisperDevice' in patch || 'whisperLanguage' in patch) {
       VoiceOrchestrator.getInstance().reloadSttProvider()
     }

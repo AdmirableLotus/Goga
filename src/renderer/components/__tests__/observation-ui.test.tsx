@@ -14,7 +14,7 @@ vi.mock('../../../main/services/actionStore', () => ({ ActionStore: { getInstanc
 vi.mock('../../../main/services/localLlama', () => ({ LocalLlamaService: { getInstance: () => ({ isReady: () => true, chat: boundary.chat }) } }))
 vi.mock('../../../main/services/ollamaClient', () => ({ OllamaClient: vi.fn(() => ({})) }))
 vi.mock('../../../main/services/taskMemory', () => ({ TaskMemoryService: { getInstance: () => ({}) } }))
-vi.mock('../../../main/services/securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({}) } }))
+vi.mock('../../../main/services/securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: () => {} }) } }))
 vi.mock('../../../main/services/authorization', () => ({ AuthorizationService: { getInstance: () => ({}) } }))
 vi.mock('../../../main/services/focusManager', () => ({ FocusManager: { getInstance: () => ({}) } }))
 vi.mock('../../../main/adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({ observeWindowIdentity: boundary.active, observeWindowText: boundary.ui })) }))
@@ -70,7 +70,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 function send() {
   fireEvent.change(screen.getByRole('textbox'), { target: { value: fixture.request } })
-  fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: /^Send$/ }))
 }
 
 describe('captured observation through real routing, task state, Activity and Mission Mode', () => {

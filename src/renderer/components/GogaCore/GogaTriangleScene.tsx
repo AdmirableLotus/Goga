@@ -4,38 +4,7 @@ import { GogaGestureController } from './GogaGestureController'
 import type { GestureEvent } from './GogaGestureController'
 import { useGogaVisual } from '../../context/GogaVisualContext'
 import type { GogaVisualState } from './GogaVisualState'
-
-const STATE_LABEL: Record<GogaVisualState, string> = {
-  idle:            'IDLE',
-  listening:       'LISTENING',
-  transcribing:    'TRANSCRIBING',
-  thinking:        'THINKING',
-  acting:          'ACTING',
-  seeing:          'SEEING',
-  searching:       'SEARCHING',
-  speaking:        'SPEAKING',
-  waitingApproval: 'AWAITING APPROVAL',
-  success:         'DONE',
-  error:           'ERROR',
-  stopped:         'STOPPED',
-  wakeDetected:    'AWAKE',
-}
-
-const STATE_COLOR: Record<GogaVisualState, string> = {
-  idle:            '#8b5cff',
-  listening:       '#29d9ff',
-  transcribing:    '#00aadd',
-  thinking:        '#b794ff',
-  acting:          '#8b5cff',
-  seeing:          '#29d9ff',
-  searching:       '#8b5cff',
-  speaking:        '#b794ff',
-  waitingApproval: '#ffaa22',
-  success:         '#00ffcc',
-  error:           '#ff2244',
-  stopped:         '#443355',
-  wakeDetected:    '#00ffff',
-}
+import { VISUAL_STATE_LABEL, VISUAL_STATE_COLOR } from './GogaVisualState'
 
 export default function GogaTriangleScene({ compact = false }: { compact?: boolean }) {
   const canvasRef  = useRef<HTMLCanvasElement>(null)
@@ -75,7 +44,7 @@ export default function GogaTriangleScene({ compact = false }: { compact?: boole
     return () => { ctrl.stop(); gestureRef.current = null }
   }, [gestureOn, rotateBy, scaleBy, setVisualState])
 
-  const color = STATE_COLOR[visualState]
+  const color = VISUAL_STATE_COLOR[visualState]
 
   const handleCoreClick = () => {
     if (visualState === 'idle') setVisualState('listening')
@@ -90,7 +59,7 @@ export default function GogaTriangleScene({ compact = false }: { compact?: boole
       {!compact && (
         <div style={{ ...styles.badge, color, borderColor: color + '55' }}>
           <span style={{ ...styles.dot, background: color }} />
-          {STATE_LABEL[visualState]}
+          {VISUAL_STATE_LABEL[visualState]}
         </div>
       )}
 

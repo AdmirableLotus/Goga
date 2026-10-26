@@ -2,6 +2,7 @@ import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
+import { SECURITY_TASK } from './securityScope'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
 import { BrainService } from './brain'
@@ -55,6 +56,7 @@ export class AgentLoop {
   isRunning(): boolean { return this.state.status === 'running' || this.state.status === 'waiting-approval' }
 
   stop(reason = 'Stopped by user') {
+    SecurityWorkspaceService.getInstance().invalidateApprovals()
     this.abortController?.abort()
     ActionStore.getInstance().stopAll()
     this.setState({ status: 'stopped', error: reason })
@@ -136,6 +138,10 @@ export class AgentLoop {
 
     // Security context
     const activeWorkspace = SecurityWorkspaceService.getInstance().getActive()
+    if (!activeWorkspace && SECURITY_TASK.test(task)) {
+      this.setState({ status: 'error', error: 'security_workspace_required' })
+      return 'Security testing requires an active program workspace with explicit in-scope targets. Import and review the program in Security first.'
+    }
     const authCtx = {
       mode: activeWorkspace ? 'security-research' as const : 'normal' as const,
       securityWorkspaceId: activeWorkspace?.id
@@ -156,9 +162,8 @@ export class AgentLoop {
     const cycleTracker = new FailureCycleTracker(MAX_EQUIVALENT_FAILURES)
     const dedup = new TurnDeduplicator()
 
-    // HARD overall timeout: actively abort any in-flight model/tool call at the
-    // budget, not just between iterations. The abort propagates through the
-    // shared signal to the Ollama request and the tool context.
+    // Overall deadlines are disabled by default; Stop still aborts the shared
+    // signal. The controller supports finite budgets for callers that need one.
     const timeoutCtl = new TaskTimeoutController(() => {
       this.log.warn(`Agent hard timeout (${Math.round(OVERALL_TASK_TIMEOUT_MS / 1000)}s) — aborting in-flight operation`)
       try { this.abortController?.abort() } catch { }
@@ -264,6 +269,7 @@ export class AgentLoop {
         }
 
         // ── APPROVAL GATE ─────────────────────────────────────────────────────
+        let securityApproval: object | undefined
         if (decision.requiresApproval) {
           const approved = await this.requestApproval(toolCall, decision.reason, signal)
           if (!approved) {
@@ -271,6 +277,7 @@ export class AgentLoop {
             this.setState({ status: 'done' })
             break
           }
+          if (activeWorkspace && !signal.aborted) securityApproval = SecurityWorkspaceService.getInstance().issueApproval(activeWorkspace.id, toolCall.tool, toolCall.params)
         }
 
         if (signal.aborted) break
@@ -287,7 +294,7 @@ export class AgentLoop {
         this.setState({ currentTool: toolCall.tool })
         this.log.info(`Agent step ${i + 1}: ${toolCall.tool} — ${toolCall.thought.slice(0, 80)}`)
 
-        const toolCtx = { abortSignal: signal, securityWorkspaceId: authCtx.securityWorkspaceId }
+        const toolCtx = { abortSignal: signal, securityWorkspaceId: authCtx.securityWorkspaceId, securityApproval }
         const result = await this.registry.execute(toolCall.tool, toolCall.params, toolCtx)
         if (result.success) dedup.record(toolCall.tool, toolCall.params)
 
@@ -454,7 +461,7 @@ export class AgentLoop {
     signal: AbortSignal
   ): Promise<LLMToolCall> {
     const settings = SettingsService.getInstance().get()
-    const facts = this.brain.getRelevantFacts(task).slice(0, 6)
+    const facts = await this.brain.findRelevantFacts(task, 6)
     const toolSchema = this.registry.toPromptSummary()
 
     const stepHistory = completedSteps.slice(-8).map((s, i) =>
@@ -633,9 +640,9 @@ What is the next single action to take?`
    * Returns null when no override applies.
    */
   static getHardcodedFirstStep(task: string): LLMToolCall | null {
-    // notepad.saveText — matches: save "<text>" to <filename> in Documents
+    // notepad.saveText — matches: save/write "<text>" to/as <filename>
     const saveMatch = task.match(
-      /save\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s+to\s+(?:a\s+)?(?:new\s+)?(?:file\s+)?(?:named?\s+)?([\w.-]+\.txt)/i
+      /(?:write|save)\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s+(?:to|as)\s+(?:a\s+)?(?:new\s+)?(?:file\s+)?(?:named?\s+)?([\w.-]+\.txt)/i
     )
     if (saveMatch) {
       return {

@@ -4,6 +4,8 @@ import { LogService } from '../services/logs'
 import { OrchestratorService } from '../services/orchestrator'
 import { AgentLoop } from '../services/agentLoop'
 import { getMainWindow } from '../index'
+import { emergencyStop } from '../services/emergencyStop'
+import { MissionEngine } from '../services/missionEngine'
 
 const store = ActionStore.getInstance()
 const log = LogService.getInstance()
@@ -18,6 +20,8 @@ export function registerActionHandlers(ipcMain: IpcMain) {
     try {
       action = store.get(actionId)
     } catch {
+      const mission = MissionEngine.getInstance().listMissions().find(m => m.currentStepId === actionId && m.status === 'waiting_approval')
+      if (mission) { MissionEngine.getInstance().resolveApproval(mission.id, true); return null }
       log.warn(`action:approve ignored — unknown actionId: ${actionId}`)
       return null
     }
@@ -70,6 +74,8 @@ export function registerActionHandlers(ipcMain: IpcMain) {
     try {
       action = store.get(actionId)
     } catch {
+      const mission = MissionEngine.getInstance().listMissions().find(m => m.currentStepId === actionId && m.status === 'waiting_approval')
+      if (mission) { MissionEngine.getInstance().resolveApproval(mission.id, false); return null }
       log.warn(`action:reject ignored — unknown actionId: ${actionId}`)
       return null
     }
@@ -87,8 +93,7 @@ export function registerActionHandlers(ipcMain: IpcMain) {
   })
 
   ipcMain.handle('action:stop', async () => {
-    store.stopAll()
-    AgentLoop.getInstance().stop('Stopped by user')
+    emergencyStop('Stopped by user')
     log.warn('All actions stopped by user')
   })
 }

@@ -52,6 +52,42 @@ export interface AccessibilityNode {
   children?: AccessibilityNode[]
 }
 
+export interface MonitorInfo {
+  /** Stable index assigned by EnumDisplayMonitors (0-based, consistent within a session) */
+  index: number
+  /** Win32 HMONITOR value — stable within a session, not across reboots */
+  hmonitor: number
+  /** Full monitor bounds in virtual-desktop coordinates (may include negative x/y) */
+  bounds: Rect
+  /** Work area (excludes taskbar) in virtual-desktop coordinates */
+  workArea: Rect
+  /** True if this is the primary monitor (origin 0,0 in virtual-desktop space) */
+  primary: boolean
+  /**
+   * DPI scale factor reported by GetDpiForMonitor (MDT_EFFECTIVE_DPI).
+   * 1.0 = 96 DPI (100%), 1.25 = 125%, 1.5 = 150%, 2.0 = 200%.
+   * Screenshot pixels are in physical pixels; mouse input coordinates are in
+   * logical (scaled) pixels. To convert screenshot pixel → input coordinate:
+   *   inputX = monitorBounds.x + Math.round(pixelOffsetX / scaleFactor)
+   * NOTE: this mapping is only verified for screenshots; cross-monitor clicking
+   * has not been end-to-end tested. Do not use for automated clicking until verified.
+   */
+  scaleFactor: number
+  /** Device name e.g. "\\\\.\\DISPLAY1" */
+  deviceName: string
+}
+
+export interface VirtualDesktopBounds {
+  /** Leftmost x across all monitors (may be negative) */
+  left: number
+  /** Topmost y across all monitors (may be negative) */
+  top: number
+  /** Total width spanning all monitors */
+  width: number
+  /** Total height spanning all monitors */
+  height: number
+}
+
 export interface DesktopSnapshot {
   timestamp: number
   screenWidth: number
@@ -122,6 +158,7 @@ export interface AgentState {
 }
 
 export interface ChatMessage {
+  attachments?: import('./attachments').ChatAttachment[]
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
@@ -160,6 +197,8 @@ export interface AppSettings {
   modelEndpoint: string
   modelName: string
   visionModelName: string
+  // Ollama embedding model for semantic memory recall ('' disables, keyword match only)
+  embeddingModelName: string
   agentMaxSteps: number
   primaryModel: 'local' | 'ollama'
   voiceEnabled: boolean
@@ -286,6 +325,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelEndpoint: 'http://localhost:11434',
   modelName: 'llama3',
   visionModelName: 'llava:13b',
+  embeddingModelName: 'nomic-embed-text',
   agentMaxSteps: 20,
   voiceEnabled: true,
   voiceName: '',
@@ -338,6 +378,12 @@ export interface SecurityAuditEntry {
 }
 
 export interface SecurityWorkspace {
+  hackerOne?: {
+    handle: string
+    importedAt: number
+    submissionState: string
+    scopes: Array<{ id: string; identifier: string; type: string; eligible: boolean; instruction: string }>
+  }
   id: string
   program: string
   programUrl: string

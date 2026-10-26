@@ -60,10 +60,29 @@ INPUT_GAIN       = float(os.environ.get("WHISPER_GAIN", "8.0"))  # software gain
 _actual_device  = DEVICE
 _actual_compute = COMPUTE_TYPE
 
+# cuBLAS/cuDNN installed via pip (nvidia-cublas-cu12, nvidia-cudnn-cu12) are not on PATH;
+# register their bin dirs so CTranslate2 can load them without a full CUDA toolkit.
+if os.name == "nt" and DEVICE != "cpu":
+    try:
+        import nvidia
+        for _root in nvidia.__path__:
+            for _pkg in os.listdir(_root):
+                _bin = os.path.join(_root, _pkg, "bin")
+                if os.path.isdir(_bin):
+                    os.add_dll_directory(_bin)
+                    os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
+    except ImportError:
+        pass
+
 diag(f"Loading model={MODEL_SIZE} device={DEVICE} compute_type={COMPUTE_TYPE}")
 try:
     from faster_whisper import WhisperModel
     model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
+    if DEVICE != "cpu":
+        # A GPU model loads even when cuBLAS/cuDNN are missing and only fails on first
+        # encode, so transcribe silence now to trigger the CPU fallback before READY.
+        _segments, _ = model.transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32))
+        list(_segments)
     diag(f"Model loaded on {DEVICE}")
 except Exception as e_cuda:
     diag(f"Primary load failed ({e_cuda}), falling back to cpu/int8")

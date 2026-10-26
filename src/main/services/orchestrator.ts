@@ -9,6 +9,8 @@ import { SettingsService } from './settings'
 import { AgentLoop } from './agentLoop'
 import { ToolRegistry } from '../tools/registry'
 import { nanoid } from '../utils/nanoid'
+import { buildMediaRequest } from './mediaRequest'
+import { SecurityWorkspaceService } from './securityWorkspace'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
@@ -29,7 +31,24 @@ export class OrchestratorService {
 
   async process(userMessage: ChatMessage, onToken?: (token: string) => void, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void, signal?: AbortSignal): Promise<ChatMessage> {
     this.log.info(`Processing: ${userMessage.content.slice(0, 80)}`)
-    this.brain.addMessage(userMessage)
+    // Retain text context without persisting large media payloads in electron-store.
+    this.brain.addMessage(userMessage.attachments?.length
+      ? { ...userMessage, attachments: undefined, content: `${userMessage.content}\n[Attached media: ${userMessage.attachments.map(a => a.name).join(', ')}]` }
+      : userMessage)
+
+    if (userMessage.attachments?.length) {
+      let content: string
+      try {
+        if (!await this.ollama.isAvailable()) throw new Error('Ollama is not running. Start Ollama and install a vision model, then set its name in Settings.')
+        const request = buildMediaRequest(userMessage.content, userMessage.attachments, this.brain.getHistory())
+        content = await this.ollama.chatWith(SettingsService.getInstance().get().visionModelName || 'qwen2.5vl:3b', request.messages, onToken, signal, request.options)
+      } catch (error) {
+        content = `I could not analyze the attachments. ${error instanceof Error ? error.message : String(error)} Check the vision model in Settings.`
+      }
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
+      this.brain.addMessage(reply)
+      return reply
+    }
 
     const content = userMessage.content.trim()
     if (isReadOnlyObservationRequest(content)) {
@@ -218,9 +237,9 @@ export class OrchestratorService {
     }
   }
 
-  private buildSystemPrompt(userInput: string): string {
+  private async buildSystemPrompt(userInput: string): Promise<string> {
     const settings = SettingsService.getInstance().get()
-    const facts = this.brain.getRelevantFacts(userInput)
+    const facts = await this.brain.findRelevantFacts(userInput)
     const books = this.library.list()
     const bookChunks = this.library.search(userInput, 3)
     const toolSummary = this.registry.toPromptSummary()
@@ -253,7 +272,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
 
   private async thinkWithLocalLlama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
     const history = this.brain.getHistory().slice(-20)
-    const systemPrompt = this.buildSystemPrompt(userInput)
+    const systemPrompt = await this.buildSystemPrompt(userInput)
 
     const messages = [
       { role: 'system' as const, content: systemPrompt },
@@ -276,7 +295,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
 
   private async thinkWithOllama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
     const history = this.brain.getHistory().slice(-20)
-    const systemPrompt = this.buildSystemPrompt(userInput)
+    const systemPrompt = await this.buildSystemPrompt(userInput)
 
     const messages = [
       { role: 'system' as const, content: systemPrompt },
@@ -320,6 +339,7 @@ Address ${settings.userName} by name occasionally. Keep responses concise unless
   }
 
   async executeAction(action: Action): Promise<unknown> {
+    if (SecurityWorkspaceService.getInstance().getActive()) throw new Error('Legacy desktop execution is disabled in security mode; use scoped approved tools.')
     this.store.setStatus(action.id, 'running')
     this.log.info(`Executing legacy action: ${action.label}`, { actionId: action.id })
     // Legacy path only — agent-owned actions are never routed here.

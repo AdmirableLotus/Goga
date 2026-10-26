@@ -99,9 +99,23 @@ reg.register({
     required: ['url']
   },
   riskLevel: 'low', reversible: true, category: 'web'
-}, async (p) => {
+}, async (p, ctx) => {
   try {
-    const html = await fetchUrl(p.url as string)
+    let html: string
+    if (ctx.securityWorkspaceId) {
+      // A fresh approval covers exactly one GET. Redirects are never followed
+      // because the destination would require its own scope check and approval.
+      const response = await fetch(p.url as string, { method: 'GET', redirect: 'manual', signal: AbortSignal.any([ctx.abortSignal, AbortSignal.timeout(15_000)]) })
+      if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new Error('Redirect blocked: approve the in-scope destination separately') }
+      if (!response.ok) { await response.body?.cancel(); throw new Error(`Target returned HTTP ${response.status}`) }
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('Empty response')
+      const chunks: Uint8Array[] = []; let size = 0
+      try {
+        while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 1_000_000) { await reader.cancel(); throw new Error('Response exceeds size limit') }; chunks.push(value) }
+      } finally { reader.releaseLock() }
+      html = Buffer.concat(chunks).toString('utf8')
+    } else html = await fetchUrl(p.url as string)
     const max = (p.maxChars as number | undefined) ?? 8000
     const content = p.raw ? html.slice(0, max) : stripHtml(html).slice(0, max)
     return { success: true, data: { url: p.url, content, truncated: content.length >= max } }

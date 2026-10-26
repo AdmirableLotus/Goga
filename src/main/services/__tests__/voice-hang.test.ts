@@ -12,9 +12,8 @@
  *
  * LLM cancellation note (stated explicitly per spec):
  *   - Ollama: REAL cancellation — AbortSignal destroys the HTTP request.
- *   - LocalLlama (node-llama-cpp): OUTPUT SUPPRESSION ONLY — tokens are
- *     dropped after abort but the underlying computation continues until
- *     node-llama-cpp finishes internally. No abort API exists in this version.
+ *   - LocalLlama (node-llama-cpp): the production localConversation runner
+ *     passes AbortSignal to native generation and rejects late responses.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -295,21 +294,6 @@ describe('AbortSignal threading — LLM cancellation contract', () => {
     ).rejects.toThrow('aborted')
   })
 
-  it('LocalLlama: AbortSignal suppresses tokens but cannot stop computation', async () => {
-    // Verify token suppression: onToken is not called after abort
-    const abort = new AbortController()
-    const tokens: string[] = []
-
-    const onToken = (t: string) => {
-      if (abort.signal.aborted) return
-      tokens.push(t)
-    }
-
-    abort.abort()
-    onToken('token1')
-    onToken('token2')
-
-    // Tokens suppressed — computation itself is not stopped
-    expect(tokens).toHaveLength(0)
-  })
+  // Native local-model history and cancellation are exercised through the
+  // production runner in localConversation.test.ts.
 })

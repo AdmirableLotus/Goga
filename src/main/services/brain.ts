@@ -1,6 +1,9 @@
 import type { GogaFact, ChatMessage } from '../../shared/types'
 import { nanoid } from '../utils/nanoid'
 import { LogService } from './logs'
+import { OllamaClient } from './ollamaClient'
+import { SettingsService } from './settings'
+import { keywordScore, recallFacts, type StoredEmbedding } from './semanticRecall'
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Store = require('electron-store')
@@ -9,16 +12,21 @@ interface BrainStore {
   facts: GogaFact[]
   conversationHistory: ChatMessage[]
   learnedTopics: string[]
+  factEmbeddings: Record<string, StoredEmbedding>
 }
 
-const DEFAULTS: BrainStore = { facts: [], conversationHistory: [], learnedTopics: [] }
+const DEFAULTS: BrainStore = { facts: [], conversationHistory: [], learnedTopics: [], factEmbeddings: {} }
 const HISTORY_LIMIT = 40
 const FACTS_IN_PROMPT = 12
+// Recall must never stall a reply; a cold embedding model loads in ~1–2s.
+const EMBED_TIMEOUT_MS = 4000
 
 export class BrainService {
   private static instance: BrainService
   private store: ReturnType<typeof Store>
   private log = LogService.getInstance()
+  private ollama = new OllamaClient()
+  private embedFailureLogged = false
 
   static getInstance() {
     if (!BrainService.instance) BrainService.instance = new BrainService()
@@ -55,17 +63,40 @@ export class BrainService {
   getLearnedTopics(): string[] { return this.store.get('learnedTopics') }
 
   getRelevantFacts(query: string): GogaFact[] {
-    const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2)
     const facts = this.getFacts()
-    const scored = facts.map(f => ({
-      fact: f,
-      score: terms.filter(t => f.content.toLowerCase().includes(t)).length
-    }))
+    const scored = facts.map(f => ({ fact: f, score: keywordScore(query, f.content) }))
     const relevant = scored.filter(s => s.score > 0).sort((a, b) => b.score - a.score).map(s => s.fact)
     const aboutUser = facts.filter(f => f.category === 'about_user' && !relevant.includes(f))
     return [...aboutUser, ...relevant].slice(0, FACTS_IN_PROMPT)
   }
 
+  /** Recall by meaning using the local embedding model; falls back to keyword matching
+   *  when Ollama or the embedding model is unavailable. */
+  async findRelevantFacts(query: string, limit = FACTS_IN_PROMPT): Promise<GogaFact[]> {
+    const model = SettingsService.getInstance().get().embeddingModelName
+    if (!model) return this.getRelevantFacts(query).slice(0, limit)
+    try {
+      const facts = await recallFacts({
+        query, facts: this.getFacts(), limit, model,
+        embed: texts => this.ollama.embed(model, texts, AbortSignal.timeout(EMBED_TIMEOUT_MS)),
+        cache: this.store.get('factEmbeddings'),
+        saveCache: updates => this.store.set('factEmbeddings', { ...this.store.get('factEmbeddings'), ...updates }),
+      })
+      this.embedFailureLogged = false
+      return facts
+    } catch (err) {
+      if (!this.embedFailureLogged) {
+        this.log.warn(`Brain: semantic recall unavailable (${err instanceof Error ? err.message : String(err)}) — using keyword match`)
+        this.embedFailureLogged = true
+      }
+      return this.getRelevantFacts(query).slice(0, limit)
+    }
+  }
+
   clearHistory() { this.store.set('conversationHistory', []) }
-  deleteFact(id: string) { this.store.set('facts', this.getFacts().filter(f => f.id !== id)) }
+  deleteFact(id: string) {
+    this.store.set('facts', this.getFacts().filter(f => f.id !== id))
+    const { [id]: _removed, ...rest } = this.store.get('factEmbeddings') as Record<string, StoredEmbedding>
+    this.store.set('factEmbeddings', rest)
+  }
 }

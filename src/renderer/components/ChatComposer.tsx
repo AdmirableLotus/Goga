@@ -1,4 +1,6 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
+import { prepareAttachment } from './prepareAttachment'
+import { validateAttachments, type ChatAttachment, MAX_ATTACHMENTS } from '../../shared/attachments'
 import type { VoiceStatus } from '../../main/services/voiceOrchestrator'
 import { useGogaVisual } from '../context/GogaVisualContext'
 
@@ -29,7 +31,8 @@ const MuteIcon = () => (
 )
 
 interface Props {
-  onSend: (text: string) => void
+  onSend: (text: string, attachments?: ChatAttachment[]) => void | boolean | Promise<void | boolean>
+  allowAttachments?: boolean
   loading?: boolean
   isAgentRunning?: boolean
   /** If true, renders in compact/mission style */
@@ -41,10 +44,17 @@ interface Props {
  * Owns voice status IPC subscription and amplitude forwarding.
  * Used by both ChatPage and MissionMode.
  */
-export default function ChatComposer({ onSend, loading = false, isAgentRunning = false, compact = false }: Props) {
+export default function ChatComposer({ onSend, loading = false, isAgentRunning = false, compact = false, allowAttachments = false }: Props) {
   const [input, setInput] = useState('')
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle')
   const [partialText, setPartialText] = useState('')
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+  const [mediaError, setMediaError] = useState('')
+  const [preparing, setPreparing] = useState(false)
+  const [sending, setSending] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const submitLock = useRef(false)
+  const prepareLock = useRef(false)
   const { setVisualState, setAudioAmplitude } = useGogaVisual()
 
   // Voice status → visual state + amplitude
@@ -77,11 +87,27 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
     }
   }, [voiceStatus])
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const t = input.trim()
-    if (!t || (loading && !isAgentRunning)) return
-    setInput('')
-    onSend(t)
+    if ((!t && !attachments.length) || (loading && !isAgentRunning) || submitLock.current || prepareLock.current) return
+    submitLock.current = true; setSending(true); setMediaError('')
+    try {
+      const result = await onSend(t, attachments)
+      if (result !== false) { setInput(current => current.trim() === t ? '' : current); setAttachments([]) }
+    } catch (error) { setMediaError(String(error)) }
+    finally { submitLock.current = false; setSending(false) }
+  }
+
+  const attach = async (files: File[]) => {
+    if (!files.length || prepareLock.current || submitLock.current) return
+    if (files.length + attachments.length > MAX_ATTACHMENTS) { setMediaError('Attach up to four files.'); return }
+    prepareLock.current = true; setPreparing(true); setMediaError('')
+    try {
+      const added: ChatAttachment[] = []
+      for (const file of files) added.push(await prepareAttachment(file))
+      setAttachments(validateAttachments([...attachments, ...added]))
+    } catch (error) { setMediaError(error instanceof Error ? error.message : String(error)) }
+    finally { prepareLock.current = false; setPreparing(false) }
   }
 
   const micActive = voiceStatus === 'listening' || voiceStatus === 'transcribing'
@@ -103,7 +129,21 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
     'Talk to Goga or type a message…'
 
   return (
+    <div style={{ flexShrink: 0 }}>
+      {(attachments.length > 0 || preparing || mediaError) && <div style={{ padding: '10px 20px', background: '#100d1e', color: '#c8b8f0' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{attachments.map(a => <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 270 }}>
+          <img src={a.images[0]} alt={a.name} style={{ width: 58, height: 46, objectFit: 'cover', borderRadius: 5 }} />
+          <span style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{a.name}{a.kind === 'video' && <small style={{ display: 'block' }}>Video · {a.images.length} sampled frames · no audio</small>}</span>
+          <button aria-label={`Remove ${a.name}`} disabled={preparing || sending} onClick={() => setAttachments(prev => prev.filter(item => item.id !== a.id))}>×</button>
+        </div>)}</div>
+        {preparing && <p role="status" style={{ fontSize: 12 }}>Preparing media…</p>}
+        {mediaError && <p role="alert" style={{ fontSize: 12, color: '#ff9fae' }}>{mediaError}</p>}
+      </div>}
     <div style={{ ...S.row, ...(compact ? S.rowCompact : {}) }}>
+      {allowAttachments && <>
+        <input ref={fileInput} type="file" aria-label="Choose images or videos" accept="image/*,video/*" multiple hidden onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; void attach(files) }} />
+        <button title="Attach images or videos" aria-label="Attach images or videos" disabled={preparing || sending || (loading && !isAgentRunning)} onClick={() => fileInput.current?.click()} style={{ background: '#201631', color: '#c8b8f0', padding: '9px' }}>Attach</button>
+      </>}
       <button
         onClick={handleMic}
         /* Mic always usable during speaking/listening (for barge-in/stop);
@@ -128,16 +168,17 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
         placeholder={placeholder}
         /* Input stays usable during TTS (speaking) and listening — only the
            LLM generation window (loading, non-agent) disables it. */
-        disabled={loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening'}
+        disabled={(sending && !isAgentRunning) || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
       />
 
       <button
         onClick={handleSend}
         /* Send stays clickable during TTS/listening; only blocked while the
            LLM is actively generating (and only if agent isn't multi-step). */
-        disabled={!input.trim() || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
+        disabled={sending || preparing || (!input.trim() && !attachments.length) || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
         style={S.sendBtn}
       >Send</button>
+    </div>
     </div>
   )
 }

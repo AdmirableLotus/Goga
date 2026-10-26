@@ -57,12 +57,13 @@ describe('M4.1 — agent resilience: overall task timeout', () => {
   it('not timed out within budget', () => {
     const start = 1_000_000
     expect(isTaskTimedOut(start, start + 1000)).toBe(false)
-    expect(isTaskTimedOut(start, start + OVERALL_TASK_TIMEOUT_MS - 1)).toBe(false)
+    expect(isTaskTimedOut(start, start + 86_400_000)).toBe(false)
+    expect(OVERALL_TASK_TIMEOUT_MS).toBe(Number.POSITIVE_INFINITY)
   })
 
-  it('timed out past budget', () => {
+  it('times out when an explicit finite budget is exceeded', () => {
     const start = 1_000_000
-    expect(isTaskTimedOut(start, start + OVERALL_TASK_TIMEOUT_MS + 1)).toBe(true)
+    expect(isTaskTimedOut(start, start + 90_001, 90_000)).toBe(true)
   })
 
   it('respects a custom budget', () => {

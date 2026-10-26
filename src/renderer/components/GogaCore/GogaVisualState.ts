@@ -33,6 +33,41 @@ export function agentStateToVisual(state: AgentState | null, extras?: { listenin
   return 'idle'
 }
 
+// Single source of truth for displayed status labels — used by both
+// GogaTriangleScene (badge) and MissionMode (status line).
+export const VISUAL_STATE_LABEL: Record<GogaVisualState, string> = {
+  idle:            'Ready',
+  listening:       'Listening',
+  transcribing:    'Transcribing',
+  thinking:        'Thinking',
+  acting:          'Working',
+  seeing:          'Verifying',
+  searching:       'Searching',
+  speaking:        'Speaking',
+  waitingApproval: 'Awaiting approval',
+  success:         'Complete',
+  error:           'Error',
+  stopped:         'Stopped',
+  wakeDetected:    'Awake',
+}
+
+// Single source of truth for CSS hex colors — used by both components.
+export const VISUAL_STATE_COLOR: Record<GogaVisualState, string> = {
+  idle:            '#8b5cff',
+  listening:       '#29d9ff',
+  transcribing:    '#29d9ff',
+  thinking:        '#b794ff',
+  acting:          '#8b5cff',
+  seeing:          '#29d9ff',
+  searching:       '#b794ff',
+  speaking:        '#b794ff',
+  waitingApproval: '#ffaa22',
+  success:         '#00ffcc',
+  error:           '#ff2244',
+  stopped:         '#443355',
+  wakeDetected:    '#29d9ff',
+}
+
 // Color palette per state
 export const STATE_COLORS: Record<GogaVisualState, { primary: number; secondary: number; core: number }> = {
   idle:            { primary: 0x6633cc, secondary: 0x3311aa, core: 0x9966ff },

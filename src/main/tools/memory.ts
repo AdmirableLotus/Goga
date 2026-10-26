@@ -14,7 +14,7 @@ reg.register({
   },
   riskLevel: 'low', reversible: true, category: 'memory'
 }, async (p) => {
-  const facts = BrainService.getInstance().getRelevantFacts(p.query as string)
+  const facts = await BrainService.getInstance().findRelevantFacts(p.query as string)
   return { success: true, data: facts }
 })
 

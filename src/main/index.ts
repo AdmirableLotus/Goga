@@ -19,6 +19,11 @@ import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
+import { TelegramService } from './services/telegram'
+import { OrchestratorService } from './services/orchestrator'
+import { nanoid } from './utils/nanoid'
+import { registerDeveloperHandlers, stopDeveloperTask } from './handlers/developer'
+import { emergencyStop } from './services/emergencyStop'
 // Bootstrap all tool registrations
 import './tools/index'
 import { plannerDiagnostic, loadedModuleIdentity } from './services/plannerDiagnostics'
@@ -31,6 +36,7 @@ plannerDiagnostic('build.loaded', {
 })
 
 let mainWindow: BrowserWindow | null = null
+let telegram: TelegramService | undefined
 
 // One-time shutdown guard. app.exit(0) fires will-quit again; without this
 // guard the handler would re-enter, call preventDefault() a second time, and
@@ -78,6 +84,7 @@ export function getMainWindow() { return mainWindow }
 
 app.whenReady().then(() => {
   registerChatHandlers(ipcMain)
+  registerDeveloperHandlers(ipcMain)
   registerActionHandlers(ipcMain)
   registerMemoryHandlers(ipcMain)
   registerLogHandlers(ipcMain)
@@ -92,13 +99,29 @@ app.whenReady().then(() => {
   registerModelHandlers(ipcMain, getMainWindow)
   createWindow()
 
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim()
+  if (telegramToken) {
+    try {
+      const orchestrator = new OrchestratorService()
+      telegram = new TelegramService(telegramToken, path.join(app.getPath('userData'), 'telegram-owner.json'),
+        async (content, completed) => {
+          const reply = await orchestrator.process({ id: nanoid(), role: 'user', content, timestamp: Date.now() },
+            undefined, result => completed(result.reply))
+          return reply.content
+        },
+        () => emergencyStop('Telegram /stop'))
+      telegram.start().catch(() => console.warn('[Telegram] Could not connect. Check TELEGRAM_BOT_TOKEN and network access.'))
+    } catch {
+      console.warn('[Telegram] Could not initialize. Check the local Telegram owner configuration.')
+    }
+  }
+
   // Start loading the primary local model immediately (non-blocking)
   LocalLlamaService.getInstance().initialize().catch(() => { /* errors logged inside */ })
 
   // Global emergency stop: Ctrl+Shift+Escape
   globalShortcut.register('CommandOrControl+Shift+Escape', () => {
-    ActionStore.getInstance().stopAll()
-    AgentLoop.getInstance().stop('Emergency stop (Ctrl+Shift+Escape)')
+    emergencyStop('Emergency stop (Ctrl+Shift+Escape)')
     mainWindow?.webContents.send('agent:stopped', { reason: 'Emergency stop (Ctrl+Shift+Escape)' })
   })
 })
@@ -112,6 +135,8 @@ app.on('will-quit', async (event) => {
   // proceed before cleanup finishes.
   event.preventDefault()
   globalShortcut.unregisterAll()
+  telegram?.stop()
+  stopDeveloperTask()
   // Stop all TTS/STT child processes through the typed public shutdown() method.
   try { await VoiceOrchestrator.getInstance().shutdown() } catch { }
   app.exit(0)

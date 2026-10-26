@@ -5,8 +5,14 @@ export type { ScreenshotResult, ActiveWindowResult }
 
 // Channels: renderer -> main (invoke)
 export interface MainHandlers {
+  'developer:state': () => Promise<import('./developer').DeveloperState>
+  'developer:self': () => Promise<import('./developer').DeveloperState>
+  'developer:choose': () => Promise<import('./developer').DeveloperState>
+  'developer:refresh': () => Promise<import('./developer').DeveloperState>
+  'developer:start': (task: string, mode: 'plan' | 'build') => Promise<import('./developer').DeveloperState>
+  'developer:stop': () => Promise<import('./developer').DeveloperState>
   // Chat
-  'chat:send': (message: string) => Promise<ChatMessage>
+  'chat:send': (message: string, attachments?: import('./attachments').ChatAttachment[]) => Promise<ChatMessage>
 
   // Actions / approvals
   'action:approve': (actionId: string) => Promise<Action>
@@ -75,6 +81,7 @@ export interface MainHandlers {
   'ollama:status': () => Promise<boolean>
   'ollama:models': () => Promise<string[]>
   'localModel:status': () => Promise<import('../main/services/localLlama').LocalModelState>
+  'localModel:list': () => Promise<string[]>
 
   // Kokoro model management
   'model:kokoro-status': () => Promise<{ installed: boolean; downloading: boolean }>
@@ -97,6 +104,10 @@ export interface MainHandlers {
   }>
 
   // Security workspace
+  'security:h1Status': () => Promise<{ configured: boolean; encryptionAvailable: boolean }>
+  'security:h1SaveCredentials': (username: string, token: string) => Promise<{ configured: true }>
+  'security:h1ClearCredentials': () => Promise<void>
+  'security:h1Import': (handle: string) => Promise<SecurityWorkspace>
   'security:list': () => Promise<SecurityWorkspace[]>
   'security:get': (id: string) => Promise<SecurityWorkspace | null>
   'security:create': (data: Omit<SecurityWorkspace, 'id' | 'findings' | 'evidence' | 'auditLog' | 'createdAt' | 'updatedAt'>) => Promise<SecurityWorkspace>
@@ -111,6 +122,7 @@ export interface MainHandlers {
 
 // Channels: main -> renderer (on)
 export interface RendererEvents {
+  'developer:state': import('./developer').DeveloperState
   'chat:message': ChatMessage
   'chat:token': { token: string; turnId: string }
   'action:update': Action

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import type { AgentState, Action, Mission } from '@shared/types'
 import GogaTriangleScene from './GogaCore/GogaTriangleScene'
 import ChatComposer from './ChatComposer'
+import type { ChatAttachment } from '../../shared/attachments'
 import ApprovalCard from './ApprovalCard'
 import StopButton from './StopButton'
 import { useGogaVisual } from '../context/GogaVisualContext'
@@ -9,6 +10,7 @@ import { agentStateToVisual } from './GogaCore/GogaVisualState'
 
 // ── Status line ───────────────────────────────────────────────────────────────
 import type { GogaVisualState } from './GogaCore/GogaVisualState'
+import { VISUAL_STATE_LABEL, VISUAL_STATE_COLOR } from './GogaCore/GogaVisualState'
 
 // ── M2: Activity state model ──────────────────────────────────────────────────
 export type { ActivityStatus } from './missionUtils'
@@ -20,38 +22,6 @@ import {
 } from './missionUtils'
 import type { ActivityStatus, ActivityState, ActivityCallbacks } from './missionUtils'
 
-const STATUS_TEXT: Record<GogaVisualState, string> = {
-  idle:            'Ready',
-  listening:       'Listening',
-  transcribing:    'Transcribing',
-  thinking:        'Thinking',
-  acting:          'Working',
-  seeing:          'Verifying',
-  searching:       'Searching',
-  speaking:        'Speaking',
-  waitingApproval: 'Awaiting approval',
-  success:         'Complete',
-  error:           'Error',
-  stopped:         'Stopped',
-  wakeDetected:    'Awake',
-}
-
-const STATUS_COLOR: Record<GogaVisualState, string> = {
-  idle:            '#8b5cff',
-  listening:       '#29d9ff',
-  transcribing:    '#29d9ff',
-  thinking:        '#b794ff',
-  acting:          '#8b5cff',
-  seeing:          '#29d9ff',
-  searching:       '#b794ff',
-  speaking:        '#b794ff',
-  waitingApproval: '#ffaa22',
-  success:         '#00ffcc',
-  error:           '#ff2244',
-  stopped:         '#443355',
-  wakeDetected:    '#29d9ff',
-}
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 export interface Props {
   /** Called when user clicks the history/chat icon to switch to ChatPage */
@@ -62,6 +32,7 @@ export interface Props {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
+  const [sentAttachments, setSentAttachments] = useState<ChatAttachment[]>([])
   const { visualState, setVisualState } = useGogaVisual()
 
   const [agentState,    setAgentState]    = useState<AgentState | null>(null)
@@ -106,19 +77,29 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
   }, [])
 
   // ── Send handler ──────────────────────────────────────────────────────────
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, attachments: ChatAttachment[] = []) => {
+    setSentAttachments(attachments)
     stoppedRef.current = false
     lastMsgIdRef.current = null
     agentRunningRef.current = false
     const turnId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     activeTurnIdRef.current = turnId
-    setActivity(prev => applySend(prev, text, turnId))
+    setActivity(prev => applySend(prev, text || attachments.map(a => a.name).join(', '), turnId))
     setVisualState('thinking')
     try {
-      await window.goga.invoke('chat:send', text)
+      const reply = attachments.length
+        ? await window.goga.invoke('chat:send', text, attachments)
+        : await window.goga.invoke('chat:send', text)
+      if (attachments.length && reply && !stoppedRef.current && lastMsgIdRef.current !== reply.id) {
+        lastMsgIdRef.current = reply.id
+        setActivity(prev => ({ ...prev, finalResponse: reply.content, streamingText: '', currentStep: null, loading: false, activityStatus: 'completed' }))
+        setVisualState('idle')
+      }
+      return true
     } catch {
       setActivity(prev => ({ ...prev, loading: false, activityStatus: 'failed' }))
       setVisualState('error')
+      return false
     }
   }, [setVisualState])
 
@@ -131,8 +112,8 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
           activityStatus, stopReason, loading } = activity
 
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
-  const statusText  = STATUS_TEXT[visualState]
-  const statusColor = STATUS_COLOR[visualState]
+  const statusText  = VISUAL_STATE_LABEL[visualState]
+  const statusColor = VISUAL_STATE_COLOR[visualState]
 
   const showActivity = activityStatus !== 'none' || userRequest !== ''
   const displayedResponse = streamingText !== '' ? streamingText : finalResponse
@@ -213,6 +194,7 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
               <span style={S.activityText}>{userRequest}</span>
             </div>
           )}
+          {sentAttachments.length > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 16px' }}>{sentAttachments.map(a => <figure key={a.id} style={{ margin: 0 }}><img src={a.images[0]} alt={a.name} style={{ maxWidth: 140, maxHeight: 85, borderRadius: 6 }} /><figcaption style={{ fontSize: 10, color: '#c8b8f0' }}>{a.name}{a.kind === 'video' ? ' · sampled frames, no audio' : ''}</figcaption></figure>)}</div>}
 
           {currentStep !== null && activityStatus === 'running' && (
             <div style={S.activityStep}>
@@ -254,6 +236,7 @@ export default function MissionMode({ onOpenChat, onOpenSettings }: Props) {
           </div>
         )}
         <ChatComposer
+          allowAttachments
           onSend={handleSend}
           loading={loading}
           isAgentRunning={isAgentRunning}

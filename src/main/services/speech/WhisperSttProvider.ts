@@ -94,7 +94,9 @@ export class WhisperSttProvider implements ISttProvider {
     const settings = SettingsService.getInstance().get()
     const model   = this.opts.model   ?? (settings as { whisperModel?: WhisperModel }).whisperModel   ?? 'base'
     const device  = this.opts.device  ?? (settings as { whisperDevice?: WhisperDevice }).whisperDevice ?? 'cpu'
-    const compute = this.opts.computeType ?? (device === 'cuda' ? 'float16' : 'int8')
+    // int8_float16 halves VRAM (large-v3: ~2.2 GB vs ~4.1 GB) so Whisper fits beside the
+    // local brain model on a 10 GB card, with negligible accuracy loss.
+    const compute = this.opts.computeType ?? (device === 'cuda' ? 'int8_float16' : 'int8')
     const lang    = this.opts.language ?? (settings as { whisperLanguage?: string }).whisperLanguage ?? ''
     return {
       ...process.env,

@@ -2,6 +2,7 @@ import type { RiskLevel, ToolDefinition } from '../../shared/types'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
 import { riskAtLeast } from '../tools/registry'
+import { SecurityWorkspaceService } from './securityWorkspace'
 
 export interface AuthDecision {
   allowed: boolean
@@ -62,6 +63,11 @@ export class AuthorizationService {
   }
 
   evaluate(tool: ToolDefinition, params: Record<string, unknown>, ctx: AuthContext): AuthDecision {
+    const security = SecurityWorkspaceService.getInstance()
+    if (ctx.mode === 'security-research' || security.getActive()) {
+      const decision = security.evaluateAction(tool.name, params, ctx.securityWorkspaceId)
+      return { allowed: decision.allowed, requiresApproval: decision.allowed, reason: decision.allowed ? 'Security testing always requires fresh explicit approval' : decision.reason }
+    }
     const settings = SettingsService.getInstance().get()
 
     // 1. Always-auto tools (observational / read-only)
@@ -97,6 +103,9 @@ export class AuthorizationService {
   // Convenience: log the decision
   evaluateAndLog(tool: ToolDefinition, params: Record<string, unknown>, ctx: AuthContext): AuthDecision {
     const decision = this.evaluate(tool, params, ctx)
+    const security = SecurityWorkspaceService.getInstance()
+    const workspace = security.getActive()
+    if (workspace) security.logAudit(workspace.id, { tool: tool.name, target: typeof params.url === 'string' ? params.url : '', params: {}, result: `${decision.allowed ? 'approval required' : 'blocked'}: ${decision.reason}`, inScope: decision.allowed })
     if (!decision.allowed) {
       this.log.warn(`BLOCKED tool=${tool.name} reason=${decision.reason}`)
     } else if (decision.requiresApproval) {

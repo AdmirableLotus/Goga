@@ -9,6 +9,8 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
+  const [brainModels, setBrainModels] = useState<string[]>([])
+  const [brainStatus, setBrainStatus] = useState<Awaited<ReturnType<typeof window.goga.invoke<'localModel:status'>>> | null>(null)
 
   // Kokoro install state
   type KokoroPhase = 'idle' | 'preflight' | 'confirming' | 'downloading' | 'done' | 'error'
@@ -23,6 +25,8 @@ export default function SettingsPage() {
     window.goga.invoke('tts:voices').then(setVoices)
     checkOllama()
     window.goga.invoke('model:kokoro-status').then(s => setKokoroInstalled(s.installed))
+    window.goga.invoke('localModel:list').then(setBrainModels).catch(() => {})
+    checkBrain()
     // Cleanup: remove progress listener if Settings unmounts mid-download
     return () => { unsubRef.current?.() }
   }, [])
@@ -39,9 +43,19 @@ export default function SettingsPage() {
     }
   }
 
+  const checkBrain = async () => {
+    try { setBrainStatus(await window.goga.invoke('localModel:status')) } catch { /* older backend */ }
+  }
+
   const [ttsReloadError, setTtsReloadError] = useState<string | null>(null)
 
   const update = (patch: Partial<AppSettings>) => setSettings(s => ({ ...s, ...patch }))
+
+  // Only embedding models belong in the memory picker; a chat model there would load a second
+  // LLM onto the GPU. The saved name may omit Ollama's ':latest' tag, so list it under that name.
+  const embeddingModels = ollamaModels
+    .filter(m => m.includes('embed'))
+    .map(m => sameModel(m, settings.embeddingModelName) ? settings.embeddingModelName : m)
 
   const updateTtsProvider = async (provider: AppSettings['ttsProvider']) => {
     update({ ttsProvider: provider })
@@ -55,6 +69,8 @@ export default function SettingsPage() {
 
   const save = async () => {
     await window.goga.invoke('settings:set', settings)
+    // A changed brain model reloads in the background; refresh its status shortly after.
+    setTimeout(checkBrain, 500)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -122,6 +138,46 @@ export default function SettingsPage() {
             <option value="ollama">Ollama</option>
           </select>
         </Field>
+        <Field label="Brain model (local)">
+          {brainModels.length > 0
+            ? <select value={settings.localModelPath} onChange={e => update({ localModelPath: e.target.value })} style={styles.select}>
+                {!brainModels.includes(settings.localModelPath) && <option value={settings.localModelPath}>{fileName(settings.localModelPath)}</option>}
+                {brainModels.map(m => <option key={m} value={m}>{fileName(m)}</option>)}
+              </select>
+            : <input value={settings.localModelPath} onChange={e => update({ localModelPath: e.target.value })} style={{ width: 380 }} />}
+        </Field>
+        <Field label="Brain memory window">
+          <select value={settings.localModelContextSize} onChange={e => update({ localModelContextSize: Number(e.target.value) })} style={styles.select}>
+            <option value={4096}>4K tokens (fastest)</option>
+            <option value={8192}>8K tokens (recommended)</option>
+            <option value={16384}>16K tokens (needs more VRAM)</option>
+          </select>
+        </Field>
+        <Field label="Brain status">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ color: brainStatus?.status === 'ready' ? 'var(--success)' : brainStatus?.status === 'error' ? 'var(--danger)' : 'var(--text-muted)' }}>
+              {brainStatus === null ? 'Checking…'
+                : brainStatus.status === 'ready' ? `Ready — ${fileName(brainStatus.modelPath)}`
+                : brainStatus.status === 'error' ? `Error — ${brainStatus.error ?? 'failed to load'}`
+                : brainStatus.status === 'loading' ? `Loading ${fileName(brainStatus.modelPath)}…`
+                : 'Not loaded'}
+            </span>
+            <button onClick={checkBrain} style={styles.smallBtn}>Recheck</button>
+          </div>
+        </Field>
+        <Field label="Memory model (Ollama)">
+          {ollamaModels.length > 0
+            ? <select value={settings.embeddingModelName} onChange={e => update({ embeddingModelName: e.target.value })} style={styles.select}>
+                <option value="">Off — keyword match only</option>
+                {settings.embeddingModelName && !embeddingModels.includes(settings.embeddingModelName) && (
+                  <option value={settings.embeddingModelName}>
+                    {settings.embeddingModelName} {ollamaModels.some(m => sameModel(m, settings.embeddingModelName)) ? '(not a memory model)' : '(not installed)'}
+                  </option>
+                )}
+                {embeddingModels.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            : <input value={settings.embeddingModelName} onChange={e => update({ embeddingModelName: e.target.value })} style={{ width: 200 }} placeholder="nomic-embed-text" />}
+        </Field>
         <Field label="Ollama status">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{
@@ -151,7 +207,10 @@ export default function SettingsPage() {
         <Field label="Model Name">
           {ollamaModels.length > 0
             ? <select value={settings.modelName} onChange={e => update({ modelName: e.target.value })} style={styles.select}>
-                {ollamaModels.map(m => <option key={m} value={m}>{m}</option>)}
+                {/* Without this a missing model shows as the first listed one, misreporting what is saved. */}
+                {!ollamaModels.includes(settings.modelName) && <option value={settings.modelName}>{settings.modelName} (not installed)</option>}
+                {/* Embedding models cannot chat. */}
+                {ollamaModels.filter(m => !m.includes('embed')).map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             : <input value={settings.modelName} onChange={e => update({ modelName: e.target.value })} style={{ width: 200 }} placeholder="llama3" />}
         </Field>
@@ -383,4 +442,13 @@ const styles: Record<string, React.CSSProperties> = {
   confirmBtn: { background: 'var(--accent)', color: '#fff', fontWeight: 600, padding: '6px 14px' },
   progressTrack: { height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden', width: '100%' },
   progressBar: { height: '100%', background: 'var(--accent)', transition: 'width 0.3s ease' },
+}
+
+function fileName(p: string) {
+  return p.split(/[\\/]/).pop() ?? p
+}
+
+function sameModel(a: string, b: string) {
+  const base = (m: string) => m.replace(/:latest$/, '')
+  return base(a) === base(b)
 }

@@ -1526,6 +1526,84 @@ export class DesktopAdapter implements ToolAdapter {
     return { found: false, timedOut: true }
   }
 
+  /** Enumerate all connected monitors with bounds, primary flag, scale factor, and device name.
+   *  Uses Win32 EnumDisplayMonitors + GetMonitorInfo + GetDpiForMonitor.
+   *  Bounds are in virtual-desktop coordinates — negative x/y is valid for monitors
+   *  positioned left or above the primary.
+   *  scaleFactor = effectiveDpi / 96. Screenshot pixels are physical; mouse input
+   *  coordinates are logical. Conversion: inputX = bounds.x + round(pixelOffset / scale).
+   *  Cross-monitor clicking is NOT yet verified — use for read-only enumeration only. */
+  async listMonitors(): Promise<{ monitors: import('../../shared/types').MonitorInfo[]; virtualDesktop: import('../../shared/types').VirtualDesktopBounds }> {
+    const ps = `
+      Add-Type @"
+        using System; using System.Collections.Generic; using System.Runtime.InteropServices;
+        public class MonEnum {
+          public struct RECT { public int L,T,R,B; }
+          public struct MONITORINFOEX {
+            public int cbSize; public RECT rcMonitor; public RECT rcWork; public int dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string szDevice;
+          }
+          public delegate bool MEPROC(IntPtr hMon, IntPtr hDC, ref RECT lpRect, IntPtr lParam);
+          [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MEPROC fn, IntPtr data);
+          [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMon, ref MONITORINFOEX info);
+          [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr hMon, int dpiType, out uint dpiX, out uint dpiY);
+          public static List<object[]> Enumerate() {
+            var list = new List<object[]>();
+            int idx = 0;
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMon, hDC, ref lpRect, lParam) => {
+              var info = new MONITORINFOEX(); info.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(info);
+              GetMonitorInfo(hMon, ref info);
+              uint dpiX = 96, dpiY = 96;
+              GetDpiForMonitor(hMon, 0, out dpiX, out dpiY);
+              list.Add(new object[]{ hMon.ToInt64(), idx++,
+                info.rcMonitor.L, info.rcMonitor.T, info.rcMonitor.R, info.rcMonitor.B,
+                info.rcWork.L,    info.rcWork.T,    info.rcWork.R,    info.rcWork.B,
+                (info.dwFlags & 1) != 0, dpiX, info.szDevice });
+              return true;
+            }, IntPtr.Zero);
+            return list;
+          }
+        }
+"@
+      $rows = [MonEnum]::Enumerate()
+      $out = @()
+      foreach ($r in $rows) {
+        $out += [PSCustomObject]@{
+          hmonitor   = $r[0]; index = $r[1]
+          bL=$r[2]; bT=$r[3]; bR=$r[4]; bB=$r[5]
+          wL=$r[6]; wT=$r[7]; wR=$r[8]; wB=$r[9]
+          primary    = $r[10]; dpiX = $r[11]; device = $r[12]
+        }
+      }
+      $out | ConvertTo-Json -Compress
+    `
+    try {
+      const raw = (await this.runPS(ps)).trim()
+      if (!raw || raw === 'null') return { monitors: [], virtualDesktop: { left: 0, top: 0, width: 0, height: 0 } }
+      const parsed = JSON.parse(raw)
+      const arr = Array.isArray(parsed) ? parsed : [parsed]
+      const monitors: import('../../shared/types').MonitorInfo[] = arr.map((r: Record<string, unknown>) => {
+        const bL = Number(r.bL), bT = Number(r.bT), bR = Number(r.bR), bB = Number(r.bB)
+        const wL = Number(r.wL), wT = Number(r.wT), wR = Number(r.wR), wB = Number(r.wB)
+        const dpi = Number(r.dpiX) || 96
+        return {
+          index:      Number(r.index),
+          hmonitor:   Number(r.hmonitor),
+          bounds:     { x: bL, y: bT, width: bR - bL, height: bB - bT },
+          workArea:   { x: wL, y: wT, width: wR - wL, height: wB - wT },
+          primary:    Boolean(r.primary),
+          scaleFactor: Math.round((dpi / 96) * 100) / 100,
+          deviceName: String(r.device ?? '')
+        }
+      })
+      const left   = Math.min(...monitors.map(m => m.bounds.x))
+      const top    = Math.min(...monitors.map(m => m.bounds.y))
+      const right  = Math.max(...monitors.map(m => m.bounds.x + m.bounds.width))
+      const bottom = Math.max(...monitors.map(m => m.bounds.y + m.bounds.height))
+      return { monitors, virtualDesktop: { left, top, width: right - left, height: bottom - top } }
+    } catch { return { monitors: [], virtualDesktop: { left: 0, top: 0, width: 0, height: 0 } } }
+  }
+
   private runPS(script: string, diagnostic?: { discoveryId: string; enumerationError: boolean }, signal?: AbortSignal, filenameDiagnostics = false): Promise<string> {
     if (signal?.aborted) return Promise.reject(new Error('cancelled'))
     // Write to a temp .ps1 file â€” EncodedCommand silently drops function

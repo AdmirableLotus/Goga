@@ -45,7 +45,9 @@ export class TurnDeduplicator {
 
 export const MAX_EQUIVALENT_FAILURES = 3
 export const MAX_RECOVERY = 3
-export const OVERALL_TASK_TIMEOUT_MS = 90_000
+// No wall-clock deadline. Individual operations and failure-cycle guards still
+// apply, and the user can abort the shared task signal with Stop.
+export const OVERALL_TASK_TIMEOUT_MS = Number.POSITIVE_INFINITY
 
 /**
  * Owns the hard overall-timeout timer for a single agent run. When the budget
@@ -61,6 +63,8 @@ export class TaskTimeoutController {
 
   /** Arm the hard timeout. Safe to call once per run. */
   start(): void {
+    // Never pass Infinity to setTimeout: Node clamps it to a 1ms timeout.
+    if (!Number.isFinite(this.budgetMs)) return
     if (this.timer) return
     this.timer = setTimeout(() => {
       this._timedOut = true
@@ -85,7 +89,7 @@ export function failureSignature(tool: string, params: unknown, error?: string):
 
 /** True when the elapsed time exceeds the overall task budget. */
 export function isTaskTimedOut(startMs: number, nowMs: number, budgetMs = OVERALL_TASK_TIMEOUT_MS): boolean {
-  return nowMs - startMs > budgetMs
+  return Number.isFinite(budgetMs) && nowMs - startMs > budgetMs
 }
 
 /**

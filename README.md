@@ -36,6 +36,39 @@ src/
 
 ## Getting Started
 
+### Independent local AI
+
+Goga's local engine restores actual conversation history and passes cancellation to native generation. See [the native AI foundation and next milestone](docs/goga-native-ai.md). Developer Mode currently uses Codex CLI for code work; native self-review is a separate next milestone.
+
+### HackerOne workflow
+
+The existing Security page now supports encrypted HackerOne credentials and read-only program import. Imported scope is default-deny and testing requires fresh per-action approval; only scoped GET requests are supported in security mode. Reports remain local drafts. See [the integration and preview build notes](docs/hackerone-local-integration.md).
+
+### Chat images and videos
+
+Use **Attach** beside the chat input to select images or videos. Preview or remove attachments before sending; text is optional. Up to four files are accepted (images up to 20 MB, videos up to 100 MB), with a combined limit of twelve image frames. Images are resized to 1280 pixels and normalized to JPEG. Video analysis uses six frames spread across the clip and does not include audio or continuous motion. Supported video codecs depend on the browser/Electron build; MP4 and WebM are recommended.
+
+Attachments use the Ollama **Vision model** configured in Settings, regardless of the text model. Run Ollama and install a vision-capable model before analyzing media. The original media is processed locally; normalized images are sent to the configured Ollama endpoint. Media previews remain in the current chat session; image payloads are not stored in conversation history. Text-only chat and voice remain available.
+
+### Developer Mode: improve Goga’s own code
+
+Agent tasks have no overall wall-clock deadline. Long tasks can continue past 90 seconds; Stop, individual operation timeouts, the configured step limit, and repeated-failure guards still apply.
+
+Open **Developer** in the desktop navigation. **Use Goga source** selects this checkout; packaged installations must choose a source folder. Start with **Find weaknesses** and **Analyze code** for a read-only review. To apply a focused fix, choose **Improve reliability** or enter a task, then select **Implement and verify**.
+
+This version runs the installed Codex CLI using its existing login (`codex login`), rather than Goga’s local conversation model. Codex usage applies to that account. Plan runs use `read-only`; implementation runs use `workspace-write`. Permission escalation is disabled. Commands or dependencies requiring additional access can fail and will be reported in the output. Goga does not forward its Telegram or voice-provider environment credentials to the coding process.
+
+The screen shows live agent messages, commands, reported file changes, an agent report, and Git working-tree status (including pre-existing edits). It does not automatically commit, deploy, rebuild, or reload itself. Review changes and check results before rebuilding and restarting. Stop cancels the coding process tree on Windows; partial edits remain for review. Tasks and their displayed output are kept in memory for the current app session.
+
+### Telegram connection
+
+1. Put your BotFather token in the local, git-ignored `.env` file as `TELEGRAM_BOT_TOKEN=your_token`. Replace any token shared publicly using BotFather first.
+2. Start Goga from this project directory with `npm start` (PowerShell: `npm.cmd start`).
+3. Find `[Telegram] In your private bot chat send: /pair ...` in the launch terminal, and send that exact command to your bot in Telegram.
+4. Send text messages or tasks. `/stop` requests cancellation. Sensitive actions still require approval in Goga's desktop window.
+
+Only the paired private chat is accepted. Pairing persists in `telegram-owner.json` in Electron's user-data directory; close Goga and remove that file to pair a different account. Goga and the PC must remain running and online. Text messages and replies travel through Telegram's Bot API: https://core.telegram.org/bots/api. Do not run another polling client for the same bot. Tokens are never included in application error logs.
+
 ```bash
 npm install
 npm start

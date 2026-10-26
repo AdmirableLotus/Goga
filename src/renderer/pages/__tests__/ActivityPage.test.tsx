@@ -2,7 +2,7 @@
 import React from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentState, AgentStep } from '../../../../shared/types'
+import type { AgentState, AgentStep } from '../../../shared/types'
 import ActivityPage from '../ActivityPage'
 
 const task = 'make a text file called activity-check.txt in my Documents'

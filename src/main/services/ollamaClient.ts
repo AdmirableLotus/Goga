@@ -80,15 +80,52 @@ export class OllamaClient {
     })
   }
 
+  /** Embed texts with a local embedding model (e.g. nomic-embed-text) via /api/embed. */
+  async embed(model: string, input: string[], signal?: AbortSignal): Promise<number[][]> {
+    const url = new URL(this.endpoint)
+    const body = JSON.stringify({ model, input })
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error('aborted')); return }
+      const req = http.request({
+        hostname: url.hostname,
+        port: this.getPort(url),
+        path: '/api/embed',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+      }, res => {
+        let raw = ''
+        res.on('data', (chunk: Buffer) => { raw += chunk.toString() })
+        res.on('end', () => {
+          signal?.removeEventListener('abort', onAbort)
+          const status = res.statusCode ?? 0
+          if (status < 200 || status >= 300) {
+            reject(new Error(`Ollama embed "${redactDiagnosticText(model)}" (HTTP ${status}): ${redactDiagnosticText(raw).slice(0, 300)}`))
+            return
+          }
+          try {
+            const json = JSON.parse(raw)
+            if (!Array.isArray(json.embeddings)) throw new Error('response has no embeddings')
+            resolve(json.embeddings as number[][])
+          } catch (err) { reject(err instanceof Error ? err : new Error(String(err))) }
+        })
+        res.on('error', reject)
+      })
+      const onAbort = () => { req.destroy(); reject(new Error('aborted')) }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      req.on('error', err => { signal?.removeEventListener('abort', onAbort); reject(err) })
+      req.end(body)
+    })
+  }
+
   async chat(messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model: this.model, messages, stream: !!onToken })
     return this.postJson(url, '/api/chat', body, onToken, signal)
   }
 
-  async chatWith(model: string, messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
+  async chatWith(model: string, messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal, options?: { num_ctx?: number; num_predict?: number }): Promise<string> {
     const url = new URL(this.endpoint)
-    const body = JSON.stringify({ model, messages, stream: !!onToken })
+    const body = JSON.stringify({ model, messages, stream: !!onToken, ...(options ? { options } : {}) })
     return this.postJson(url, '/api/chat', body, onToken, signal)
   }
 

@@ -570,6 +570,23 @@ reg.register({
   return { success: r.success, data: r, error: r.error }
 })
 
+reg.register({
+  name: 'computer.listMonitors',
+  description:
+    'Enumerate all connected monitors with their bounds, primary flag, scale factor, and device name. ' +
+    'Bounds are in virtual-desktop coordinates — negative x/y is valid for monitors positioned left or above the primary. ' +
+    'scaleFactor = effectiveDpi/96 (1.0=100%, 1.25=125%, 1.5=150%, 2.0=200%). ' +
+    'Screenshot pixels are physical; mouse input coordinates are logical. ' +
+    'Pixel-to-input conversion: inputX = monitor.bounds.x + round(pixelOffsetX / scaleFactor). ' +
+    'WARNING: cross-monitor clicking is not yet end-to-end verified. Use for read-only enumeration and screenshots only. ' +
+    'Also returns virtualDesktop bounds (left/top may be negative) spanning all monitors.',
+  parameters: { type: 'object', properties: {} },
+  riskLevel: 'low', reversible: true, category: 'computer'
+}, async () => {
+  const r = await desktop.listMonitors()
+  return { success: true, data: r }
+})
+
 export function registerComputerTools() {
   // Side-effect: all registrations above run on import
   return ToolRegistry.getInstance()

@@ -8,14 +8,17 @@
  * the same AbortController wiring run() uses.
  *
  * Proves:
- *   - the 90s timer aborts the active signal
+ *   - default runs have no deadline; an explicitly configured 90s timer aborts the active signal
  *   - a hung (never-resolving) call settles promptly after that abort
  *   - timeout is recorded (→ run() maps to task_timeout)
  *   - user Stop aborts WITHOUT marking timedOut (→ run() maps to stopped)
  *   - the timer is cleared on every exit path (no late re-fire)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { TaskTimeoutController, OVERALL_TASK_TIMEOUT_MS } from '../agentResilience'
+import { TaskTimeoutController } from '../agentResilience'
+
+// Finite deadlines remain supported when explicitly requested.
+const TEST_TIMEOUT_MS = 90_000
 
 // Mirror the run() model-call contract: never resolves; rejects on abort.
 function hungModelCall(signal: AbortSignal): Promise<string> {
@@ -29,9 +32,34 @@ describe('M4.1 — TaskTimeoutController (hard timeout & cancellation)', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('90s timer aborts the active signal and the hung call settles promptly', async () => {
+  it('allows long-running tasks by default without arming a timer', async () => {
     const ac = new AbortController()
     const ctl = new TaskTimeoutController(() => ac.abort())
+    ctl.start()
+    expect(ctl.armed).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(86_400_000)
+    expect(ac.signal.aborted).toBe(false)
+    expect(ctl.timedOut).toBe(false)
+    ctl.clear()
+  })
+
+  it('user Stop still cancels an unlimited task in flight', async () => {
+    const ac = new AbortController()
+    const ctl = new TaskTimeoutController(() => ac.abort())
+    ctl.start()
+    const call = hungModelCall(ac.signal)
+    call.catch(() => {})
+    await vi.advanceTimersByTimeAsync(300_000)
+    ac.abort()
+    await expect(call).rejects.toThrow(/abort/i)
+    expect(ctl.timedOut).toBe(false)
+    ctl.clear()
+  })
+
+  it('an explicitly configured 90s timer aborts the active signal and the hung call settles promptly', async () => {
+    const ac = new AbortController()
+    const ctl = new TaskTimeoutController(() => ac.abort(), TEST_TIMEOUT_MS)
     ctl.start()
 
     // The model call is hung on the shared signal (exactly like run()).
@@ -40,7 +68,7 @@ describe('M4.1 — TaskTimeoutController (hard timeout & cancellation)', () => {
     call.catch(() => { settled = true })
 
     // Before budget: still armed, not aborted, not settled.
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS - 100)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS - 100)
     expect(ac.signal.aborted).toBe(false)
     expect(settled).toBe(false)
 
@@ -56,16 +84,16 @@ describe('M4.1 — TaskTimeoutController (hard timeout & cancellation)', () => {
 
   it('timedOut is true after timeout (run() maps this to task_timeout)', async () => {
     const ac = new AbortController()
-    const ctl = new TaskTimeoutController(() => ac.abort())
+    const ctl = new TaskTimeoutController(() => ac.abort(), TEST_TIMEOUT_MS)
     ctl.start()
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS + 10)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS + 10)
     expect(ctl.timedOut).toBe(true)
     ctl.clear()
   })
 
   it('user Stop aborts WITHOUT marking timedOut (run() maps this to stopped)', async () => {
     const ac = new AbortController()
-    const ctl = new TaskTimeoutController(() => ac.abort())
+    const ctl = new TaskTimeoutController(() => ac.abort(), TEST_TIMEOUT_MS)
     ctl.start()
 
     const call = hungModelCall(ac.signal)
@@ -82,41 +110,41 @@ describe('M4.1 — TaskTimeoutController (hard timeout & cancellation)', () => {
     expect(ctl.timedOut).toBe(false)
 
     // Advancing past the would-be budget must not flip timedOut.
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS + 1000)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS + 1000)
     expect(ctl.timedOut).toBe(false)
   })
 
   it('timer is cleared on exit — no late re-fire on the Stop path', async () => {
     let abortCalls = 0
-    const ctl = new TaskTimeoutController(() => { abortCalls++ })
+    const ctl = new TaskTimeoutController(() => { abortCalls++ }, TEST_TIMEOUT_MS)
     ctl.start()
     await vi.advanceTimersByTimeAsync(500)
     ctl.clear()
     expect(ctl.armed).toBe(false)
     // Past the budget: the cleared timer must not fire.
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS + 1000)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS + 1000)
     expect(abortCalls).toBe(0)
   })
 
   it('timer is cleared on exit — does not re-fire on the timeout path', async () => {
     let abortCalls = 0
-    const ctl = new TaskTimeoutController(() => { abortCalls++ })
+    const ctl = new TaskTimeoutController(() => { abortCalls++ }, TEST_TIMEOUT_MS)
     ctl.start()
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS + 10)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS + 10)
     expect(abortCalls).toBe(1)
     ctl.clear()
     // Advancing again must not fire a second time.
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS + 1000)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS + 1000)
     expect(abortCalls).toBe(1)
   })
 
   it('start() is idempotent (only one timer armed)', async () => {
     let abortCalls = 0
-    const ctl = new TaskTimeoutController(() => { abortCalls++ })
+    const ctl = new TaskTimeoutController(() => { abortCalls++ }, TEST_TIMEOUT_MS)
     ctl.start()
     ctl.start()
     ctl.start()
-    await vi.advanceTimersByTimeAsync(OVERALL_TASK_TIMEOUT_MS + 10)
+    await vi.advanceTimersByTimeAsync(TEST_TIMEOUT_MS + 10)
     expect(abortCalls).toBe(1)
     ctl.clear()
   })
