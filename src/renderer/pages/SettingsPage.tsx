@@ -165,6 +165,17 @@ export default function SettingsPage() {
             <button onClick={checkBrain} style={styles.smallBtn}>Recheck</button>
           </div>
         </Field>
+        <Field label="Vision model (Ollama)">
+          {ollamaModels.length > 0
+            ? <select value={settings.visionModelName} onChange={e => update({ visionModelName: e.target.value })} style={styles.select}>
+                {!ollamaModels.some(m => sameModel(m, settings.visionModelName)) && <option value={settings.visionModelName}>{settings.visionModelName} (not installed)</option>}
+                {/* Vision-capable models only (Qwen-VL, LLaVA, …); the saved name may omit ':latest'. */}
+                {ollamaModels.filter(m => /vl|llava|vision/i.test(m))
+                  .map(m => sameModel(m, settings.visionModelName) ? settings.visionModelName : m)
+                  .map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            : <input value={settings.visionModelName} onChange={e => update({ visionModelName: e.target.value })} style={{ width: 200 }} placeholder="qwen3-vl:4b" />}
+        </Field>
         <Field label="Memory model (Ollama)">
           {ollamaModels.length > 0
             ? <select value={settings.embeddingModelName} onChange={e => update({ embeddingModelName: e.target.value })} style={styles.select}>

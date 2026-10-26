@@ -334,7 +334,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   primaryModel: 'local',
   modelEndpoint: 'http://localhost:11434',
   modelName: 'llama3',
-  visionModelName: 'llava:13b',
+  visionModelName: 'qwen3-vl:4b',
   embeddingModelName: 'nomic-embed-text',
   agentMaxSteps: 20,
   voiceEnabled: true,

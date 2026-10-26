@@ -8,6 +8,7 @@ export const READ_ONLY_TOOLS = new Set([
   'computer.uiElements', 'filesystem.read', 'filesystem.list',
   'filesystem.search', 'process.list', 'web.search', 'web.fetch',
   'memory.search', 'browser.read', 'browser.screenshot',
+  'vision.analyze', 'vision.findElement',
 ])
 
 function host(url: unknown): string {
@@ -87,7 +88,8 @@ export function resultText(step: AgentStep): string {
       .map(r => `- ${r.title ?? ''} — ${r.url}${r.snippet ? `: ${r.snippet}` : ''}`).join('\n')
   }
   if (typeof data === 'object') {
-    const content = (data as { content?: unknown; text?: unknown }).content ?? (data as { text?: unknown }).text
+    const { content: c, text, answer } = data as { content?: unknown; text?: unknown; answer?: unknown }
+    const content = c ?? text ?? answer
     if (typeof content === 'string') return content
   }
   return typeof data === 'string' ? data : JSON.stringify(data)
