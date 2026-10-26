@@ -18,6 +18,7 @@ import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObs
 import { plannerDiagnostic } from './plannerDiagnostics'
 import { observeScreen, type ObservationMessages } from './screenObservation'
 import { gogaIdentity } from './persona'
+import { FactLearner } from './factLearning'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -29,6 +30,14 @@ export class OrchestratorService {
   private desktop  = new DesktopAdapter()
   private agent    = AgentLoop.getInstance()
   private registry = ToolRegistry.getInstance()
+  // Learns lasting facts about the user from what they say, after each reply (never blocks it).
+  private factLearner = new FactLearner({
+    chat: messages => this.llama.isReady() ? this.llama.chat(messages) : Promise.reject(new Error('local brain not ready')),
+    knownFacts: message => this.brain.findRelevantFacts(message, 8),
+    addFact: (content, category) => this.brain.addFact(content, category),
+    userName: () => SettingsService.getInstance().get().userName,
+    log: this.log,
+  })
 
   async process(userMessage: ChatMessage, onToken?: (token: string) => void, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void, signal?: AbortSignal): Promise<ChatMessage> {
     this.log.info(`Processing: ${userMessage.content.slice(0, 80)}`)
@@ -42,7 +51,7 @@ export class OrchestratorService {
       try {
         if (!await this.ollama.isAvailable()) throw new Error('Ollama is not running. Start Ollama and install a vision model, then set its name in Settings.')
         const request = buildMediaRequest(userMessage.content, userMessage.attachments, this.brain.getHistory())
-        content = await this.ollama.chatWith(SettingsService.getInstance().get().visionModelName || 'qwen2.5vl:3b', request.messages, onToken, signal, request.options)
+        content = await this.ollama.chatWith(SettingsService.getInstance().get().visionModelName || 'qwen3-vl:4b', request.messages, onToken, signal, request.options)
       } catch (error) {
         content = `I could not analyze the attachments. ${error instanceof Error ? error.message : String(error)} Check the vision model in Settings.`
       }
@@ -117,7 +126,7 @@ export class OrchestratorService {
       if (ollamaAvailable) {
         const reply = await this.thinkWithOllama(content, onToken, signal)
         this.brain.addMessage(reply)
-        this.extractAndStoreFacts(content, reply.content)
+        void this.factLearner.learnFrom(content)
         return reply
       }
       this.log.warn('Ollama selected as primary but not available — falling back to LocalLlama')
@@ -127,7 +136,7 @@ export class OrchestratorService {
     if (this.llama.isReady()) {
       const reply = await this.thinkWithLocalLlama(content, onToken, signal)
       this.brain.addMessage(reply)
-      this.extractAndStoreFacts(content, reply.content)
+      void this.factLearner.learnFrom(content)
       return reply
     }
 
@@ -139,7 +148,7 @@ export class OrchestratorService {
       if (ready) {
         const reply = await this.thinkWithLocalLlama(content, onToken, signal)
         this.brain.addMessage(reply)
-        this.extractAndStoreFacts(content, reply.content)
+        void this.factLearner.learnFrom(content)
         return reply
       }
     }
@@ -152,7 +161,7 @@ export class OrchestratorService {
       this.log.warn('LocalLlama unavailable — falling back to Ollama')
       const reply = await this.thinkWithOllama(content, onToken, signal)
       this.brain.addMessage(reply)
-      this.extractAndStoreFacts(content, reply.content)
+      void this.factLearner.learnFrom(content)
       return reply
     }
 
@@ -297,19 +306,6 @@ You have the full conversation history. Read it before replying and don't ignore
       const msg = err instanceof Error ? err.message : String(err)
       this.log.error(`Ollama error: ${msg}`)
       return { id: nanoid(), role: 'assistant', content: `Ollama error: ${msg}`, timestamp: Date.now() }
-    }
-  }
-
-  private extractAndStoreFacts(userInput: string, _reply: string) {
-    const lower = userInput.toLowerCase()
-    const nameMatch = userInput.match(/my name is ([A-Z][a-z]+)/i) || userInput.match(/i(?:'m| am) ([A-Z][a-z]+)/i)
-    if (nameMatch) this.brain.addFact(`User's name is ${nameMatch[1]}`, 'about_user')
-    const likeMatch = userInput.match(/i (?:love|like|enjoy|prefer) (.+?)(?:\.|$)/i)
-    if (likeMatch) this.brain.addFact(`${SettingsService.getInstance().get().userName} likes: ${likeMatch[1]}`, 'preference')
-    const hateMatch = userInput.match(/i (?:hate|dislike|don't like) (.+?)(?:\.|$)/i)
-    if (hateMatch) this.brain.addFact(`${SettingsService.getInstance().get().userName} dislikes: ${hateMatch[1]}`, 'preference')
-    if (lower.includes('i work') || lower.includes('my job') || lower.includes('i am a ') || lower.includes("i'm a ")) {
-      this.brain.addFact(`About ${SettingsService.getInstance().get().userName}'s work: "${userInput.slice(0, 120)}"`, 'about_user')
     }
   }
 
