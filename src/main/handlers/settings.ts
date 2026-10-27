@@ -3,6 +3,7 @@ import { SettingsService } from '../services/settings'
 import { VoiceOrchestrator } from '../services/voiceOrchestrator'
 import { LocalLlamaService } from '../services/localLlama'
 import type { AppSettings } from '../../shared/types'
+import { applyRemoteSettings } from './remote'
 
 const LOCAL_MODEL_KEYS: (keyof AppSettings)[] = ['localModelPath', 'localModelContextSize', 'localModelGpuLayers']
 
@@ -19,6 +20,9 @@ export function registerSettingsHandlers(ipcMain: IpcMain) {
     }
     if ('sttProvider' in patch || 'whisperModel' in patch || 'whisperDevice' in patch || 'whisperLanguage' in patch) {
       VoiceOrchestrator.getInstance().reloadSttProvider()
+    }
+    if (previous.remoteEnabled !== updated.remoteEnabled || previous.remotePort !== updated.remotePort) {
+      await applyRemoteSettings()
     }
     if ('ttsProvider' in patch) {
       // Fire-and-forget; renderer can call voice:reload-tts explicitly for the result.

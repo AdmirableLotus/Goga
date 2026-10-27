@@ -48,6 +48,8 @@ const READY_TIMEOUT_MS = 300_000
 // Hard deadline for a single LISTEN round-trip (record + transcribe).
 // If DONE is not received within this window the process is killed and restarted.
 const LISTEN_HARD_TIMEOUT_MS = 20_000
+// A paired device's clip (up to ~60 s) on the GPU takes a few seconds; on CPU much longer.
+const FILE_TIMEOUT_MS = 90_000
 
 export class WhisperSttProvider implements ISttProvider {
   readonly name = 'Whisper'
@@ -87,6 +89,10 @@ export class WhisperSttProvider implements ISttProvider {
   private listenTimer: ReturnType<typeof setTimeout> | null = null
 
   private buf = ''
+
+  // Audio files from paired devices (FILE command), keyed by request id.
+  private fileRequests = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  private fileSeq = 0
 
   constructor(private opts: WhisperSttOptions = {}) {}
 
@@ -231,6 +237,21 @@ export class WhisperSttProvider implements ISttProvider {
       return
     }
 
+    if (line.startsWith('FILE_TRANSCRIPT ') || line.startsWith('FILE_ERROR ')) {
+      const isError = line.startsWith('FILE_ERROR ')
+      const rest = line.slice(isError ? 11 : 16)
+      const space = rest.indexOf(' ')
+      const id = space < 0 ? rest : rest.slice(0, space)
+      const payload = space < 0 ? '' : rest.slice(space + 1).trim()
+      const req = this.fileRequests.get(id)
+      if (!req) return
+      this.fileRequests.delete(id)
+      clearTimeout(req.timer)
+      if (isError) req.reject(new Error(`Transcription failed: ${payload}`))
+      else req.resolve(payload)
+      return
+    }
+
     if (line === 'DONE') {
       this.log.info('WhisperSTT: DONE received')
       this.resolveListenWithEmpty()
@@ -267,6 +288,11 @@ export class WhisperSttProvider implements ISttProvider {
   }
 
   private teardown() {
+    for (const req of this.fileRequests.values()) {
+      clearTimeout(req.timer)
+      req.reject(new Error('Whisper stopped'))
+    }
+    this.fileRequests.clear()
     this.ready = false
     this.proc  = null
     this.readyPromise  = null
@@ -306,6 +332,20 @@ export class WhisperSttProvider implements ISttProvider {
           resolve({ transcript: '' })
         }
       }, LISTEN_HARD_TIMEOUT_MS)
+    })
+  }
+
+  /** Transcribe a 16-bit PCM WAV file (any rate/channels), separately from the microphone. */
+  async transcribeFile(wavPath: string): Promise<string> {
+    await this.ensureProcess()
+    const id = `f${++this.fileSeq}`
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.fileRequests.delete(id)
+        reject(new Error('Transcription timed out'))
+      }, FILE_TIMEOUT_MS)
+      this.fileRequests.set(id, { resolve, reject, timer })
+      this.send(`FILE ${id} ${wavPath}`)
     })
   }
 

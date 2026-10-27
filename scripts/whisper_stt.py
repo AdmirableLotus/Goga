@@ -326,6 +326,34 @@ def _start_listen(max_secs: float) -> None:
     diag(f"LISTEN worker started (max={max_secs}s)")
 
 
+# ── File transcription (audio sent from a paired device, e.g. the Rabbit R1) ──
+# Separate from LISTEN so a device's audio never mixes with the PC microphone.
+# Replies on its own line: FILE_TRANSCRIPT <id> <text> (text may be empty).
+
+def read_wav_mono16k(path: str) -> np.ndarray:
+    import wave
+    with wave.open(path, "rb") as w:
+        if w.getsampwidth() != 2:
+            raise ValueError("expected 16-bit PCM WAV")
+        rate, channels = w.getframerate(), w.getnchannels()
+        data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+    if channels > 1:
+        data = data.reshape(-1, channels).mean(axis=1)
+    if rate != SAMPLE_RATE and len(data) > 0:
+        n = int(len(data) * SAMPLE_RATE / rate)
+        data = np.interp(np.linspace(0, len(data) - 1, n), np.arange(len(data)), data).astype(np.float32)
+    return data
+
+
+def _file_worker(req_id: str, path: str) -> None:
+    try:
+        text = transcribe(read_wav_mono16k(path))
+        emit(f"FILE_TRANSCRIPT {req_id} {text}")
+    except Exception as e:
+        diag(f"FILE {req_id} error: {e}")
+        emit(f"FILE_ERROR {req_id} {e}")
+
+
 # ── Continuous loop ───────────────────────────────────────────────────────────
 
 _continuous_thread: threading.Thread | None = None
@@ -402,6 +430,11 @@ for raw_line in sys.stdin:
         _close_stream()
         abort_event.clear()
         diag("CONTINUOUS_STOP handled")
+
+    elif cmd.startswith("FILE "):
+        parts = cmd.split(maxsplit=2)
+        if len(parts) == 3:
+            threading.Thread(target=_file_worker, args=(parts[1], parts[2]), daemon=True, name="file-worker").start()
 
     elif cmd == "QUIT":
         diag("QUIT received, shutting down")

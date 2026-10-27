@@ -223,6 +223,9 @@ export interface AppSettings {
   userName: string
   // Free-text notes from the user on how Goga should behave (Settings → Personality)
   personality: string
+  // Paired devices (Rabbit R1) reaching Goga over the home network
+  remoteEnabled: boolean
+  remotePort: number
   sttProvider: 'windows' | 'whisper'
   whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large-v2' | 'large-v3'
   whisperDevice: 'cuda' | 'cpu' | 'auto'
@@ -353,6 +356,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   conversationWindowSecs: 45,
   userName: 'Boss',
   personality: '',
+  remoteEnabled: false,
+  remotePort: 8765,
   sttProvider: 'windows',
   whisperModel: 'base',
   whisperDevice: 'cpu',

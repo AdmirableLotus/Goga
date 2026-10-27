@@ -62,6 +62,36 @@ export function kokoroVoiceId(voiceName: string): string {
   return KOKORO_VOICES[voiceName] ?? DEFAULT_KOKORO_VOICE
 }
 
+// Kokoro synthesis, run with `node -e` in a child process; parameters arrive via process.argv.
+const SYNTH_SCRIPT = `
+const { KokoroTTS } = require('kokoro-js')
+const { env } = require('@huggingface/transformers')
+const fs = require('fs')
+const modelDir = process.argv[1]
+const outPath  = process.argv[2]
+const text     = process.argv[3]
+const speed    = parseFloat(process.argv[4]) || 1.0
+const voice    = process.argv[5]
+
+// Fail closed: no remote model access permitted.
+env.allowRemoteModels = false
+env.localModelPath    = modelDir
+env.cacheDir          = modelDir
+
+;(async () => {
+  const tts = await KokoroTTS.from_pretrained(modelDir, { dtype: 'q8', device: 'cpu' })
+  const audio = await tts.generate(text, { voice, speed })
+  await audio.save(outPath)
+  // Verify the file was written before signalling success
+  if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 100) {
+    throw new Error('WAV file missing or empty after save')
+  }
+})().then(() => process.exit(0)).catch(e => {
+  process.stderr.write(String(e.message || e))
+  process.exit(1)
+})
+`
+
 export class KokoroModelMissingError extends Error {
   readonly code = 'KOKORO_MODEL_MISSING'
   constructor(modelDir: string, reason: string) {
@@ -202,6 +232,23 @@ export class KokoroTtsProvider implements ITtsProvider {
     this.onAmplitude?.(0)
   }
 
+  /**
+   * Speak into a WAV file without playing it (replies for a paired device such as the R1).
+   * Independent of speak(): it never interrupts, or is interrupted by, speech on the PC.
+   */
+  synthesizeToFile(text: string, voiceName: string, outPath: string, rate = 1.0): Promise<void> {
+    if (!this.isModelReady()) return Promise.reject(new KokoroModelMissingError(this.modelDir, 'model not installed'))
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath,
+        ['-e', SYNTH_SCRIPT, '--', this.modelDir, outPath, text.slice(0, 5000), String(rate), kokoroVoiceId(voiceName)],
+        { windowsHide: true, timeout: 60_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
+      let stderr = ''
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString() })
+      child.on('error', reject)
+      child.on('close', code => code === 0 ? resolve() : reject(new Error(`Kokoro synthesis failed: ${stderr.slice(0, 200)}`)))
+    })
+  }
+
   isPlaying(): boolean {
     return this.proc !== null
   }
@@ -221,37 +268,9 @@ export class KokoroTtsProvider implements ITtsProvider {
     return new Promise((resolve, reject) => {
       if (this.gen !== myGen) { resolve(); return }
 
-      const script = `
-const { KokoroTTS } = require('kokoro-js')
-const { env } = require('@huggingface/transformers')
-const fs = require('fs')
-const modelDir = process.argv[1]
-const outPath  = process.argv[2]
-const text     = process.argv[3]
-const speed    = parseFloat(process.argv[4]) || 1.0
-const voice    = process.argv[5]
-
-// Fail closed: no remote model access permitted.
-env.allowRemoteModels = false
-env.localModelPath    = modelDir
-env.cacheDir          = modelDir
-
-;(async () => {
-  const tts = await KokoroTTS.from_pretrained(modelDir, { dtype: 'q8', device: 'cpu' })
-  const audio = await tts.generate(text, { voice, speed })
-  await audio.save(outPath)
-  // Verify the file was written before signalling success
-  if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 100) {
-    throw new Error('WAV file missing or empty after save')
-  }
-})().then(() => process.exit(0)).catch(e => {
-  process.stderr.write(String(e.message || e))
-  process.exit(1)
-})
-`
       const child = spawn(
         process.execPath,
-        ['-e', script, '--', this.modelDir, outPath, text, String(rate), voice],
+        ['-e', SYNTH_SCRIPT, '--', this.modelDir, outPath, text, String(rate), voice],
         {
           windowsHide: true,
           timeout: 60_000,

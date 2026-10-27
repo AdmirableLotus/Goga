@@ -761,6 +761,34 @@ export class VoiceOrchestrator extends EventEmitter {
     return this.tts.getVoices()
   }
 
+  // ── Audio for paired devices (Rabbit R1) ─────────────────────────────────
+  // Uses the PC's Whisper and Kokoro without touching the PC's own mic or speakers.
+  private deviceWhisper: WhisperSttProvider | null = null
+  private deviceKokoro: KokoroTtsProvider | null = null
+
+  async transcribeFile(wavPath: string): Promise<string> {
+    if (this.stt instanceof WhisperSttProvider) return this.stt.transcribeFile(wavPath)
+    if (!this.deviceWhisper) {
+      const s = SettingsService.getInstance().get()
+      this.deviceWhisper = new WhisperSttProvider({
+        model: s.whisperModel as WhisperModel, device: s.whisperDevice as WhisperDevice,
+        language: s.whisperLanguage || undefined,
+      })
+    }
+    return this.deviceWhisper.transcribeFile(wavPath)
+  }
+
+  async speakToFile(text: string, outPath: string): Promise<void> {
+    const voice = SettingsService.getInstance().get().voiceName
+    if (this.tts instanceof KokoroTtsProvider) return this.tts.synthesizeToFile(text, voice, outPath)
+    if (!this.deviceKokoro) {
+      let userDataPath = ''
+      try { userDataPath = app.getPath('userData') } catch { }
+      this.deviceKokoro = new KokoroTtsProvider(userDataPath)
+    }
+    return this.deviceKokoro.synthesizeToFile(text, voice, outPath)
+  }
+
   /**
    * Graceful shutdown: stop all TTS child processes and dispose the STT
    * provider. Called from the Electron will-quit handler via a typed public
@@ -769,6 +797,7 @@ export class VoiceOrchestrator extends EventEmitter {
   async shutdown(): Promise<void> {
     try { await this.tts.stopAndWait?.() } catch { }
     try { await this.fallbackTts.stopAndWait?.() } catch { }
+    try { this.deviceWhisper?.dispose() } catch { }
     try {
       if ('dispose' in this.stt && typeof (this.stt as { dispose?: () => void }).dispose === 'function') {
         (this.stt as { dispose: () => void }).dispose()

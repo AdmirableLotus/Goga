@@ -15,6 +15,7 @@ import { registerMissionHandlers } from './handlers/mission'
 import { registerSttHandlers } from './handlers/stt'
 import { registerVoiceHandlers } from './handlers/voice'
 import { registerModelHandlers } from './handlers/model'
+import { registerRemoteHandlers, applyRemoteSettings, stopRemoteLink } from './handlers/remote'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -97,7 +98,9 @@ app.whenReady().then(() => {
   registerMissionHandlers(ipcMain)
   registerVoiceHandlers(ipcMain, getMainWindow)
   registerModelHandlers(ipcMain, getMainWindow)
+  registerRemoteHandlers(ipcMain)
   createWindow()
+  void applyRemoteSettings()
 
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim()
   if (telegramToken) {
@@ -136,6 +139,7 @@ app.on('will-quit', async (event) => {
   event.preventDefault()
   globalShortcut.unregisterAll()
   telegram?.stop()
+  stopRemoteLink()
   stopDeveloperTask()
   // Stop all TTS/STT child processes through the typed public shutdown() method.
   try { await VoiceOrchestrator.getInstance().shutdown() } catch { }

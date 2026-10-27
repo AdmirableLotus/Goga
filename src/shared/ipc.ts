@@ -82,6 +82,9 @@ export interface MainHandlers {
   'ollama:models': () => Promise<string[]>
   'localModel:status': () => Promise<import('../main/services/localLlama').LocalModelState>
   'localModel:list': () => Promise<string[]>
+  'remote:status': () => Promise<{ listening: boolean; port: number | null; addresses: string[]; devices: { id: string; name: string; pairedAt: number; lastSeen?: number }[]; error: string | null }>
+  'remote:pair': () => Promise<string>
+  'remote:forget': (id: string) => Promise<void>
 
   // Kokoro model management
   'model:kokoro-status': () => Promise<{ installed: boolean; downloading: boolean }>

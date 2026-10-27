@@ -10,6 +10,8 @@ export default function SettingsPage() {
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [brainModels, setBrainModels] = useState<string[]>([])
+  const [remote, setRemote] = useState<Awaited<ReturnType<typeof window.goga.invoke<'remote:status'>>> | null>(null)
+  const [pairCode, setPairCode] = useState<string | null>(null)
   const [brainStatus, setBrainStatus] = useState<Awaited<ReturnType<typeof window.goga.invoke<'localModel:status'>>> | null>(null)
 
   // Kokoro install state
@@ -27,6 +29,7 @@ export default function SettingsPage() {
     window.goga.invoke('model:kokoro-status').then(s => setKokoroInstalled(s.installed))
     window.goga.invoke('localModel:list').then(setBrainModels).catch(() => {})
     checkBrain()
+    checkRemote()
     // Cleanup: remove progress listener if Settings unmounts mid-download
     return () => { unsubRef.current?.() }
   }, [])
@@ -41,6 +44,23 @@ export default function SettingsPage() {
         setOllamaModels(models)
       } catch { /* older backend without ollama:models */ }
     }
+  }
+
+  const checkRemote = async () => {
+    try { setRemote(await window.goga.invoke('remote:status')) } catch { /* older backend */ }
+  }
+
+  const startPairing = async () => {
+    setPairCode(await window.goga.invoke('remote:pair'))
+    // Show the new device as soon as it pairs; the code is valid for 5 minutes.
+    const poll = setInterval(async () => {
+      const status = await window.goga.invoke('remote:status')
+      setRemote(prev => {
+        if (prev && status.devices.length > prev.devices.length) { setPairCode(null); clearInterval(poll) }
+        return status
+      })
+    }, 2000)
+    setTimeout(() => { clearInterval(poll); setPairCode(null) }, 5 * 60_000)
   }
 
   const checkBrain = async () => {
@@ -71,6 +91,7 @@ export default function SettingsPage() {
     await window.goga.invoke('settings:set', settings)
     // A changed brain model reloads in the background; refresh its status shortly after.
     setTimeout(checkBrain, 500)
+    checkRemote()
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -239,6 +260,53 @@ export default function SettingsPage() {
               </select>
             : <input value={settings.modelName} onChange={e => update({ modelName: e.target.value })} style={{ width: 200 }} placeholder="llama3" />}
         </Field>
+
+        <Section label="Devices (Rabbit R1)" />
+        <Field label="Let my devices talk to Goga (home Wi-Fi only)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <input type="checkbox" checked={settings.remoteEnabled ?? false} onChange={e => update({ remoteEnabled: e.target.checked })} />
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              Save to apply. Only paired devices on your home network can connect; risky actions still wait for your approval here.
+            </span>
+          </div>
+        </Field>
+        {settings.remoteEnabled && (
+          <>
+            <Field label="Connection">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ color: remote?.listening ? 'var(--success)' : remote?.error ? 'var(--danger)' : 'var(--text-muted)' }}>
+                  {remote === null ? 'Checking…'
+                    : remote.listening ? `Ready at ${remote.addresses.map(a => `${a}:${remote.port}`).join(', ') || `port ${remote.port}`}`
+                    : remote.error ? `Not available — ${remote.error}` : 'Off — press Save'}
+                </span>
+                <button onClick={checkRemote} style={styles.smallBtn}>Recheck</button>
+              </div>
+            </Field>
+            <Field label="Port">
+              <input type="number" min={1024} max={65535} value={settings.remotePort ?? 8765} onChange={e => update({ remotePort: Number(e.target.value) })} style={{ width: 100 }} />
+            </Field>
+            <Field label="Pair a device">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button onClick={startPairing} disabled={!remote?.listening} style={styles.smallBtn}>Pair a device</button>
+                {pairCode && <span>Enter code <strong style={{ fontSize: 18, letterSpacing: 2 }}>{pairCode}</strong> on the device (valid 5 minutes)</span>}
+              </div>
+            </Field>
+            <Field label="Paired devices">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(remote?.devices ?? []).length === 0 && <span style={{ color: 'var(--text-muted)' }}>None yet</span>}
+                {(remote?.devices ?? []).map(d => (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span>{d.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      {d.lastSeen ? `last seen ${new Date(d.lastSeen).toLocaleString()}` : `paired ${new Date(d.pairedAt).toLocaleDateString()}`}
+                    </span>
+                    <button onClick={async () => { await window.goga.invoke('remote:forget', d.id); checkRemote() }} style={styles.smallBtn}>Forget</button>
+                  </div>
+                ))}
+              </div>
+            </Field>
+          </>
+        )}
 
         <Section label="Voice & Speech" />
         <Field label="TTS provider">
