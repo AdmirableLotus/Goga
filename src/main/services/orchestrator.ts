@@ -32,7 +32,8 @@ export class OrchestratorService {
   private registry = ToolRegistry.getInstance()
   // Learns lasting facts about the user from what they say, after each reply (never blocks it).
   private factLearner = new FactLearner({
-    chat: messages => this.llama.isReady() ? this.llama.chat(messages) : Promise.reject(new Error('local brain not ready')),
+    // Background work: skipped when the brain is busy rather than delaying a reply.
+    chat: messages => this.llama.isReady() ? this.llama.chat(messages, undefined, undefined, { ifIdle: true }) : Promise.reject(new Error('local brain not ready')),
     knownFacts: message => this.brain.findRelevantFacts(message, 8),
     addFact: (content, category) => this.brain.addFact(content, category),
     userName: () => SettingsService.getInstance().get().userName,

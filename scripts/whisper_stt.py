@@ -55,6 +55,34 @@ VAD_THRESHOLD    = 0.008   # RMS fraction of int16 max for voice activity
 VAD_SILENCE_SECS = 1.8     # trailing silence before ending utterance
 PRE_SPEECH_TIMEOUT_SECS = 8.0  # give up if no speech starts within this window
 INPUT_GAIN       = float(os.environ.get("WHISPER_GAIN", "8.0"))  # software gain multiplier
+SPEECH_OVER_NOISE = 3.0    # speech must be this many times louder than the room's noise floor
+
+
+class NoiseFloor:
+    """Tracks the room's background level so steady noise (fans, a hum) doesn't count as speech.
+
+    With the fixed threshold alone, a room whose boosted noise sat above it kept every recording
+    running to the 12 s maximum. The floor drops quickly to quiet blocks and rises only slowly,
+    so speech barely moves it. It persists across recordings while the process runs.
+    """
+
+    def __init__(self) -> None:
+        self.level: float | None = None
+
+    def update(self, level: float, rising: bool = True) -> None:
+        """rising=False while the user speaks: their voice must not be taken for louder noise."""
+        if self.level is None:
+            self.level = level
+        elif level < self.level:
+            self.level = 0.7 * self.level + 0.3 * level
+        elif rising:
+            self.level = min(level, self.level * 1.01)  # ~+10% per second of sound
+
+    def threshold(self, base: float) -> float:
+        return max(base, (self.level or 0.0) * SPEECH_OVER_NOISE)
+
+
+_noise = NoiseFloor()
 
 # ── Load model ────────────────────────────────────────────────────────────────
 _actual_device  = DEVICE
@@ -206,10 +234,12 @@ def record_audio(max_secs: float) -> np.ndarray:
         chunks.append(chunk)
         # Apply software gain for VAD level check (compensates for low mic volume)
         level = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2))) * INPUT_GAIN
+        _noise.update(level, rising=not speech_started)   # first, so the very first block seeds the floor instead of counting as speech
+        threshold = _noise.threshold(vad_thresh)
 
-        if level > vad_thresh:
+        if level > threshold:
             if not speech_started:
-                diag(f"Speech detected at chunk {i} (rms={level:.0f})")
+                diag(f"Speech detected at chunk {i} (rms={level:.0f}, threshold={threshold:.0f})")
             speech_started  = True
             silence_chunks  = 0
             pre_speech_chunks = 0

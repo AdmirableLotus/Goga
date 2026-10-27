@@ -34,6 +34,34 @@ const VERIFIED_SENTINEL = '.verified'
 // Voice-level updates to the visual: fine enough to follow syllables, cheap over IPC.
 const AMPLITUDE_WINDOW_MS = 50
 
+// English voices bundled with kokoro-js (node_modules/kokoro-js/voices), by the name Settings shows.
+export const KOKORO_VOICES: Record<string, string> = {
+  'Heart (American, female)': 'af_heart',
+  'Bella (American, female)': 'af_bella',
+  'Nicole (American, female)': 'af_nicole',
+  'Sarah (American, female)': 'af_sarah',
+  'Sky (American, female)': 'af_sky',
+  'Emma (British, female)': 'bf_emma',
+  'Isabella (British, female)': 'bf_isabella',
+  'Michael (American, male)': 'am_michael',
+  'Adam (American, male)': 'am_adam',
+  'Eric (American, male)': 'am_eric',
+  'Fenrir (American, male)': 'am_fenrir',
+  'Liam (American, male)': 'am_liam',
+  'Onyx (American, male)': 'am_onyx',
+  'Puck (American, male)': 'am_puck',
+  'George (British, male)': 'bm_george',
+  'Daniel (British, male)': 'bm_daniel',
+  'Fable (British, male)': 'bm_fable',
+  'Lewis (British, male)': 'bm_lewis',
+}
+const DEFAULT_KOKORO_VOICE = 'af_heart'
+
+/** Settings stores the display name; anything unknown (e.g. a Windows voice) gets the default. */
+export function kokoroVoiceId(voiceName: string): string {
+  return KOKORO_VOICES[voiceName] ?? DEFAULT_KOKORO_VOICE
+}
+
 export class KokoroModelMissingError extends Error {
   readonly code = 'KOKORO_MODEL_MISSING'
   constructor(modelDir: string, reason: string) {
@@ -90,7 +118,7 @@ export class KokoroTtsProvider implements ITtsProvider {
    * in-progress call), kills the active process, awaits full cleanup of the
    * previous call, then starts the new utterance.
    */
-  async speak(text: string, rate: number, volume: number, _voiceName: string): Promise<void> {
+  async speak(text: string, rate: number, volume: number, voiceName: string): Promise<void> {
     // Increment generation — any in-flight runSpeak() will see its gen is stale
     // and return early without starting new work.
     const myGen = ++this.gen
@@ -120,7 +148,7 @@ export class KokoroTtsProvider implements ITtsProvider {
     // crypto.randomUUID() guarantees uniqueness even under rapid calls.
     const tmpWav = path.join(os.tmpdir(), `goga-kokoro-${crypto.randomUUID()}.wav`)
 
-    this.activeSpeak = this.runSpeak(myGen, clean, rate, volume, tmpWav)
+    this.activeSpeak = this.runSpeak(myGen, clean, rate, volume, tmpWav, kokoroVoiceId(voiceName))
     return this.activeSpeak
   }
 
@@ -129,10 +157,11 @@ export class KokoroTtsProvider implements ITtsProvider {
     text: string,
     rate: number,
     volume: number,
-    tmpWav: string
+    tmpWav: string,
+    voice: string
   ): Promise<void> {
     try {
-      await this.synthesize(myGen, text, rate, tmpWav)
+      await this.synthesize(myGen, text, rate, tmpWav, voice)
       if (this.gen !== myGen) return
       await this.playWav(myGen, tmpWav, volume)
       this.log.info('TTS:Kokoro: playback ended')
@@ -178,7 +207,7 @@ export class KokoroTtsProvider implements ITtsProvider {
   }
 
   async getVoices(): Promise<string[]> {
-    return ['Kokoro (local)']
+    return Object.keys(KOKORO_VOICES)
   }
 
   // ── Synthesis via kokoro-js Node child script ─────────────────────────────
@@ -188,7 +217,7 @@ export class KokoroTtsProvider implements ITtsProvider {
   // All parameters are passed via process.argv — no user content is interpolated
   // into the script string.
 
-  private synthesize(myGen: number, text: string, rate: number, outPath: string): Promise<void> {
+  private synthesize(myGen: number, text: string, rate: number, outPath: string, voice: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.gen !== myGen) { resolve(); return }
 
@@ -200,6 +229,7 @@ const modelDir = process.argv[1]
 const outPath  = process.argv[2]
 const text     = process.argv[3]
 const speed    = parseFloat(process.argv[4]) || 1.0
+const voice    = process.argv[5]
 
 // Fail closed: no remote model access permitted.
 env.allowRemoteModels = false
@@ -208,7 +238,7 @@ env.cacheDir          = modelDir
 
 ;(async () => {
   const tts = await KokoroTTS.from_pretrained(modelDir, { dtype: 'q8', device: 'cpu' })
-  const audio = await tts.generate(text, { voice: 'af_heart', speed })
+  const audio = await tts.generate(text, { voice, speed })
   await audio.save(outPath)
   // Verify the file was written before signalling success
   if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 100) {
@@ -221,7 +251,7 @@ env.cacheDir          = modelDir
 `
       const child = spawn(
         process.execPath,
-        ['-e', script, '--', this.modelDir, outPath, text, String(rate)],
+        ['-e', script, '--', this.modelDir, outPath, text, String(rate), voice],
         {
           windowsHide: true,
           timeout: 60_000,

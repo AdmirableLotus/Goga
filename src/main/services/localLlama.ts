@@ -26,6 +26,16 @@ type Any = any
 // Same pattern used in desktop.ts for active-win.
 const esmImport = new Function('pkg', 'return import(pkg)')
 
+/** Wait for the conversation ahead to finish, or return early on Stop. */
+function waitTurn(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return previous
+  return new Promise<void>(resolve => {
+    const done = () => { signal.removeEventListener('abort', done); resolve() }
+    signal.addEventListener('abort', done, { once: true })
+    previous.then(done)
+  })
+}
+
 export class LocalLlamaService {
   private static instance: LocalLlamaService
   private log = LogService.getInstance()
@@ -35,6 +45,8 @@ export class LocalLlamaService {
   private context: Any = null
   private state: LocalModelState = { status: 'uninitialized', modelPath: '' }
   private initPromise: Promise<void> | null = null
+  private queue: Promise<void> = Promise.resolve()
+  private pending = 0
 
   static getInstance() {
     if (!LocalLlamaService.instance) LocalLlamaService.instance = new LocalLlamaService()
@@ -92,25 +104,47 @@ export class LocalLlamaService {
     }
   }
 
+  /**
+   * Runs one conversation at a time. Each needs its own context on the GPU (~1 GB at 8K), and
+   * with the brain and Whisper loaded there is room for only one: a chat, a task step and
+   * background fact learning overlapping failed with "context size is too large for the
+   * available VRAM". Callers queue in order; `ifIdle` callers (background work) are turned
+   * away instead of making the user wait.
+   */
   async chat(
     messages: { role: 'system' | 'user' | 'assistant'; content: string }[],
     onToken?: (token: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    opts: { ifIdle?: boolean } = {}
   ): Promise<string> {
     if (!this.isReady() || !this.model) {
       throw new Error(`LocalLlama not ready: ${this.state.status} — ${this.state.error ?? ''}`)
     }
+    if (opts.ifIdle && this.pending > 0) throw new Error('local brain busy')
 
+    this.pending++
+    const previous = this.queue
+    let release!: () => void
+    this.queue = new Promise<void>(resolve => { release = resolve })
     try {
+      await waitTurn(previous, signal)
       signal?.throwIfAborted()
-      const { LlamaChatSession } = await esmImport('node-llama-cpp')
-      return await runLocalConversation(this.model, LlamaChatSession, messages,
+      return await runLocalConversation(this.model, await this.chatSessionClass(), messages,
         SettingsService.getInstance().get().localModelContextSize ?? 4096, onToken, signal)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (!signal?.aborted) this.log.error(`LocalLlama: chat error — ${msg}`)
       throw new Error(msg)
+    } finally {
+      // An aborted caller leaves the line at once, but the next one still waits for
+      // whoever was ahead of it.
+      previous.then(release)
+      this.pending--
     }
+  }
+
+  private async chatSessionClass(): Promise<Any> {
+    return (await esmImport('node-llama-cpp')).LlamaChatSession
   }
 
   /** While the model is loading, wait for the load to finish (bounded by timeoutMs and Stop).
