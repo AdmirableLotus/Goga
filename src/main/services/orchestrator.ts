@@ -245,7 +245,7 @@ export class OrchestratorService {
     const currentDate = new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz }).format(now)
     const currentTime = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZone: tz }).format(now)
 
-    return `${gogaIdentity(settings.userName)}
+    return `${gogaIdentity(settings.userName, settings.personality)}
 
 Right now you are chatting with ${settings.userName} (by text, voice or Telegram).
 

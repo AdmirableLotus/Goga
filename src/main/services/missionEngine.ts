@@ -487,7 +487,7 @@ export class MissionEngine extends EventEmitter {
     })
 
     // SYSTEM PROMPT — outside any UNTRUSTED_DATA tags
-    const systemPrompt = `${gogaIdentity(settings.userName)}
+    const systemPrompt = `${gogaIdentity(settings.userName, settings.personality)}
 
 Right now you are running a Mission: operating the desktop step by step toward the goal below.
 

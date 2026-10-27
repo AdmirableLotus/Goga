@@ -221,6 +221,8 @@ export interface AppSettings {
   allowBargeIn: boolean
   conversationWindowSecs: number
   userName: string
+  // Free-text notes from the user on how Goga should behave (Settings → Personality)
+  personality: string
   sttProvider: 'windows' | 'whisper'
   whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large-v2' | 'large-v3'
   whisperDevice: 'cuda' | 'cpu' | 'auto'
@@ -323,6 +325,9 @@ export interface GogaFact {
   createdAt: number
 }
 
+// Long enough for a few paragraphs, short enough to leave the 8K brain room to think.
+export const MAX_PERSONALITY_CHARS = 1500
+
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   requireApprovalForAll: false,
@@ -347,6 +352,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   allowBargeIn: true,
   conversationWindowSecs: 45,
   userName: 'Boss',
+  personality: '',
   sttProvider: 'windows',
   whisperModel: 'base',
   whisperDevice: 'cpu',

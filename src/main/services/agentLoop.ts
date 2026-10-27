@@ -507,7 +507,7 @@ export class AgentLoop {
     const stepHistory = recent.map((s, i) =>
       describeStepForPlanner(s, i + 1, i === recent.length - 1 ? LATEST_RESULT_CHARS : OLDER_RESULT_CHARS)).join('\n')
 
-    const systemPrompt = `${gogaIdentity(settings.userName)}
+    const systemPrompt = `${gogaIdentity(settings.userName, settings.personality)}
 
 Right now you are carrying out a task on the computer, one tool call at a time. For questions about a topic, search the web right away and answer from what you find — no need to ask permission to search.
 
