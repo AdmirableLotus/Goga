@@ -80,6 +80,23 @@ describe('agent checks that each step really worked', () => {
     expect(agent.getState().status).toBe('error')
   })
 
+  it('keeps a failed write unresolved when a different file is successfully written', async () => {
+    const agent = new AgentLoop()
+    vi.spyOn(agent as any, 'planNextStep')
+      .mockResolvedValueOnce(write)
+      .mockResolvedValueOnce({ ...write, params: { ...write.params, path: 'C:\\fixture\\other.txt' } })
+      .mockResolvedValueOnce(done('All done!'))
+    boundary.verify.mockResolvedValueOnce(failedCheck).mockResolvedValueOnce(passedCheck)
+
+    const reply = await agent.run('write notes.txt and other.txt in my fixture folder')
+
+    expect(boundary.execute).toHaveBeenCalledTimes(2)
+    expect(reply).toContain("Heads-up: I couldn't confirm every step worked")
+    expect(reply).toContain('notes.txt')
+    expect(unresolvedFailures(agent.getState().steps)).toEqual([agent.getState().steps[0]])
+    expect(boundary.savePattern).not.toHaveBeenCalled()
+  })
+
   it('reports running out of steps as unfinished, not completed', async () => {
     boundary.maxSteps = 3
     const agent = new AgentLoop()
@@ -118,6 +135,14 @@ describe('step check helpers', () => {
     expect(unresolvedFailures([step('filesystem.write', 'failed'), step('filesystem.write', 'passed')])).toEqual([])
     expect(unresolvedFailures([step('filesystem.write', 'failed'), step('web.search', 'passed')]).map(s => s.tool)).toEqual(['filesystem.write'])
     expect(honestyNote([step('filesystem.write', 'passed')])).toBe('')
+  })
+
+  it('matches retry arguments recursively regardless of object key order', () => {
+    const failed = { ...step('filesystem.write', 'failed'), params: { path: 'a', options: { append: false, encoding: 'utf8' } } }
+    const retry = { ...step('filesystem.write', 'passed'), params: { options: { encoding: 'utf8', append: false }, path: 'a' } }
+    expect(unresolvedFailures([failed, retry])).toEqual([])
+    expect(unresolvedFailures([failed, { ...retry, params: { ...retry.params, path: 'b' } }])).toEqual([failed])
+    expect(unresolvedFailures([failed, { ...retry, result: { success: false } }])).toEqual([failed])
   })
 
   it('shows the planner what search and fetch returned, wrapped as untrusted data', () => {

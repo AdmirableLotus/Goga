@@ -63,11 +63,21 @@ export function checkSpecFor(tool: string, params: Record<string, unknown>, resu
   }
 }
 
-/** Failed steps that no later step of the same tool fixed. */
+/** Stable action identity, including nested arguments without depending on key order. */
+function actionParams(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]]))
+      : item)
+}
+
+/** Failed steps that no later successful retry of the same action fixed. */
 export function unresolvedFailures(steps: AgentStep[]): AgentStep[] {
   return steps.filter((step, i) =>
     step.check?.outcome === 'failed' &&
-    !steps.slice(i + 1).some(later => later.tool === step.tool && later.check?.outcome === 'passed'))
+    !steps.slice(i + 1).some(later => later.tool === step.tool &&
+      actionParams(later.params) === actionParams(step.params) &&
+      later.result.success && later.check?.outcome === 'passed'))
 }
 
 /** Appended to a "done" reply so Goga never claims success over a step it saw fail. */
