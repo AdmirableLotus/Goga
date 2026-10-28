@@ -17,7 +17,13 @@ const CALLBACK_PORT = 47821
 const CALLBACK_PATH = '/flux/callback'
 const SIGN_IN_WAIT_MS = 5 * 60_000
 const RESULT_CHARS = 6000
-const DESCRIPTION_CHARS = 300
+const DESCRIPTION_CHARS = 200
+// Looking things up. Anything else (creating a project or thread, messaging Flux's AI, which
+// edits the design and spends credits, reviewing knowledge, sending feedback) asks first.
+const READING_TOOLS = /^(get_|list_|wait_for_)|^ask_project_wiki$/
+
+/** How to work in Flux, for the planner when Flux tools are offered. */
+export const FLUX_HINT = '- Flux: find the project with flux.list_projects, read it with flux.get_project / get_components / get_nets / get_bom. To have Flux change a design, flux.create_thread (or flux.send_message to an existing thread), then flux.wait_for_thread and flux.get_thread for the answer.'
 
 export type FluxStatus = { connected: boolean; signingIn: boolean; tools: string[]; error: string | null }
 
@@ -40,11 +46,13 @@ interface McpTool { name: string; description?: string; inputSchema?: { properti
 
 /** A Flux tool as a Goga tool. Read-only tools run freely; the rest ask first. */
 export function fluxToolDefinition(tool: McpTool) {
-  const readOnly = tool.annotations?.readOnlyHint === true
+  // Flux's own hint wins; without one, the tool's name says whether it only reads.
+  const hint = tool.annotations?.readOnlyHint
+  const readOnly = hint ?? READING_TOOLS.test(tool.name)
   const riskLevel: RiskLevel = readOnly ? 'low' : 'high'
   return {
     name: `flux.${tool.name}`,
-    description: `Flux (flux.ai circuit-board design): ${(tool.description ?? tool.name).replace(/\s+/g, ' ').slice(0, DESCRIPTION_CHARS)}`,
+    description: `Flux (circuit-board design): ${(tool.description ?? tool.name).replace(/\s+/g, ' ').slice(0, DESCRIPTION_CHARS)}`,
     parameters: { type: 'object' as const, properties: (tool.inputSchema?.properties ?? {}) as Record<string, Any>, required: tool.inputSchema?.required },
     riskLevel,
     reversible: readOnly,

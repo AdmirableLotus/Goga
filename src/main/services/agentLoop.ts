@@ -1,5 +1,7 @@
 import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
+import { FLUX_HINT } from './fluxLink'
+import { FLUX_TASK, plannerOffers } from './agentRouting'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
 import { SECURITY_TASK } from './securityScope'
@@ -500,7 +502,10 @@ export class AgentLoop {
   ): Promise<LLMToolCall> {
     const settings = SettingsService.getInstance().get()
     const facts = await this.brain.findRelevantFacts(task, 6)
-    const toolSchema = this.registry.toPromptSummary()
+    // Flux's 20 tools and the hardware tools only earn their room in the prompt for hardware tasks.
+    const fluxTask = FLUX_TASK.test(task)
+    const offered = plannerOffers(task)
+    const toolSchema = this.registry.toPromptSummary(offered)
 
     // The newest result gets room to be used in the answer; older ones stay short to fit the context window.
     const recent = completedSteps.slice(-8)
@@ -527,7 +532,7 @@ RULES:
 - "CHECK FAILED" means the tool ran but its effect did not happen. Treat it as a failure and try a different approach.
 - Only claim success in "reply" for what the step history shows actually worked. Never say a task is done when its key step failed.
 - To save text to a file, ALWAYS use notepad.saveText — never shell.execute or process.start for this purpose.
-
+${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}
 RESPONSE FORMAT (strict JSON):
 {"thought": "...", "tool": "tool.name", "params": {...}, "done": false}
 OR when complete:
@@ -576,7 +581,7 @@ What is the next single action to take?`
         const settings = SettingsService.getInstance().get()
         const useNativeTools = settings.primaryModel === 'ollama'
         if (useNativeTools) {
-          const ollamaTools = this.registry.toOllamaTools()
+          const ollamaTools = this.registry.toOllamaTools(offered)
           const { text, toolCall } = await this.ollama.chatWithTools(messages, ollamaTools, signal)
           plannerDiagnostic('planner.nativeResponse', { raw: text, toolCall })
           if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }

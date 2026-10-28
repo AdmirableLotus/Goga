@@ -2,7 +2,7 @@ import type { ToolAdapter } from './base'
 import type { Browser, BrowserContext, Page } from 'playwright'
 import { LogService } from '../services/logs'
 
-const BRAVE_PATH = 'C:\\Users\\redre\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'
+export const BRAVE_PATH ='C:\\Users\\redre\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'
 
 export interface BrowserSession {
   sessionId: string

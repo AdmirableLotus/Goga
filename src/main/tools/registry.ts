@@ -91,15 +91,16 @@ export class ToolRegistry {
   }
 
   // Returns a compact plain-text summary for injection into prompts
-  toPromptSummary(): string {
+  toPromptSummary(include: (name: string) => boolean = () => true): string {
     return this.list()
+      .filter(t => include(t.name))
       .map(t => `- ${t.name}(${Object.keys(t.parameters.properties).join(', ')}): ${t.description} [risk:${t.riskLevel}]`)
       .join('\n')
   }
 
   // Returns Ollama-compatible tool definitions for native tool-call support
-  toOllamaTools(): OllamaTool[] {
-    return this.list().map(t => ({
+  toOllamaTools(include: (name: string) => boolean = () => true): OllamaTool[] {
+    return this.list().filter(t => include(t.name)).map(t => ({
       type: 'function' as const,
       function: { name: t.name, description: t.description, parameters: t.parameters }
     }))

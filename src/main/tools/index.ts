@@ -10,5 +10,6 @@ import './vision'
 import './clock'
 import './notepadSave'
 import './electronics'
+import './microcontroller'
 
 export { ToolRegistry } from './registry'

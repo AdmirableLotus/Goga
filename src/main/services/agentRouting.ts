@@ -29,7 +29,8 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i,
   /\bdo (this|that|it)\b/i,
   // Working in the user's Flux (circuit-board design) projects
-  /\b(in|on|with|using|from|to) (flux|kicad)\b|\bflux (project|board|schematic|design)s?\b|\b(build|make|create) (the |a |an )?(circuit|schematic|netlist)\b/i,
+  /\b(in|on|with|using|from|to) (flux|kicad|schematik)\b|\b(flux|schematik) (project|board|schematic|design)s?\b|\b(build|make|create) (the |a |an )?(circuit|schematic|netlist)\b/i,
+  /\bschematik\.io\b|\b(upload|flash)\b.{0,40}\b(arduino|esp32|pico|board|sketch)\b|\b(make|create|build)\b.{0,30}\b(arduino|esp32|pico|microcontroller) project\b/i,
   /\b(what is|what are|how (do|does|to)|tell me about|explain|show me).{0,60}\b(hackerone|bugcrowd|intigriti|synack|bounty|cve|exploit|payload|xss|sqli|rce|ssrf|lfi|idor)\b/i,
 ]
 
@@ -56,7 +57,7 @@ export function startsWithAgreement(message: string): boolean {
 }
 
 const WRITING_WORDS = /\b(draft|write|rewrite|summari[sz]e|organi[sz]e|outline|make a list|list (of|what|everything)|explain|brainstorm|prepare|compare|proofread|translate|executive summary|section|proposal|pitch|essay|letter|email|report)\b/i
-const PC_OBJECTS = /\b(files?|folders?|\.txt|notepad|save|desktop|downloads|documents folder|browser|website|open|click|terminal|flux)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i
+const PC_OBJECTS = /\b(files?|folders?|\.txt|notepad|save|desktop|downloads|documents folder|browser|website|open|click|terminal|flux|schematik)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i
 
 /**
  * Writing, organising and advice ("draft the summary and list what to buy to build it")
@@ -71,7 +72,7 @@ export const LONG_MESSAGE_CHARS = 2000
 
 /** Whether an agreed plan means operating the PC, rather than writing or advising in chat. */
 export function planNeedsComputer(plan: string): boolean {
-  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program)|kicad|netlist|schematic|pcb|circuit board|flux)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
+  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program)|kicad|netlist|schematic|pcb|circuit board|flux|schematik|arduino|esp32|sketch|upload)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
 }
 
 /** Goga's reply described something it would do on the PC and asked for the go-ahead. */
@@ -91,6 +92,22 @@ export function isReadOnlyObservationRequest(message: string): boolean {
   ).join(' ')
   if (/\b(click|type|press|close|open|launch|focus|switch|move|drag|scroll|save|write|delete|change|modify|paste|fill|submit|make|create|run|execute)\b/i.test(positive)) return false
   return /\b(active|focused|foreground)\s+(window|app)\b|\b(which|what)\s+(window|app)\b.{0,50}\b(active|focused|foreground)\b|\b(what|describe|observe|read|inspect|see|look at)\b.{0,50}\b(screen|desktop|window)\b/i.test(positive)
+}
+
+/** Whether a task is about Flux, so its tools are worth the room in the planner's prompt. */
+export const FLUX_TASK = /\bflux\b/i
+const HARDWARE_TASK = /\b(flux|schematik|kicad|arduino|esp32|pico|microcontroller|circuit|schematic|netlist|pcb|isfet|sensor board|breadboard|solder)\b/i
+const HARDWARE_TOOLS = /^(electronics\.|microcontroller\.|schematik\.)/
+// Hardware work goes through Flux, the part libraries, the board tools and the web, not by
+// driving the screen. Offering only these keeps the planner's prompt inside the brain's context.
+const HARDWARE_SIDE_TOOLS = /^(web\.(search|fetch)$|memory\.|notepad\.saveText$|filesystem\.(read|write|list)$|browser\.openExternal$|clock\.now$)/
+const FLUX_RARELY_NEEDED = /^flux\.(send_feedback|review_knowledge|list_organization_memberships|get_assets)$/
+
+/** The tools the planner sees for a task: hardware tasks get a focused set, other tasks none of it. */
+export function plannerOffers(task: string): (name: string) => boolean {
+  if (!HARDWARE_TASK.test(task)) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name)
+  const flux = FLUX_TASK.test(task)
+  return name => name.startsWith('flux.') ? flux && !FLUX_RARELY_NEEDED.test(name) : HARDWARE_TOOLS.test(name) || HARDWARE_SIDE_TOOLS.test(name)
 }
 
 // Phrases that open a question or request an explanation — these stay on the
