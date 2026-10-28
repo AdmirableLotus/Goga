@@ -1,6 +1,8 @@
 import 'dotenv/config'
 import { app, BrowserWindow, ipcMain, globalShortcut } from 'electron'
 import path from 'path'
+import dotenv from 'dotenv'
+import { onWindowClose, startSleepMode, startedAsleep, stopSleepMode, wakeGoga } from './sleepMode'
 import { registerChatHandlers } from './handlers/chat'
 import { registerActionHandlers } from './handlers/actions'
 import { registerMemoryHandlers } from './handlers/memory'
@@ -36,6 +38,10 @@ plannerDiagnostic('build.loaded', {
   executable: process.execPath, appPath: app.getAppPath(), version: app.getVersion()
 })
 
+// Started with Windows, the working folder is not the app's, so the keys in .env are
+// loaded from the app folder too (never overriding ones already set).
+dotenv.config({ path: path.join(app.getAppPath(), '.env') })
+
 let mainWindow: BrowserWindow | null = null
 let telegram: TelegramService | undefined
 
@@ -53,6 +59,8 @@ function createWindow() {
     backgroundColor: '#0f0f0f',
     icon: path.join(__dirname, '../../../assets/icon.ico'),
     autoHideMenuBar: true,
+    // Started with Windows, Goga wakes up asleep in the tray.
+    show: !startedAsleep(),
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -78,10 +86,18 @@ function createWindow() {
     mainWindow.loadFile(builtFile)
   }
 
+  mainWindow.on('close', event => { if (mainWindow) onWindowClose(event, mainWindow) })
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
 export function getMainWindow() { return mainWindow }
+
+// One Goga at a time: a second start (say, from the Start menu while asleep) wakes this one.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => wakeGoga())
+}
 
 app.whenReady().then(() => {
   registerChatHandlers(ipcMain)
@@ -100,6 +116,7 @@ app.whenReady().then(() => {
   registerModelHandlers(ipcMain, getMainWindow)
   registerRemoteHandlers(ipcMain)
   createWindow()
+  startSleepMode(getMainWindow, createWindow)
   void applyRemoteSettings()
 
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim()
@@ -138,6 +155,7 @@ app.on('will-quit', async (event) => {
   // proceed before cleanup finishes.
   event.preventDefault()
   globalShortcut.unregisterAll()
+  stopSleepMode()
   telegram?.stop()
   stopRemoteLink()
   stopDeveloperTask()

@@ -22,6 +22,8 @@ import { plannerDiagnostic } from './plannerDiagnostics'
 import { observeScreen, type ObservationMessages } from './screenObservation'
 import { gogaIdentity } from './persona'
 import { FactLearner } from './factLearning'
+import { ROUTINE_QUESTION } from './routine'
+import { routineSummary } from '../sleepMode'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -273,6 +275,8 @@ export class OrchestratorService {
     const facts = await this.brain.findRelevantFacts(userInput)
     const books = this.library.list()
     const bookChunks = this.library.search(userInput, 3)
+    const remembered = await this.brain.rememberConversations(userInput)
+    const routine = ROUTINE_QUESTION.test(userInput) ? routineSummary(settings.userName) : ''
 
     const now = new Date()
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -287,7 +291,7 @@ Current date and time: ${currentDate}, ${currentTime} (${tz})
 
 What you know about ${settings.userName}:
 ${facts.length > 0 ? facts.map(f => `- ${f.content}`).join('\n') : '- Still getting to know them.'}
-
+${remembered ? `\n${remembered}\nWhen ${settings.userName} asks about an earlier conversation or says "continue", use these notes. If they don't cover what was asked, say you don't remember that part rather than guessing.\n` : ''}${routine ? `\n${routine}\n` : ''}
 Books you have read:
 ${books.length > 0 ? books.map(b => `- "${b.title}"`).join('\n') : '- None yet.'}
 

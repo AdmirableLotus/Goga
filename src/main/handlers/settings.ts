@@ -4,6 +4,7 @@ import { VoiceOrchestrator } from '../services/voiceOrchestrator'
 import { LocalLlamaService } from '../services/localLlama'
 import type { AppSettings } from '../../shared/types'
 import { applyRemoteSettings } from './remote'
+import { applySleepSettings } from '../sleepMode'
 
 const LOCAL_MODEL_KEYS: (keyof AppSettings)[] = ['localModelPath', 'localModelContextSize', 'localModelGpuLayers']
 
@@ -24,6 +25,7 @@ export function registerSettingsHandlers(ipcMain: IpcMain) {
     if (previous.remoteEnabled !== updated.remoteEnabled || previous.remotePort !== updated.remotePort) {
       await applyRemoteSettings()
     }
+    if (previous.startWithWindows !== updated.startWithWindows) applySleepSettings()
     if ('ttsProvider' in patch) {
       // Fire-and-forget; renderer can call voice:reload-tts explicitly for the result.
       VoiceOrchestrator.getInstance().reloadTtsProvider()

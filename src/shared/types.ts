@@ -231,6 +231,11 @@ export interface AppSettings {
   whisperDevice: 'cuda' | 'cpu' | 'auto'
   whisperLanguage: string
   ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
+  // Sleep mode: closing the window keeps Goga in the tray, watching and listening
+  sleepOnClose: boolean
+  startWithWindows: boolean
+  guardianEnabled: boolean
+  routineLearning: boolean
 }
 
 // ── Phase D: Mission types ───────────────────────────────────────────────────
@@ -362,7 +367,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   whisperModel: 'base',
   whisperDevice: 'cpu',
   whisperLanguage: '',
-  ttsProvider: 'sapi'
+  ttsProvider: 'sapi',
+  sleepOnClose: true,
+  startWithWindows: true,
+  guardianEnabled: true,
+  routineLearning: true
 }
 
 // ── Security Workspace ────────────────────────────────────────────────────────

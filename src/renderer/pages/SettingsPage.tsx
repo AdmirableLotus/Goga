@@ -432,6 +432,18 @@ export default function SettingsPage() {
             </Field>
           </>
         )}
+        <Field label="Sleep in the tray when the window is closed">
+          <input type="checkbox" checked={settings.sleepOnClose ?? true} onChange={e => update({ sleepOnClose: e.target.checked })} />
+        </Field>
+        <Field label="Start with Windows (asleep in the tray)">
+          <input type="checkbox" checked={settings.startWithWindows ?? true} onChange={e => update({ startWithWindows: e.target.checked })} />
+        </Field>
+        <Field label="Watch and protect the PC (startup programs, new apps, Defender, USB, home network)">
+          <input type="checkbox" checked={settings.guardianEnabled ?? true} onChange={e => update({ guardianEnabled: e.target.checked })} />
+        </Field>
+        <Field label="Learn my routine (which apps I use and when; titles only, never typing)">
+          <input type="checkbox" checked={settings.routineLearning ?? true} onChange={e => update({ routineLearning: e.target.checked })} />
+        </Field>
         <Field label="Voice conversation">
           <input type="checkbox" checked={settings.voiceEnabled} onChange={e => update({ voiceEnabled: e.target.checked })} />
         </Field>

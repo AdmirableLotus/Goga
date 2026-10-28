@@ -4,6 +4,10 @@ import { LogService } from './logs'
 import { OllamaClient } from './ollamaClient'
 import { SettingsService } from './settings'
 import { keywordScore, recallFacts, type StoredEmbedding } from './semanticRecall'
+import { ConversationMemory } from './conversationMemory'
+import { LocalLlamaService } from './localLlama'
+import { app } from 'electron'
+import path from 'path'
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Store = require('electron-store')
@@ -27,6 +31,7 @@ export class BrainService {
   private log = LogService.getInstance()
   private ollama = new OllamaClient()
   private embedFailureLogged = false
+  private memory!: ConversationMemory
 
   static getInstance() {
     if (!BrainService.instance) BrainService.instance = new BrainService()
@@ -36,9 +41,35 @@ export class BrainService {
   constructor() {
     this.store = new Store({ name: 'brain', defaults: DEFAULTS })
     this.log.info(`Brain loaded: ${this.getFacts().length} facts, ${this.getHistory().length} messages`)
+    this.memory = this.createMemory()
+  }
+
+  private createMemory(): ConversationMemory {
+    let file: string | undefined
+    try { file = path.join(app.getPath('userData'), 'conversation-memory.json') } catch { /* tests: memory only */ }
+    const llama = LocalLlamaService.getInstance()
+    const memory = new ConversationMemory({
+      // Background work: skipped when the brain is busy rather than delaying a reply.
+      chat: messages => llama.isReady() ? llama.chat(messages, undefined, undefined, { ifIdle: true }) : Promise.reject(new Error('local brain not ready')),
+      userName: () => SettingsService.getInstance().get().userName,
+      embed: {
+        model: () => SettingsService.getInstance().get().embeddingModelName,
+        run: (model, texts) => this.ollama.embed(model, texts, AbortSignal.timeout(EMBED_TIMEOUT_MS)),
+      },
+      log: this.log,
+    }, file)
+    // First run: the recent chat history becomes the first conversation to remember.
+    if (memory.isEmpty()) for (const m of this.getHistory()) memory.record(m)
+    return memory
+  }
+
+  /** Notes from earlier conversations that matter for this message, for the brain's context. */
+  rememberConversations(message: string): Promise<string> {
+    return this.memory.promptBlock(message).catch(() => '')
   }
 
   addMessage(msg: ChatMessage) {
+    this.memory.record(msg)
     let history: ChatMessage[] = this.store.get('conversationHistory')
     history.push(msg)
     if (history.length > HISTORY_LIMIT) history = history.slice(-HISTORY_LIMIT)
