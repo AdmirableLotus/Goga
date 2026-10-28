@@ -89,4 +89,31 @@ describe('LocalLlamaService.chat queue', () => {
     finish()
     await expect(first).resolves.toBe('done')
   })
+
+  it('reuses one GPU context for every conversation and wipes it in between', async () => {
+    const svc = readyService()
+    const sequence = { clearHistory: vi.fn().mockResolvedValue(undefined) }
+    const context = { disposed: false, getSequence: () => sequence, dispose: vi.fn().mockResolvedValue(undefined) }
+    const model = { createContext: vi.fn().mockResolvedValue(context) }
+    ;(svc as any).model = model
+    // Behave like the real runner: borrow a context, then dispose (here: wipe) it.
+    conversation.mockImplementation(async (m: typeof model) => {
+      const ctx = await m.createContext({ contextSize: 4096 }) as unknown as { getSequence(): unknown; dispose(): Promise<void> }
+      expect(ctx.getSequence()).toBe(sequence)
+      await ctx.dispose()
+      return 'ok'
+    })
+    await svc.chat([{ role: 'user', content: 'one' }])
+    await svc.chat([{ role: 'user', content: 'two' }])
+    expect(model.createContext).toHaveBeenCalledOnce()
+    expect(sequence.clearHistory).toHaveBeenCalledTimes(2)
+    expect(context.dispose).not.toHaveBeenCalled()
+
+    // After a real failure the next conversation gets a fresh context.
+    conversation.mockRejectedValueOnce(new Error('decode failed'))
+    await expect(svc.chat([{ role: 'user', content: 'three' }])).rejects.toThrow('decode failed')
+    expect(context.dispose).toHaveBeenCalledOnce()
+    await svc.chat([{ role: 'user', content: 'four' }])
+    expect(model.createContext).toHaveBeenCalledTimes(2)
+  })
 })

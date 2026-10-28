@@ -21,12 +21,23 @@ export function registerChatHandlers(ipcMain: IpcMain) {
       turnId,
       attachments: media,
     }
-    const onToken = (token: string) => event.sender.send('chat:token', { token, turnId })
-    const reply = await orchestrator.process(userMsg, onToken)
+    // Speech starts with the first finished sentence, while the rest is still being written.
+    const speech = VoiceOrchestrator.getInstance().speakReply()
+    const onToken = (token: string) => {
+      event.sender.send('chat:token', { token, turnId })
+      speech.push(token)
+    }
+    let reply: ChatMessage
+    try {
+      reply = await orchestrator.process(userMsg, onToken)
+    } catch (err) {
+      speech.cancel()
+      throw err
+    }
     // Stamp the canonical reply with the same turnId before returning
     const stamped: ChatMessage = { ...reply, turnId }
-    // Speak the reply — fire-and-forget so IPC returns immediately
-    VoiceOrchestrator.getInstance().speak(stamped.content).catch(() => {})
+    // Finish speaking — fire-and-forget so IPC returns immediately
+    speech.finish(stamped.content).catch(() => {})
     return stamped
   })
 }

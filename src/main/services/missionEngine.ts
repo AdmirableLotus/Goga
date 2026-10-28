@@ -278,7 +278,7 @@ export class MissionEngine extends EventEmitter {
         if (decision.requiresApproval) {
           this.setMissionStatus(mission, 'waiting_approval')
           this.emit('mission:event', this.event('step.authorizing', mission.id, step.id,
-            { reason: decision.reason }))
+            { reason: decision.reason, goal: step.goal.slice(0, 120) }))
           const approved = await this.requestApproval(mission.id, step, signal)
           if (!approved) {
             this.finishMission(mission, 'cancelled', 'Action rejected by user')

@@ -14,7 +14,10 @@ import { SecurityWorkspaceService } from './securityWorkspace'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest } from './agentRouting'
+import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer } from './agentRouting'
+import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes } from './longText'
+import { app } from 'electron'
+import path from 'path'
 import { plannerDiagnostic } from './plannerDiagnostics'
 import { observeScreen, type ObservationMessages } from './screenObservation'
 import { gogaIdentity } from './persona'
@@ -30,6 +33,8 @@ export class OrchestratorService {
   private desktop  = new DesktopAdapter()
   private agent    = AgentLoop.getInstance()
   private registry = ToolRegistry.getInstance()
+  // Notes on long documents the user pasted, so they fit the brain's context (see longText.ts).
+  private notes = new NotesStore((() => { try { return path.join(app.getPath('userData'), 'document-notes.json') } catch { return undefined } })())
   // Learns lasting facts about the user from what they say, after each reply (never blocks it).
   private factLearner = new FactLearner({
     // Background work: skipped when the brain is busy rather than delaying a reply.
@@ -72,8 +77,25 @@ export class OrchestratorService {
     }
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
-    const vagueWebsite = isVagueOpenWebsite(content)
-    const agentTask = looksLikeAgentTask(content, lastAssistant)
+
+    // Discuss, then act: Goga described what it would do and asked; the user agreed.
+    // A plan that operates the PC becomes a task; writing, organising or advice is
+    // answered right here in chat, where the brain can see the conversation.
+    let agreedInChat = false
+    if (isActionProposal(lastAssistant) && (isConfirmation(content) || startsWithAgreement(content))) {
+      if (planNeedsComputer(lastAssistant!) && this.agent.getState().status !== 'running') {
+        const userName = SettingsService.getInstance().get().userName
+        const asked = [...history].reverse().slice(1).find(m => m.role === 'user' && !isConfirmation(m.content))?.content ?? ''
+        const added = isConfirmation(content) ? '' : `\n\n${userName} also said: ${content.slice(0, 600)}`
+        const task = `${asked.slice(0, 1500)}\n\nPlan agreed with ${userName}: ${lastAssistant!.slice(0, 1200)}${added}`.trim()
+        plannerDiagnostic('routing.decision', { task: content, route: 'agreed-proposal', agentTask: true })
+        return this.startAgentTask(task, onTaskComplete)
+      }
+      agreedInChat = true
+    }
+
+    const vagueWebsite = !agreedInChat && isVagueOpenWebsite(content)
+    const agentTask = !agreedInChat && looksLikeAgentTask(content, lastAssistant)
     plannerDiagnostic('routing.decision', { task: content, vagueWebsite, agentTask, route: vagueWebsite ? 'clarify' : agentTask ? 'agent' : 'chat' })
 
     // "Open a website" with no named site/URL → ask which one instead of
@@ -127,7 +149,7 @@ export class OrchestratorService {
       if (ollamaAvailable) {
         const reply = await this.thinkWithOllama(content, onToken, signal)
         this.brain.addMessage(reply)
-        void this.factLearner.learnFrom(content)
+        void this.factLearner.learnFrom(content.slice(0, 2000))
         return reply
       }
       this.log.warn('Ollama selected as primary but not available — falling back to LocalLlama')
@@ -137,7 +159,7 @@ export class OrchestratorService {
     if (this.llama.isReady()) {
       const reply = await this.thinkWithLocalLlama(content, onToken, signal)
       this.brain.addMessage(reply)
-      void this.factLearner.learnFrom(content)
+      void this.factLearner.learnFrom(content.slice(0, 2000))
       return reply
     }
 
@@ -149,7 +171,7 @@ export class OrchestratorService {
       if (ready) {
         const reply = await this.thinkWithLocalLlama(content, onToken, signal)
         this.brain.addMessage(reply)
-        void this.factLearner.learnFrom(content)
+        void this.factLearner.learnFrom(content.slice(0, 2000))
         return reply
       }
     }
@@ -162,7 +184,7 @@ export class OrchestratorService {
       this.log.warn('LocalLlama unavailable — falling back to Ollama')
       const reply = await this.thinkWithOllama(content, onToken, signal)
       this.brain.addMessage(reply)
-      void this.factLearner.learnFrom(content)
+      void this.factLearner.learnFrom(content.slice(0, 2000))
       return reply
     }
 
@@ -204,7 +226,18 @@ export class OrchestratorService {
       }
     }
 
-    this.agent.run(task).then((reply) => {
+    this.agent.run(task).then(async (reply) => {
+      // The planner found nothing to do on the PC (a writing or thinking request routed
+      // here): answer in chat instead of reporting a planning error.
+      const ran = this.agent.getState()
+      if (ran.status === 'error' && ran.error?.startsWith('planning_failed') && !ran.steps.some(s => s.tool)) {
+        this.log.info('Agent found no PC step — answering in chat instead')
+        const answer = await this.answerInChat(task).catch((err): ChatMessage => ({ id: nanoid(), role: 'assistant', content: `Model error: ${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() }))
+        this.brain.addMessage(answer)
+        getMainWindow()?.webContents.send('chat:message', answer)
+        finishOnce({ status: 'success', reply: answer.content, state: ran })
+        return
+      }
       const msg: ChatMessage = { id: nanoid(), role: 'assistant', content: reply, timestamp: Date.now() }
       this.brain.addMessage(msg)
       getMainWindow()?.webContents.send('chat:message', msg)
@@ -230,7 +263,7 @@ export class OrchestratorService {
     const settings = SettingsService.getInstance().get()
     return {
       id: nanoid(), role: 'assistant',
-      content: `On it, ${settings.userName} — working through this now.`,
+      content: `On it, ${settings.userName}.`,
       timestamp: Date.now()
     }
   }
@@ -260,24 +293,55 @@ ${books.length > 0 ? books.map(b => `- "${b.title}"`).join('\n') : '- None yet.'
 
 ${bookChunks.length > 0 ? `Relevant book passages:\n${bookChunks.map(c => c.text).join('\n---\n').slice(0, 1200)}` : ''}
 
-You can also operate this PC — browser, files, apps, desktop — but that happens in a separate task mode, not in this chat. In this chat you cannot run tools: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer. If ${settings.userName} wants an action, say you can do it and suggest phrasing it as a task (for example "open google.com" or "search for canvas selling tips").
+You can also operate this PC: browser, files, apps, desktop. When ${settings.userName} wants something done, talk it through like a partner: say in a few plain sentences what you would do, mention anything risky or irreversible and anything ${settings.userName} must do personally (such as typing a password or a two-factor code), then end by asking "Want me to go ahead?". When ${settings.userName} agrees, you will carry out that plan. Do not refuse reasonable requests or tell ${settings.userName} to rephrase; if you have a concern, explain it and let ${settings.userName} decide. In this reply itself you have not acted yet: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer.
 
 You have the full conversation history. Read it before replying and don't ignore earlier context.`
   }
 
-  private async thinkWithLocalLlama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
-    const history = this.brain.getHistory().slice(-20)
-    const systemPrompt = await this.buildSystemPrompt(userInput)
+  /** Answer in chat with whichever brain is available. */
+  private async answerInChat(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
+    if (SettingsService.getInstance().get().primaryModel === 'ollama' && await this.ollama.isAvailable()) return this.thinkWithOllama(userInput, onToken, signal)
+    if (!this.llama.isReady()) await this.llama.waitWhileLoading(BRAIN_LOAD_WAIT_MS, signal)
+    if (this.llama.isReady()) return this.thinkWithLocalLlama(userInput, onToken, signal)
+    return this.thinkWithOllama(userInput, onToken, signal)
+  }
 
-    const messages = [
+  /**
+   * The conversation as the brain sees it, sized to its context: long documents are read
+   * in parts once and replaced by notes, other long turns are shortened, oldest go first.
+   */
+  private async buildChatMessages(userInput: string, signal?: AbortSignal) {
+    const history = this.brain.getHistory().slice(-20).filter(m => m.role !== 'system').slice(-14)
+    // The current message is usually already the last history entry; it is sent separately below.
+    if (history[history.length - 1]?.role === 'user' && history[history.length - 1]?.content === userInput) history.pop()
+    for (const text of [...history.map(m => m.content), userInput]) {
+      if (text.length > LONG_TEXT_CHARS && !this.notes.get(text)) await this.readLongText(text, signal)
+    }
+    const systemPrompt = await this.buildSystemPrompt(userInput.slice(0, 2000))
+    const current = userInput.length > LONG_TEXT_CHARS ? asNotes(userInput, this.notes.get(userInput) ?? '') : userInput
+    return [
       { role: 'system' as const, content: systemPrompt },
-      ...history.filter(m => m.role !== 'system').slice(-14).map(m => ({
-        role: m.role as 'user' | 'assistant', content: m.content
-      })),
-      { role: 'user' as const, content: userInput }
+      ...fitHistory(history, text => this.notes.get(text)).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      { role: 'user' as const, content: current },
     ]
+  }
 
+  private async readLongText(text: string, signal?: AbortSignal): Promise<void> {
+    const userName = SettingsService.getInstance().get().userName
+    const status = (content: string) => getMainWindow()?.webContents.send('chat:message', { id: nanoid(), role: 'system', content, timestamp: Date.now() })
+    this.log.info(`Reading a long document in parts (${text.length} chars)`)
+    const started = Date.now()
+    const notes = await takeNotes(text, userName,
+      (messages, s) => SettingsService.getInstance().get().primaryModel === 'ollama' ? this.ollama.chat(messages, undefined, s) : this.llama.chat(messages, undefined, s),
+      (done, total) => { if (done === 0) status(`Reading your document in ${total} part${total === 1 ? '' : 's'}... this takes a minute or two.`) },
+      signal)
+    this.notes.set(text, notes)
+    this.log.info(`Long document read: ${notes.length} chars of notes in ${((Date.now() - started) / 1000).toFixed(0)}s`)
+  }
+
+  private async thinkWithLocalLlama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
     try {
+      const messages = await this.buildChatMessages(userInput, signal)
       const content = await this.llama.chat(messages, onToken, signal)
       this.log.info(`LocalLlama response: ${content.slice(0, 60)}…`)
       return { id: nanoid(), role: 'assistant', content: content.trim(), timestamp: Date.now() }
@@ -289,18 +353,8 @@ You have the full conversation history. Read it before replying and don't ignore
   }
 
   private async thinkWithOllama(userInput: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
-    const history = this.brain.getHistory().slice(-20)
-    const systemPrompt = await this.buildSystemPrompt(userInput)
-
-    const messages = [
-      { role: 'system' as const, content: systemPrompt },
-      ...history.filter(m => m.role !== 'system').slice(-14).map(m => ({
-        role: m.role as 'user' | 'assistant', content: m.content
-      })),
-      { role: 'user' as const, content: userInput }
-    ]
-
     try {
+      const messages = await this.buildChatMessages(userInput, signal)
       const content = await this.ollama.chat(messages, onToken, signal)
       return { id: nanoid(), role: 'assistant', content: content.trim(), timestamp: Date.now() }
     } catch (err) {

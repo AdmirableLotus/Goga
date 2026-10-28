@@ -93,44 +93,50 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
       const classification = MissionEngine.getInstance().injectConversation(text)
       if (classification === 'cancel') { await voice.narrate('Stopped.'); return }
       if (classification === 'question') {
+        const speech = voice.speakReply()
         const onToken = (token: string) => {
           if (myGen !== currentGen || abort.signal.aborted) return
           win.webContents.send('chat:token', { token, turnId })
+          speech.push(token)
         }
         try {
           const reply = await chat.process(userMsg, onToken, undefined, abort.signal)
-          if (myGen !== currentGen || abort.signal.aborted) return
+          if (myGen !== currentGen || abort.signal.aborted) { speech.cancel(); return }
           const stamped: ChatMessage = { ...reply, turnId }
           win.webContents.send('chat:message', stamped)
-          voice.speak(stamped.content).catch(() => {})
-        } catch { }
+          speech.finish(stamped.content).catch(() => {})
+        } catch { speech.cancel() }
         return
       }
       if (classification === 'clarification') { await voice.narrate('Got it.'); return }
     }
 
     // ── Normal conversation ───────────────────────────────────────────────
+    // Goga starts speaking at the end of the first sentence, while the rest is written.
+    const speech = voice.speakReply()
     const onToken = (token: string) => {
       if (myGen !== currentGen || abort.signal.aborted) return
       win.webContents.send('chat:token', { token, turnId })
+      speech.push(token)
     }
 
     try {
       const reply = await chat.process(userMsg, onToken, undefined, abort.signal)
 
       // Guard: discard if this turn was superseded or stopped.
-      if (myGen !== currentGen || abort.signal.aborted) return
+      if (myGen !== currentGen || abort.signal.aborted) { speech.cancel(); return }
 
       const stamped: ChatMessage = { ...reply, turnId }
       win.webContents.send('chat:message', stamped)
 
-      // Guard again before starting TTS — Stop may have fired between
-      // chat:message send and speak() call.
-      if (myGen !== currentGen || abort.signal.aborted) return
+      // Guard again before finishing TTS — Stop may have fired between
+      // chat:message send and this point.
+      if (myGen !== currentGen || abort.signal.aborted) { speech.cancel(); return }
 
-      voice.speak(stamped.content).catch(() => {})
+      speech.finish(stamped.content).catch(() => {})
 
     } catch (err) {
+      speech.cancel()
       if (myGen !== currentGen || abort.signal.aborted) return
       const msg = err instanceof Error ? err.message : String(err)
       const errMsg: ChatMessage = {
@@ -221,9 +227,14 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     const settings = SettingsService.getInstance().get()
     if (!settings.voiceEnabled || !settings.autoSpeakResponses) return
 
+    // Fired for every step; only the one carrying a reason is actually waiting for approval.
     if (evt.type === 'step.authorizing') {
+      if (!evt.meta?.reason) return
       voice.setApprovalPending(true)
-      await voice.narrate("I need your permission before I do that. Want me to continue?")
+      const goal = typeof evt.meta.goal === 'string' ? evt.meta.goal.replace(/[.!?\s]+$/, '') : ''
+      await voice.narrate(goal
+        ? `Before I go on, I need your OK for this step: ${goal}. Want me to go ahead?`
+        : 'I need your OK before the next step. Want me to go ahead?')
       return
     }
     if (evt.type === 'step.approved') { voice.setApprovalPending(false); return }

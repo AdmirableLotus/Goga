@@ -38,4 +38,20 @@ export interface ITtsProvider {
    * Providers without a separate process may resolve immediately.
    */
   stopAndWait?(): Promise<void>
+  /**
+   * Speak text that arrives piece by piece (a reply still being written), starting with
+   * the first piece. Ends when end() is called and everything pushed has been played.
+   */
+  speakStream?(rate: number, volume: number, voiceName: string): SpeechStream
+  /** Release long-lived helper processes when this provider is replaced or Goga quits. */
+  dispose?(): void
+}
+
+export interface SpeechStream {
+  /** Queue one sentence (or short group of sentences) to be spoken after the previous ones. */
+  push(text: string): void
+  /** No more text is coming. */
+  end(): void
+  /** Resolves when everything has been played, or the stream was stopped. */
+  readonly done: Promise<void>
 }

@@ -33,6 +33,51 @@ export const AGENT_TRIGGERS: RegExp[] = [
 
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
 
+// Agreement in everyday words: "yes please", "ok, go ahead", "sure do it", "go for it".
+const AGREE_WORDS = /^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|absolutely|definitely|of course|please|go ahead|go for it|do it|do that|proceed|let's do it|let's go|sounds good|perfect|great|start|carry on|continue)$/i
+
+/** True for a short reply that agrees to what Goga proposed. Anything longer is a new request. */
+export function isConfirmation(message: string): boolean {
+  const parts = message.toLowerCase().replace(/[.!]+$/, '').split(/\s*[,.!]\s*|\s+(?:and|then)\s+/).map(p => p.trim()).filter(Boolean)
+  if (parts.length === 0 || parts.length > 3 || message.length > 40) return false
+  return parts.every(part => AGREE_WORDS.test(part) || /^(yes|yeah|sure|ok|okay) (please|go ahead|do it)$/i.test(part))
+}
+
+/**
+ * "Yes, please do that. And also make a list of parts" — agreement first, maybe with more
+ * to add. A hedge in the first sentence ("yes, but first…", "ok wait") is not agreement.
+ */
+export function startsWithAgreement(message: string): boolean {
+  const first = message.trim().split(/[.!?\n]/)[0] ?? ''
+  if (!/^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|absolutely|definitely|of course|go ahead|go for it|sounds good|let's do it|please do)\b/i.test(first)) return false
+  return !/\b(but|wait|first|before|instead|not|don'?t|later|hold on|no)\b/i.test(first)
+}
+
+const WRITING_WORDS = /\b(draft|write|rewrite|summari[sz]e|organi[sz]e|outline|make a list|list (of|what|everything)|explain|brainstorm|prepare|compare|proofread|translate|executive summary|section|proposal|pitch|essay|letter|email|report)\b/i
+const PC_OBJECTS = /\b(files?|folders?|\.txt|notepad|save|desktop|downloads|documents folder|browser|website|open|click|terminal)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i
+
+/**
+ * Writing, organising and advice ("draft the summary and list what to buy to build it")
+ * are answered in chat. Without this, a word like "build" sent them to the PC planner.
+ */
+export function isWritingRequest(message: string): boolean {
+  return WRITING_WORDS.test(message) && !PC_OBJECTS.test(message)
+}
+
+/** Pasted documents and long write-ups are material to discuss, not commands for the PC. */
+export const LONG_MESSAGE_CHARS = 2000
+
+/** Whether an agreed plan means operating the PC, rather than writing or advising in chat. */
+export function planNeedsComputer(plan: string): boolean {
+  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program))\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
+}
+
+/** Goga's reply described something it would do on the PC and asked for the go-ahead. */
+export function isActionProposal(reply: string | undefined): boolean {
+  if (!reply) return false
+  return /\b(want me to|shall i|should i|would you like me to|do you want me to)\b[^?]{0,80}\?/i.test(reply)
+}
+
 /** A bounded observation route, separate from the general action planner. */
 export function isReadOnlyObservationRequest(message: string): boolean {
   // Normalize only the routing view; callers retain the original request text.
@@ -51,7 +96,9 @@ export function isReadOnlyObservationRequest(message: string): boolean {
 const CONVERSATIONAL_PREFIX = /^\s*(explain|how (do|does|to|can|would|should)|what (is|are|was|were|does|would)|why (is|does|would)|when (is|does|would)|tell me (about|how|what|why)|what'?s the best|should i|can you explain|could you explain)/i
 
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
+  if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false
+  if (isWritingRequest(message)) return false
   if (AGENT_TRIGGERS.some(r => r.test(message))) return true
   if (CONFIRM_TRIGGERS.test(message.trim()) && lastAssistantMsg) {
     return /\b(search|look|find|open|navigate|run|execute|install|shall i|want me|would you like|should i|can i)\b/i.test(lastAssistantMsg)

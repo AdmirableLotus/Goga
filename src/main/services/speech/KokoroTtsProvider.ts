@@ -24,7 +24,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { spawn, ChildProcess } from 'child_process'
-import type { ITtsProvider } from './ISpeechProvider'
+import type { ITtsProvider, SpeechStream } from './ISpeechProvider'
 import { LogService } from '../logs'
 import { MANIFEST_HASH } from '../modelManager'
 import { wavEnvelope } from './wavEnvelope'
@@ -92,6 +92,56 @@ env.cacheDir          = modelDir
 })
 `
 
+// Long-lived synthesis worker for streamed speech: loads the model once, then turns
+// JSON-line requests {id, gen, text, voice, speed, out} into WAV files, one at a time.
+// {skipBelow: n} drops queued requests from streams that were stopped. Exits when Goga
+// closes its stdin (including when Goga itself exits).
+const WORKER_SCRIPT = `
+const { KokoroTTS } = require('kokoro-js')
+const { env } = require('@huggingface/transformers')
+const readline = require('readline')
+const modelDir = process.argv[1]
+env.allowRemoteModels = false
+env.localModelPath    = modelDir
+env.cacheDir          = modelDir
+const ready = KokoroTTS.from_pretrained(modelDir, { dtype: 'q8', device: 'cpu' })
+ready.catch(() => {})
+const reply = r => process.stdout.write('@@' + JSON.stringify(r) + '\\n')
+let skipBelow = 0
+let chain = Promise.resolve()
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  let req
+  try { req = JSON.parse(line) } catch { return }
+  if (typeof req.skipBelow === 'number') { skipBelow = Math.max(skipBelow, req.skipBelow); return }
+  chain = chain.then(async () => {
+    if (req.gen < skipBelow) return reply({ id: req.id, ok: false, error: 'skipped' })
+    try {
+      const tts = await ready
+      const audio = await tts.generate(String(req.text), { voice: req.voice, speed: req.speed })
+      await audio.save(req.out)
+      reply({ id: req.id, ok: true })
+    } catch (e) {
+      reply({ id: req.id, ok: false, error: String((e && e.message) || e) })
+    }
+  })
+})
+process.stdin.on('end', () => chain.then(() => process.exit(0)))
+`
+
+// One player for a whole streamed reply, so sentences follow each other without a
+// PowerShell start-up gap. WAV paths (Goga's own temp files) arrive on stdin, one per line.
+const STREAM_PLAYER_SCRIPT = `
+$player = New-Object System.Media.SoundPlayer
+while ($null -ne ($wavPath = [Console]::In.ReadLine())) {
+  $player.SoundLocation = $wavPath
+  $player.Load()
+  [Console]::WriteLine('PLAYBACK_STARTED')
+  $player.PlaySync()
+  [Console]::WriteLine('DONE')
+}
+`
+const WORKER_SYNTH_TIMEOUT_MS = 45_000
+
 export class KokoroModelMissingError extends Error {
   readonly code = 'KOKORO_MODEL_MISSING'
   constructor(modelDir: string, reason: string) {
@@ -120,6 +170,13 @@ export class KokoroTtsProvider implements ITtsProvider {
   // entry and checks it before every async step. A new speak() increments the
   // counter, which causes any in-flight runSpeak() to treat itself as cancelled.
   private gen = 0
+
+  // Streamed speech: the warm synthesis worker, its open requests, and a way to wake a
+  // stream that is waiting for more text so it notices it was stopped.
+  private worker: ChildProcess | null = null
+  private workerRequests = new Map<number, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; worker: ChildProcess }>()
+  private nextWorkerRequest = 1
+  private wakeStream: (() => void) | null = null
 
   onPlaybackStart?: () => void
   onAmplitude?: (amp: number) => void
@@ -152,6 +209,7 @@ export class KokoroTtsProvider implements ITtsProvider {
     // Increment generation — any in-flight runSpeak() will see its gen is stale
     // and return early without starting new work.
     const myGen = ++this.gen
+    this.endStreams()
 
     // Kill the active process so the previous runSpeak() unblocks quickly.
     if (this.proc) {
@@ -203,6 +261,7 @@ export class KokoroTtsProvider implements ITtsProvider {
 
   stop(): void {
     this.gen++ // invalidate any in-flight runSpeak()
+    this.endStreams()
     if (this.proc) {
       try { this.proc.kill() } catch { }
       this.proc = null
@@ -213,6 +272,7 @@ export class KokoroTtsProvider implements ITtsProvider {
 
   async stopAndWait(): Promise<void> {
     this.gen++ // invalidate any in-flight runSpeak()
+    this.endStreams()
     // Kill this.proc directly — do not capture into a local variable first,
     // so a process spawned between the increment and the kill is also covered.
     if (this.proc) {
@@ -246,6 +306,209 @@ export class KokoroTtsProvider implements ITtsProvider {
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString() })
       child.on('error', reject)
       child.on('close', code => code === 0 ? resolve() : reject(new Error(`Kokoro synthesis failed: ${stderr.slice(0, 200)}`)))
+    })
+  }
+
+  /**
+   * Streamed speech for a reply that is still being written. Each pushed sentence goes to
+   * the warm worker at once and plays as soon as the one before it has finished.
+   * Stopping works as for speak(): stop(), stopAndWait() or a new speak() end the stream.
+   * `done` rejects only if nothing could be played, so the caller can fall back.
+   */
+  speakStream(rate: number, _volume: number, voiceName: string): SpeechStream {
+    const myGen = ++this.gen
+    this.endStreams()
+    if (this.proc) {
+      try { this.proc.kill() } catch { }
+    }
+
+    const voice = kokoroVoiceId(voiceName)
+    const items: { wav: string; ready: Promise<void> }[] = []
+    let ended = false
+    let wake: (() => void) | null = null
+    const notify = () => { const w = wake; wake = null; w?.() }
+    const stale = () => this.gen !== myGen
+    const previous = this.activeSpeak
+
+    const run = async (): Promise<void> => {
+      await previous.catch(() => {})
+      if (stale()) return
+      if (!this.isModelReady()) throw new KokoroModelMissingError(this.modelDir, 'model not installed')
+      this.wakeStream = notify
+      this.log.info('TTS:Kokoro: streamed speech started')
+
+      const player = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', STREAM_PLAYER_SCRIPT], { windowsHide: true })
+      player.stdin?.on('error', () => { })
+      player.on('error', () => { })
+      this.proc = player
+
+      let played = 0
+      let next = 0
+      try {
+        while (!stale()) {
+          if (next < items.length) {
+            const item = items[next++]
+            try {
+              await item.ready
+            } catch (err) {
+              if (stale()) break
+              // Nothing heard yet: let the caller say the whole reply another way.
+              if (played === 0) throw err
+              this.log.info(`TTS:Kokoro: skipped a sentence (${err instanceof Error ? err.message : String(err)})`)
+              continue
+            }
+            if (stale()) break
+            await this.playStreamClip(myGen, player, item.wav)
+            played++
+            continue
+          }
+          if (ended) break
+          await new Promise<void>(resolve => { wake = resolve })
+        }
+        this.log.info(`TTS:Kokoro: streamed speech ended (${played} part${played === 1 ? '' : 's'})`)
+      } finally {
+        if (this.wakeStream === notify) this.wakeStream = null
+        try { player.stdin?.end() } catch { }
+        try { player.kill() } catch { }
+        if (this.proc === player) this.proc = null
+        this.onAmplitude?.(0)
+        // A clip may still be synthesizing; delete each file once its worker request settles.
+        for (const item of items) void item.ready.catch(() => {}).then(() => this.cleanupWav(item.wav))
+      }
+    }
+
+    const done = run()
+    this.activeSpeak = done
+    return {
+      push: (text: string) => {
+        if (ended || stale() || !text.trim()) return
+        const wav = path.join(os.tmpdir(), `goga-kokoro-${crypto.randomUUID()}.wav`)
+        const ready = this.workerSynth(myGen, text.slice(0, 2000), voice, rate, wav)
+        ready.catch(() => { })   // handled by the play loop, or ignored once stopped
+        items.push({ wav, ready })
+        notify()
+      },
+      end: () => { ended = true; notify() },
+      done,
+    }
+  }
+
+  /** Start the synthesis worker ahead of the first reply, so the model is already loaded. */
+  warmUp(): void {
+    if (this.isModelReady()) this.ensureWorker()
+  }
+
+  /** Ends the warm worker. Called when Goga switches voice provider or quits. */
+  dispose(): void {
+    this.stop()
+    const w = this.worker
+    this.worker = null
+    try { w?.stdin?.end() } catch { }
+    try { w?.kill() } catch { }
+  }
+
+  /** Wake any waiting stream (so it sees it was stopped) and drop its queued sentences. */
+  private endStreams(): void {
+    this.wakeStream?.()
+    if (this.worker?.stdin?.writable) this.worker.stdin.write(JSON.stringify({ skipBelow: this.gen }) + '\n')
+  }
+
+  private ensureWorker(): ChildProcess {
+    if (this.worker && this.worker.exitCode === null) return this.worker
+    const w = spawn(process.execPath, ['-e', WORKER_SCRIPT, '--', this.modelDir], {
+      windowsHide: true,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    })
+    this.worker = w
+    let buf = ''
+    let stderr = ''
+    w.stdout?.on('data', (d: Buffer) => {
+      buf += d.toString()
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        if (!line.startsWith('@@')) continue   // the model runtime's own chatter
+        let r: { id?: number; ok?: boolean; error?: string }
+        try { r = JSON.parse(line.slice(2)) } catch { continue }
+        const req = this.workerRequests.get(r.id ?? -1)
+        if (!req) continue
+        this.workerRequests.delete(r.id!)
+        clearTimeout(req.timer)
+        if (r.ok) req.resolve()
+        else req.reject(new Error(`Kokoro synthesis failed: ${String(r.error).slice(0, 200)}`))
+      }
+    })
+    w.stderr?.on('data', (d: Buffer) => { stderr = (stderr + d.toString()).slice(-500) })
+    w.stdin?.on('error', () => { })
+    const failAll = (why: string) => {
+      if (this.worker === w) this.worker = null
+      for (const [id, req] of this.workerRequests) {
+        if (req.worker !== w) continue
+        this.workerRequests.delete(id)
+        clearTimeout(req.timer)
+        req.reject(new Error(why))
+      }
+    }
+    w.on('close', code => failAll(`Kokoro worker exited (code=${code}): ${stderr.slice(0, 200)}`))
+    w.on('error', err => failAll(`Kokoro worker failed: ${err.message}`))
+    return w
+  }
+
+  private workerSynth(gen: number, text: string, voice: string, speed: number, out: string): Promise<void> {
+    const worker = this.ensureWorker()
+    const id = this.nextWorkerRequest++
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.workerRequests.delete(id)
+        reject(new Error('Kokoro synthesis timeout'))
+      }, WORKER_SYNTH_TIMEOUT_MS)
+      this.workerRequests.set(id, { resolve, reject, timer, worker })
+      worker.stdin?.write(JSON.stringify({ id, gen, text, voice, speed, out }) + '\n')
+    })
+  }
+
+  /** Play one streamed clip on the stream's player; resolves when it ends or is stopped. */
+  private playStreamClip(myGen: number, player: ChildProcess, wavPath: string): Promise<void> {
+    return new Promise(resolve => {
+      if (player.exitCode !== null || player.signalCode !== null) { resolve(); return }
+      let envelope: number[] = []
+      try { envelope = wavEnvelope(fs.readFileSync(wavPath), AMPLITUDE_WINDOW_MS) } catch { /* gentle pulse instead */ }
+
+      let ampInterval: ReturnType<typeof setInterval> | null = null
+      let buf = ''
+      const finish = () => {
+        if (ampInterval) { clearInterval(ampInterval); ampInterval = null }
+        clearTimeout(ceiling)
+        player.stdout?.off('data', onData)
+        player.off('close', finish)
+        resolve()
+      }
+      const onData = (d: Buffer) => {
+        buf += d.toString()
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          const msg = line.trim()
+          if (msg === 'PLAYBACK_STARTED') {
+            this.onPlaybackStart?.()
+            const startedAt = Date.now()
+            let tick = 0
+            ampInterval = setInterval(() => {
+              if (this.gen !== myGen) return
+              if (envelope.length === 0) { this.onAmplitude?.(Math.sin(tick++ * 0.3) * 0.3 + 0.35); return }
+              const i = Math.floor((Date.now() - startedAt) / AMPLITUDE_WINDOW_MS)
+              this.onAmplitude?.(envelope[Math.min(i, envelope.length - 1)] ?? 0)
+            }, AMPLITUDE_WINDOW_MS)
+          } else if (msg === 'DONE') {
+            finish()
+          }
+        }
+      }
+      // Safety ceiling for one sentence.
+      const ceiling = setTimeout(finish, 120_000)
+      player.stdout?.on('data', onData)
+      player.once('close', finish)
+      player.stdin?.write(wavPath + '\n')
     })
   }
 

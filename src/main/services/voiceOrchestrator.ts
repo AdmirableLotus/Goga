@@ -24,7 +24,9 @@ import type { WhisperModel, WhisperDevice } from './speech/WhisperSttProvider'
 import { ElevenLabsTtsProvider } from './speech/ElevenLabsTtsProvider'
 import { ElevenLabsSttProvider } from './speech/ElevenLabsSttProvider'
 import { KokoroTtsProvider, KokoroModelMissingError } from './speech/KokoroTtsProvider'
-import type { ISttProvider, ITtsProvider } from './speech/ISpeechProvider'
+import type { ISttProvider, ITtsProvider, SpeechStream } from './speech/ISpeechProvider'
+import { SentenceBuffer } from './speech/sentenceBuffer'
+import { isConfirmation } from './agentRouting'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
 
@@ -40,6 +42,16 @@ export type VoiceStatus =
 const APPROVE_WORDS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|affirmative|absolutely|correct|right)[.!]?$/i
 const REJECT_WORDS  = /^(no|nope|don'?t|cancel|stop|reject|abort|never)[.!]?$/i
 const STOP_WORDS    = /^(stop|halt|cancel|abort|quit)[.!]?$/i
+
+// Longest reply Goga reads aloud; the full text is always shown in the chat.
+const MAX_SPOKEN_REPLY_CHARS = 450
+
+/** A reply being spoken while it is written; see VoiceOrchestrator.speakReply(). */
+export interface ReplySpeech {
+  push(chunk: string): void
+  finish(fullReply: string): Promise<void>
+  cancel(): void
+}
 
 // How long a TTS phrase stays in the suppression window after speaking ends (ms)
 const TTS_SUPPRESS_GRACE_MS = 1500
@@ -101,6 +113,7 @@ export class VoiceOrchestrator extends EventEmitter {
   private initTtsProvider() {
     const settings = SettingsService.getInstance().get()
     const want = settings.ttsProvider ?? 'sapi'
+    try { this.tts?.dispose?.() } catch { }
     this.fallbackTts = new WindowsTtsProvider()
 
     if (want === 'elevenlabs') {
@@ -119,7 +132,9 @@ export class VoiceOrchestrator extends EventEmitter {
       // the orchestrator catches that and falls back to SAPI.
       let userDataPath = ''
       try { userDataPath = app.getPath('userData') } catch { }
-      this.tts = new KokoroTtsProvider(userDataPath)
+      const kokoro = new KokoroTtsProvider(userDataPath)
+      kokoro.warmUp?.()
+      this.tts = kokoro
       this.log.info('VoiceOrchestrator: TTS provider → Kokoro (local)')
     } else {
       // Unknown value — safe fallback
@@ -547,7 +562,7 @@ export class VoiceOrchestrator extends EventEmitter {
 
     // Approval detection — ONLY when approval is actually pending
     if (this.approvalPending) {
-      if (APPROVE_WORDS.test(text.trim())) {
+      if (APPROVE_WORDS.test(text.trim()) || isConfirmation(text.trim())) {
         this.emit('voice:approve', true)
         this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
         return
@@ -660,7 +675,108 @@ export class VoiceOrchestrator extends EventEmitter {
     }
   }
 
+  private replySpeechSeq = 0
+
+  /**
+   * Speak a reply while the brain is still writing it: each finished sentence is spoken
+   * straight away. push() takes streamed text; finish() takes the final reply, which is
+   * spoken whole if nothing was streamed (tasks, cached answers). cancel() goes quiet.
+   * Voices that cannot stream (Windows, ElevenLabs) speak the reply once it is complete.
+   */
+  speakReply(): ReplySpeech {
+    const settings = SettingsService.getInstance().get()
+    if (!settings.voiceEnabled || !settings.autoSpeakResponses) {
+      return { push: () => { }, finish: async () => { }, cancel: () => { } }
+    }
+    const provider = this.tts
+    if (!provider.speakStream) {
+      return { push: () => { }, finish: full => this.speak(full), cancel: () => { } }
+    }
+
+    const mySeq = ++this.replySpeechSeq
+    const sentences = new SentenceBuffer()
+    let stream: SpeechStream | null = null
+    let streamed = false        // any text arrived from the brain
+    let spoken = ''             // what was handed to the voice, for echo suppression
+    let closed = false
+    let playbackStarted = false
+    const wpm = 130 * (settings.voiceRate ?? 1.0)
+
+    const say = (sentence: string) => {
+      const clean = this.cleanForSpeech(sentence)
+      if (!clean || spoken.length >= MAX_SPOKEN_REPLY_CHARS) return
+      if (!stream) {
+        provider.onAmplitude = (v: number) => { this.emit('amplitude', v) }
+        provider.onPlaybackStart = () => {
+          playbackStarted = true
+          this.setStatus('speaking')
+          if (this.conversationActive) this.resetConversationTimer()
+        }
+        stream = provider.speakStream!(settings.voiceRate, settings.voiceVolume, settings.voiceName)
+        this.log.info('VoiceOrchestrator: streamed reply started')
+      }
+      spoken = spoken ? `${spoken} ${clean}` : clean
+      this.markTtsSpeaking(spoken, (spoken.split(/\s+/).length / wpm) * 60000)
+      stream.push(clean)
+    }
+
+    const settle = async (fullReply?: string) => {
+      const s = stream as SpeechStream | null
+      if (!s) return
+      try {
+        await s.done
+      } catch (err) {
+        // Nothing was heard: say the whole reply with the Windows voice instead.
+        // (A stopped stream resolves quietly, so this is a real failure, not the user's Stop.)
+        const whole = fullReply === undefined ? '' : this.cleanForSpeech(fullReply)
+        if (whole && !playbackStarted && mySeq === this.replySpeechSeq) {
+          this.log.info(`VoiceOrchestrator: streamed reply failed (${err instanceof Error ? err.message : String(err)}), falling back to SAPI`)
+          try {
+            this.setStatus('speaking')
+            await this.withTimeout(
+              this.fallbackTts.speak(whole, settings.voiceRate, settings.voiceVolume, settings.voiceName),
+              VoiceOrchestrator.SAPI_TIMEOUT_MS, 'SAPI fallback')
+          } catch { this.log.info('VoiceOrchestrator: SAPI fallback also failed') }
+        }
+      } finally {
+        if (mySeq === this.replySpeechSeq) {
+          provider.onAmplitude = undefined
+          provider.onPlaybackStart = undefined
+          this.emit('amplitude', 0)
+          this.clearTtsSuppression()
+          this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+          this.log.info('VoiceOrchestrator: speak completed, status → idle')
+        }
+      }
+    }
+
+    return {
+      push: chunk => {
+        if (closed || !chunk) return
+        streamed = true
+        for (const sentence of sentences.push(chunk)) say(sentence)
+      },
+      finish: async full => {
+        if (closed) return
+        closed = true
+        if (!streamed) for (const sentence of sentences.push(full)) say(sentence)
+        const rest = sentences.flush()
+        if (rest) say(rest)
+        ;(stream as SpeechStream | null)?.end()
+        await settle(full)
+      },
+      cancel: () => {
+        if (closed) return
+        closed = true
+        // Only silence the voice if a newer reply has not already taken it over.
+        if (stream && mySeq === this.replySpeechSeq) provider.stop()
+        void settle()
+      },
+    }
+  }
+
   stopSpeaking() {
+    this.replySpeechSeq++   // a reply being streamed must not fall back or reset status later
     this.tts.stop()
     this.fallbackTts.stop()
     this.clearTtsSuppression()
@@ -797,6 +913,8 @@ export class VoiceOrchestrator extends EventEmitter {
   async shutdown(): Promise<void> {
     try { await this.tts.stopAndWait?.() } catch { }
     try { await this.fallbackTts.stopAndWait?.() } catch { }
+    try { this.tts.dispose?.() } catch { }
+    try { this.deviceKokoro?.dispose() } catch { }
     try { this.deviceWhisper?.dispose() } catch { }
     try {
       if ('dispose' in this.stt && typeof (this.stt as { dispose?: () => void }).dispose === 'function') {
