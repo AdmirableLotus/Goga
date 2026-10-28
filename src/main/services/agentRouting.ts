@@ -28,6 +28,8 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(run|execute|install|build|compile)\b/i,
   /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i,
   /\bdo (this|that|it)\b/i,
+  // Working in the user's Flux (circuit-board design) projects
+  /\b(in|on|with|using|from|to) (flux|kicad)\b|\bflux (project|board|schematic|design)s?\b|\b(build|make|create) (the |a |an )?(circuit|schematic|netlist)\b/i,
   /\b(what is|what are|how (do|does|to)|tell me about|explain|show me).{0,60}\b(hackerone|bugcrowd|intigriti|synack|bounty|cve|exploit|payload|xss|sqli|rce|ssrf|lfi|idor)\b/i,
 ]
 
@@ -54,7 +56,7 @@ export function startsWithAgreement(message: string): boolean {
 }
 
 const WRITING_WORDS = /\b(draft|write|rewrite|summari[sz]e|organi[sz]e|outline|make a list|list (of|what|everything)|explain|brainstorm|prepare|compare|proofread|translate|executive summary|section|proposal|pitch|essay|letter|email|report)\b/i
-const PC_OBJECTS = /\b(files?|folders?|\.txt|notepad|save|desktop|downloads|documents folder|browser|website|open|click|terminal)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i
+const PC_OBJECTS = /\b(files?|folders?|\.txt|notepad|save|desktop|downloads|documents folder|browser|website|open|click|terminal|flux)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i
 
 /**
  * Writing, organising and advice ("draft the summary and list what to buy to build it")
@@ -69,7 +71,7 @@ export const LONG_MESSAGE_CHARS = 2000
 
 /** Whether an agreed plan means operating the PC, rather than writing or advising in chat. */
 export function planNeedsComputer(plan: string): boolean {
-  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program))\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
+  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program)|kicad|netlist|schematic|pcb|circuit board|flux)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
 }
 
 /** Goga's reply described something it would do on the PC and asked for the go-ahead. */

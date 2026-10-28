@@ -9,5 +9,6 @@ import './browser'
 import './vision'
 import './clock'
 import './notepadSave'
+import './electronics'
 
 export { ToolRegistry } from './registry'

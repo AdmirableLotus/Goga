@@ -12,6 +12,7 @@ export default function SettingsPage() {
   const [brainModels, setBrainModels] = useState<string[]>([])
   const [remote, setRemote] = useState<Awaited<ReturnType<typeof window.goga.invoke<'remote:status'>>> | null>(null)
   const [pairCode, setPairCode] = useState<string | null>(null)
+  const [flux, setFlux] = useState<Awaited<ReturnType<typeof window.goga.invoke<'flux:status'>>> | null>(null)
   const [brainStatus, setBrainStatus] = useState<Awaited<ReturnType<typeof window.goga.invoke<'localModel:status'>>> | null>(null)
 
   // Kokoro install state
@@ -30,6 +31,7 @@ export default function SettingsPage() {
     window.goga.invoke('localModel:list').then(setBrainModels).catch(() => {})
     checkBrain()
     checkRemote()
+    window.goga.invoke('flux:status').then(setFlux).catch(() => {})
     // Cleanup: remove progress listener if Settings unmounts mid-download
     return () => { unsubRef.current?.() }
   }, [])
@@ -307,6 +309,24 @@ export default function SettingsPage() {
             </Field>
           </>
         )}
+
+        <Section label="Flux (circuit-board design)" />
+        <Field label="Flux account">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: flux?.connected ? 'var(--success)' : flux?.error ? 'var(--danger)' : 'var(--text-muted)' }}>
+              {flux === null ? 'Checking…'
+                : flux.connected ? `Connected — ${flux.tools.length} Flux tools`
+                : flux.signingIn ? 'Finish signing in to Flux in your browser…'
+                : flux.error ? `Not connected — ${flux.error}` : 'Not connected'}
+            </span>
+            {flux?.connected
+              ? <button onClick={async () => setFlux(await window.goga.invoke('flux:disconnect'))} style={styles.smallBtn}>Disconnect</button>
+              : <button disabled={flux?.signingIn} onClick={async () => {
+                  setFlux(f => f && { ...f, signingIn: true, error: null })
+                  setFlux(await window.goga.invoke('flux:connect'))
+                }} style={styles.smallBtn}>Connect Flux</button>}
+          </div>
+        </Field>
 
         <Section label="Voice & Speech" />
         <Field label="TTS provider">

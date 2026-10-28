@@ -44,7 +44,7 @@ export async function shellExecute(command: string, cwd?: string, timeoutMs = 30
 
 reg.register({
   name: 'shell.execute',
-  description: 'Run a PowerShell command and return stdout, stderr and exit code. Use for reading system info, running scripts, git commands, npm, etc. Requires approval for destructive commands.',
+  description: 'Run a PowerShell command and return stdout, stderr and exit code. Use for reading system info, running scripts, git commands, npm, etc. The user is asked to approve every command.',
   parameters: {
     type: 'object',
     properties: {
@@ -54,7 +54,7 @@ reg.register({
     },
     required: ['command']
   },
-  riskLevel: 'medium', reversible: true, category: 'shell'
+  riskLevel: 'medium', reversible: false, category: 'shell'
 }, async (p) => {
   const result = await shellExecute(
     p.command as string,

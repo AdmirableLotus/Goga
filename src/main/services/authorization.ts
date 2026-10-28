@@ -50,6 +50,8 @@ const ALWAYS_AUTO: Set<string> = new Set([
 const ALWAYS_APPROVAL: Set<string> = new Set([
   'filesystem.delete',
   'process.kill',
+  // A shell command can do anything, deleting included: the user agrees to each one.
+  'shell.execute',
 ])
 
 
