@@ -68,6 +68,7 @@ export class AuthorizationService {
     const security = SecurityWorkspaceService.getInstance()
     if (ctx.mode === 'security-research' || security.getActive()) {
       const decision = security.evaluateAction(tool.name, params, ctx.securityWorkspaceId)
+      if (decision.allowed && decision.approval === false) return { allowed: true, requiresApproval: false, reason: decision.reason }
       return { allowed: decision.allowed, requiresApproval: decision.allowed, reason: decision.allowed ? 'Security testing always requires fresh explicit approval' : decision.reason }
     }
     const settings = SettingsService.getInstance().get()

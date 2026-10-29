@@ -11,5 +11,7 @@ import './clock'
 import './notepadSave'
 import './electronics'
 import './microcontroller'
+import './trading'
+import './securityCode'
 
 export { ToolRegistry } from './registry'

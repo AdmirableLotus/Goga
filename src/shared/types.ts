@@ -415,6 +415,7 @@ export interface SecurityAuditEntry {
 }
 
 export interface SecurityWorkspace {
+  policyReview?: import('./securityGuide').PolicyReview
   hackerOne?: {
     handle: string
     importedAt: number

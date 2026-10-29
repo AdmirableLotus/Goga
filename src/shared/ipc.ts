@@ -118,6 +118,11 @@ export interface MainHandlers {
   }>
 
   // Security workspace
+  'security:research': (url: string) => Promise<import('./securityGuide').ResearchSource>
+  'security:searchResearch': (query: string, kind: 'programs' | 'disclosures') => Promise<Array<{ title: string; url: string; retrievedAt: string }>>
+  'security:inventory': () => Promise<import('./securityGuide').ToolInventoryEntry[]>
+  'security:refreshPolicy': (id: string) => Promise<SecurityWorkspace>
+  'security:reviewPolicy': (id: string, fingerprint: string, answers: string[]) => Promise<SecurityWorkspace>
   'security:h1Status': () => Promise<{ configured: boolean; encryptionAvailable: boolean }>
   'security:h1SaveCredentials': (username: string, token: string) => Promise<{ configured: true }>
   'security:h1ClearCredentials': () => Promise<void>

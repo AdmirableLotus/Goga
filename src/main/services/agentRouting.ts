@@ -23,6 +23,7 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(find|search for|look up|research)\b/i,
   /\b(organize|sort|move|rename|delete)\b.{0,30}\b(files?|folders?)\b/i,
   /\b(fix|debug|edit|update|modify)\b.{0,40}\b(code|file|project)\b/i,
+  /\b(review|audit|read|go through|look through)\b.{0,40}\b(code|repo|repository|source|scripts?)\b/i,
   /\b(help|assist).{0,30}\b(bounty|bug\s*bounty|pentest|hack|ctf|exploit|vuln|recon|security)\b/i,
   /\b(help me with|work on|complete|finish|do)\b.{0,60}\b(task|project|bounty|workflow)\b/i,
   /\b(run|execute|install|build|compile)\b/i,
@@ -30,6 +31,11 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\bdo (this|that|it)\b/i,
   // Working in the user's Flux (circuit-board design) projects
   /\b(in|on|with|using|from|to) (flux|kicad|schematik)\b|\b(flux|schematik) (project|board|schematic|design)s?\b|\b(build|make|create) (the |a |an )?(circuit|schematic|netlist)\b/i,
+  // Trading with real data: prices, charts, backtests and the practice account
+  /\b(backtest\w*|paper (account|trad\w+)|practice (account|trad\w+)|my (portfolio|positions|trading journal|trades))\b/i,
+  /\b(buy|sell)\b.{0,30}\b(shares?|stocks?|crypto|bitcoin|btc|eth|ethereum|coins?|eur\/?usd|gbp\/?usd|usd\/?jpy|forex)\b/i,
+  /\b(price|quote|chart|analy[sz]e|technical analysis|news)\b.{0,30}\b(stocks?|crypto|bitcoin|btc|eth|ethereum|solana|forex|eur\/?usd|gbp\/?usd|usd\/?jpy|spy|qqq|aapl|tsla|nvda|msft|amzn|[a-z]{2,5}\/usd)\b/i,
+  /\b(bitcoin|btc|ethereum|eth|solana|the stock market|eur\/?usd)\b.{0,20}\b(price|doing|today|now|chart)\b/i,
   /\bschematik\.io\b|\b(upload|flash)\b.{0,40}\b(arduino|esp32|pico|board|sketch)\b|\b(make|create|build)\b.{0,30}\b(arduino|esp32|pico|microcontroller) project\b/i,
   /\b(what is|what are|how (do|does|to)|tell me about|explain|show me).{0,60}\b(hackerone|bugcrowd|intigriti|synack|bounty|cve|exploit|payload|xss|sqli|rce|ssrf|lfi|idor)\b/i,
 ]
@@ -72,7 +78,7 @@ export const LONG_MESSAGE_CHARS = 2000
 
 /** Whether an agreed plan means operating the PC, rather than writing or advising in chat. */
 export function planNeedsComputer(plan: string): boolean {
-  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program)|kicad|netlist|schematic|pcb|circuit board|flux|schematik|arduino|esp32|sketch|upload)\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
+  return /\b(open|click|browser|website|web ?page|log ?in|sign ?in|navigate|go to|download|install|launch|folder|file explorer|desktop|notepad|screenshot|type (it|into)|search (the web|online|google)|run (a |the )?(command|script|program)|save (it|this|that|the \w+|them) (to|as|in)|close (the )?(app|window|program)|kicad|netlist|schematic|pcb|circuit board|flux|schematik|arduino|esp32|sketch|upload|backtest|paper trade|practice trade|practice account|live price|real price|place (the|a|an) (order|trade))\b|\b[a-z0-9-]+\.(com|org|net|io|gov|edu)\b/i.test(plan)
 }
 
 /** Goga's reply described something it would do on the PC and asked for the go-ahead. */
@@ -100,14 +106,30 @@ const HARDWARE_TASK = /\b(flux|schematik|kicad|arduino|esp32|pico|microcontrolle
 const HARDWARE_TOOLS = /^(electronics\.|microcontroller\.|schematik\.)/
 // Hardware work goes through Flux, the part libraries, the board tools and the web, not by
 // driving the screen. Offering only these keeps the planner's prompt inside the brain's context.
-const HARDWARE_SIDE_TOOLS = /^(web\.(search|fetch)$|memory\.|notepad\.saveText$|filesystem\.(read|write|list)$|browser\.openExternal$|clock\.now$)/
+// Looking at the user's own open window stays possible ("find it on my Alpaca tab").
+const HARDWARE_SIDE_TOOLS = /^(web\.(search|fetch)$|memory\.|notepad\.saveText$|filesystem\.(read|write|list)$|browser\.openExternal$|clock\.now$|vision\.analyze$|computer\.(windowList|focus\.window)$)/
 const FLUX_RARELY_NEEDED = /^flux\.(send_feedback|review_knowledge|list_organization_memberships|get_assets)$/
 
-/** The tools the planner sees for a task: hardware tasks get a focused set, other tasks none of it. */
-export function plannerOffers(task: string): (name: string) => boolean {
-  if (!HARDWARE_TASK.test(task)) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name)
+export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bitcoin|btc|eth|ethereum|solana|forex|currency pair|portfolio|backtest\w*|rsi|macd|candlesticks?|paper (account|trad\w+)|practice (account|trad\w+)|eur\/?usd|gbp\/?usd|usd\/?jpy|[a-z]{2,5}\/usd)\b/i
+
+/**
+ * The tools the planner sees for a task. Hardware and trading tasks get a focused set (their
+ * own tools plus web, memory and notes); other tasks get everything but those.
+ */
+// In a security workspace only these can run; showing the rest just invites blocked steps.
+const SECURITY_TOOLS = /^(security\.code\.|web\.fetch$)/
+
+export function plannerOffers(task: string, security = false): (name: string) => boolean {
+  if (security) return name => SECURITY_TOOLS.test(name)
+  const hardware = HARDWARE_TASK.test(task), trading = TRADING_TASK.test(task)
+  if (!hardware && !trading) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.') && !name.startsWith('security.')
   const flux = FLUX_TASK.test(task)
-  return name => name.startsWith('flux.') ? flux && !FLUX_RARELY_NEEDED.test(name) : HARDWARE_TOOLS.test(name) || HARDWARE_SIDE_TOOLS.test(name)
+  return name => {
+    if (name.startsWith('flux.')) return flux && !FLUX_RARELY_NEEDED.test(name)
+    if (name.startsWith('trading.')) return trading
+    if (name.startsWith('security.')) return false
+    return (hardware && HARDWARE_TOOLS.test(name)) || HARDWARE_SIDE_TOOLS.test(name)
+  }
 }
 
 // Phrases that open a question or request an explanation — these stay on the

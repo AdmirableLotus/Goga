@@ -11,7 +11,7 @@ vi.mock('electron', () => ({ app: { getPath: () => boundary.dir }, safeStorage: 
 } }))
 vi.mock('../logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
 vi.mock('../settings', () => ({ SettingsService: { getInstance: () => ({ get: () => boundary.settings }) } }))
-import { HackerOneService } from '../hackerOne'
+import { HackerOneService, programHandle } from '../hackerOne'
 import { SecurityWorkspaceService } from '../securityWorkspace'
 import { AuthorizationService } from '../authorization'
 import { ToolRegistry } from '../../tools/registry'
@@ -34,15 +34,39 @@ function mockApi() {
 }
 beforeEach(() => { boundary.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-h1-')); boundary.encryption = true; vi.stubGlobal('fetch', mockApi()) })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); fs.rmSync(boundary.dir, { recursive: true, force: true }) })
-async function workspace() {
+async function workspace(reviewed = true) {
   const h1 = new HackerOneService(); h1.saveCredentials('tester', token)
   const security = new SecurityWorkspaceService()
   const ws = security.create(await h1.importProgram('example_team'), true)
   security.setActive(ws.id)
+  if (reviewed) {
+    security.refreshPolicy(ws.id, await h1.importProgram('example_team'))
+    security.reviewPolicy(ws.id, ws.policyReview!.fingerprint, Array(7).fill('Reviewed fixture policy; no automation allowed'))
+  }
   return { h1, security, ws }
 }
 
 describe('encrypted HackerOne importer', () => {
+  it('reads the program when HackerOne returns it at the top level, as the hacker API does', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: URL) => {
+      if (url.pathname.endsWith('/structured_scopes')) return json({ data: scopes, links: { next: null } })
+      if (url.pathname.endsWith('/scope_exclusions')) return json({ data: [] })
+      return json({ id: 9, type: 'program', attributes: { name: 'Omarchy', policy: 'Test only listed assets', submission_state: 'open' } })
+    }))
+    const h1 = new HackerOneService(); h1.saveCredentials('tester', token)
+    expect(await h1.importProgram('omarchy')).toMatchObject({ program: 'Omarchy', authorizedAssets: ['*.example.test'] })
+  })
+
+  it('takes the handle from a pasted program address or a handle with ?type=team', () => {
+    expect(programHandle('omarchy')).toBe('omarchy')
+    expect(programHandle(' omarchy?type=team ')).toBe('omarchy')
+    expect(programHandle('https://hackerone.com/omarchy?type=team')).toBe('omarchy')
+    expect(programHandle('hackerone.com/omarchy/policy_scopes')).toBe('omarchy')
+    expect(programHandle('https://evil.example/omarchy')).toBeNull()
+    expect(programHandle('../omarchy')).toBeNull()
+    expect(programHandle('')).toBeNull()
+  })
+
   it('uses OS encryption and never returns a token in status', () => {
     const h1 = new HackerOneService(); h1.saveCredentials('tester', token)
     expect(fs.readFileSync(path.join(boundary.dir, 'goga-hackerone-credentials.bin')).toString()).not.toContain(token)
@@ -101,6 +125,26 @@ describe('encrypted HackerOne importer', () => {
 })
 
 describe('default-deny scope and per-action approval', () => {
+  it('requires a fresh review, detects changed policy and revokes existing approvals', async () => {
+    const { security, ws, h1 } = await workspace(false)
+    const params = { url: 'https://api.example.test/' }
+    expect(() => security.issueApproval(ws.id, 'web.fetch', params)).toThrow('review')
+    const imported = await h1.importProgram('example_team')
+    security.refreshPolicy(ws.id, imported)
+    expect(ws.policyReview?.changed).toBe(false)
+    expect(() => security.reviewPolicy(ws.id, 'stale', Array(7).fill('reviewed'))).toThrow('Refresh')
+    expect(() => security.reviewPolicy(ws.id, ws.policyReview!.fingerprint, ['incomplete'])).toThrow('every')
+    security.reviewPolicy(ws.id, ws.policyReview!.fingerprint, Array(7).fill('reviewed'))
+    const ticket = security.issueApproval(ws.id, 'web.fetch', params)
+    security.refreshPolicy(ws.id, { ...imported, programRules: 'Changed: automation prohibited' })
+    expect(ws.policyReview?.changed).toBe(true)
+    expect(security.enforceDispatch('web.fetch', params, ws.id, ticket)).not.toBeNull()
+    security.reviewPolicy(ws.id, ws.policyReview!.fingerprint, Array(7).fill('reviewed changed policy'))
+    ws.policyReview!.refreshedAt = Date.now() - 86_400_001
+    expect(() => security.issueApproval(ws.id, 'web.fetch', params)).toThrow('review')
+    security.beginPolicyRefresh(ws.id)
+    expect(ws.policyReview).toBeUndefined()
+  })
   it('denies missing, outside, wildcard-apex and explicitly ineligible targets', async () => {
     const { security, ws } = await workspace()
     expect(security.checkScope(ws.id, 'https://api.example.test/').inScope).toBe(true)

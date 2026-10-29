@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import type { SecurityWorkspace, SecurityFinding, EvidenceEntry } from '@shared/types'
+import SecurityGuide from '../components/SecurityGuide'
 
 const SEV_COLOR: Record<string, string> = {
   info: 'var(--text-muted)', low: 'var(--success)',
@@ -194,6 +195,7 @@ export default function SecurityPage() {
 
       {/* Main content */}
       <div style={styles.main}>
+        <SecurityGuide workspace={selected} onSelectProgram={setH1Handle} onUpdate={ws => { setSelected(ws); setWorkspaces(all => all.map(w => w.id === ws.id ? ws : w)) }} />
         <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>HackerOne · read-only program import</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 8 }}>Imports policy and assets HackerOne marks eligible for submission. Goga will not submit reports or start testing from this panel.</div>

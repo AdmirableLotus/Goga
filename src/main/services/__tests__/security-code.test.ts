@@ -1,0 +1,109 @@
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+
+const boundary = vi.hoisted(() => ({ dir: '' }))
+vi.mock('electron', () => ({ app: { getPath: () => boundary.dir }, safeStorage: {
+  isEncryptionAvailable: () => true,
+  encryptString: (s: string) => Buffer.from('sealed:' + Buffer.from(s).toString('base64')),
+  decryptString: (b: Buffer) => Buffer.from(b.toString().slice(7), 'base64').toString(),
+} }))
+vi.mock('../logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
+vi.mock('../settings', () => ({ SettingsService: { getInstance: () => ({ get: () => ({ autoApproveBelow: 'critical', requireApprovalForAll: false }) }) } }))
+import { HackerOneService } from '../hackerOne'
+import { SecurityWorkspaceService } from '../securityWorkspace'
+import { AuthorizationService } from '../authorization'
+import { SecurityCodeService, githubRepo, insideRepo, repoFolder } from '../securityCode'
+import { plannerOffers } from '../agentRouting'
+
+const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
+const scopes = [
+  { id: '1', attributes: { asset_type: 'SOURCE_CODE', asset_identifier: 'https://github.com/omacom/omarchy', eligible_for_submission: true } },
+  { id: '2', attributes: { asset_type: 'SOURCE_CODE', asset_identifier: 'https://github.com/omacom/old', eligible_for_submission: false } },
+]
+beforeEach(() => {
+  boundary.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-code-'))
+  vi.stubGlobal('fetch', vi.fn(async (url: URL) => {
+    if (url.pathname.endsWith('/structured_scopes')) return json({ data: scopes, links: { next: null } })
+    if (url.pathname.endsWith('/scope_exclusions')) return json({ data: [] })
+    return json({ id: 9, type: 'program', attributes: { name: 'Omarchy', policy: 'Only the repository', submission_state: 'open' } })
+  }))
+})
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); fs.rmSync(boundary.dir, { recursive: true, force: true }) })
+
+async function workspace(reviewed = true) {
+  const h1 = new HackerOneService(); h1.saveCredentials('tester', 'fake-token')
+  const security = new SecurityWorkspaceService()
+  const ws = security.create(await h1.importProgram('omarchy'), true)
+  security.setActive(ws.id)
+  if (reviewed) {
+    security.refreshPolicy(ws.id, await h1.importProgram('omarchy'))
+    security.reviewPolicy(ws.id, ws.policyReview!.fingerprint, Array(7).fill('Reviewed: source code only'))
+  }
+  return { security, ws }
+}
+
+describe('repository addresses and paths', () => {
+  it('accepts only GitHub repository addresses', () => {
+    expect(githubRepo('https://github.com/omacom/omarchy')).toBe('https://github.com/omacom/omarchy')
+    expect(githubRepo('https://github.com/Omacom/Omarchy.git/')).toBe('https://github.com/omacom/omarchy')
+    for (const bad of ['http://github.com/omacom/omarchy', 'https://github.com/omacom/omarchy/tree/main', 'https://evil.test/omacom/omarchy', 'https://github.com/omacom/..', 'git@github.com:omacom/omarchy.git', 42]) expect(githubRepo(bad)).toBeNull()
+  })
+
+  it('keeps reads inside the copy and out of .git', () => {
+    const folder = path.join(boundary.dir, 'repo')
+    fs.mkdirSync(path.join(folder, '.git'), { recursive: true })
+    expect(insideRepo(folder, 'bin/omarchy-dns')).toBe(path.join(folder, 'bin', 'omarchy-dns'))
+    expect(insideRepo(folder, '/bin/x')).toBe(path.join(folder, 'bin', 'x'))
+    for (const bad of ['../secret', '..\\secret', 'bin/../../secret', '.git/config', path.join(boundary.dir, 'other')]) expect(insideRepo(folder, bad)).toBeNull()
+  })
+})
+
+describe('code review in a security workspace', () => {
+  it('fetching needs a reviewed policy and approval; reading the copy needs neither', async () => {
+    const unreviewed = await workspace(false)
+    expect(unreviewed.security.evaluateAction('security.code.fetch', {}, unreviewed.ws.id)).toMatchObject({ allowed: false, reason: expect.stringContaining('review') })
+
+    const { security, ws } = await workspace()
+    vi.spyOn(SecurityWorkspaceService, 'getInstance').mockReturnValue(security)
+    const auth = new AuthorizationService(), ctx = { mode: 'security-research' as const, securityWorkspaceId: ws.id }
+    expect(auth.evaluate({ name: 'security.code.fetch', riskLevel: 'high' } as any, {}, ctx)).toMatchObject({ allowed: true, requiresApproval: true })
+    expect(auth.evaluate({ name: 'security.code.read', riskLevel: 'low' } as any, { file: 'README.md' }, ctx)).toMatchObject({ allowed: true, requiresApproval: false })
+    expect(security.enforceDispatch('security.code.fetch', {}, ws.id)).toMatch(/approval/)
+    expect(security.enforceDispatch('security.code.search', { pattern: 'sudo' }, ws.id)).toBeNull()
+  })
+
+  it('refuses repositories that are not eligible source-code assets', async () => {
+    const { security, ws } = await workspace()
+    for (const repo of ['https://github.com/omacom/old', 'https://github.com/someone/else', 'https://github.com/omacom/omarchy/tree/main'])
+      expect(security.evaluateAction('security.code.read', { repo, file: 'x' }, ws.id).allowed).toBe(false)
+    expect(security.codeRepos(ws)).toEqual(['https://github.com/omacom/omarchy'])
+    // A source-code asset never makes requests to its host in scope.
+    expect(security.checkScope(ws.id, 'https://github.com/omacom/omarchy').inScope).toBe(false)
+  })
+
+  it('lists, searches and reads the copy, skipping binaries and symlinked escapes', async () => {
+    const { ws } = await workspace()
+    const root = path.join(boundary.dir, 'security-code'), repo = 'https://github.com/omacom/omarchy'
+    const folder = repoFolder(root, ws.id, repo)
+    fs.mkdirSync(path.join(folder, 'install/helpers'), { recursive: true })
+    fs.writeFileSync(path.join(folder, 'install/helpers/logging.sh'), 'touch "$LOG"\nchmod 666 "$LOG"\n')
+    fs.writeFileSync(path.join(folder, 'blob.bin'), Buffer.from([0, 1, 2, 0x63, 0x68, 0x6d, 0x6f, 0x64]))
+    const code = new SecurityCodeService(root)
+    expect(code.list(ws.id, repo)).toEqual(['blob.bin', 'install/'])
+    expect(code.search(ws.id, repo, 'chmod 6[0-9]{2}')).toEqual({ matches: ['install/helpers/logging.sh:2: chmod 666 "$LOG"'], truncated: false })
+    expect(code.search(ws.id, repo, 'chmod (', 'install').matches).toEqual([])
+    expect(code.read(ws.id, repo, 'install/helpers/logging.sh', 2, 1)).toEqual({ file: 'install/helpers/logging.sh', lines: '2: chmod 666 "$LOG"', totalLines: 3 })
+    expect(() => code.read(ws.id, repo, '../../goga-security-workspaces.json')).toThrow('Not a file')
+    expect(() => code.read(ws.id, repo, 'blob.bin')).toThrow('binary')
+    expect(() => new SecurityCodeService(root).list('other', repo)).toThrow('Fetch it first')
+  })
+
+  it('shows the planner only the security tools while a workspace is active', () => {
+    const offered = plannerOffers('review the omarchy code', true)
+    expect(['security.code.fetch', 'security.code.read', 'web.fetch'].every(offered)).toBe(true)
+    expect(['shell.execute', 'browser.navigate', 'computer.click'].some(offered)).toBe(false)
+    expect(plannerOffers('review the omarchy code')('security.code.fetch')).toBe(false)
+  })
+})

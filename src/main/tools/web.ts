@@ -101,7 +101,7 @@ reg.register({
       i++
     }
 
-    return { success: true, data: results }
+    return { success: true, data: results.map(result => ({ ...result, retrievedAt: new Date().toISOString() })) }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   }
@@ -139,7 +139,7 @@ reg.register({
     } else html = await fetchUrl(p.url as string)
     const max = (p.maxChars as number | undefined) ?? 8000
     const content = p.raw ? html.slice(0, max) : readableText(html).slice(0, max)
-    return { success: true, data: { url: p.url, content, truncated: content.length >= max } }
+    return { success: true, data: { url: p.url, retrievedAt: new Date().toISOString(), content, truncated: content.length >= max } }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   }

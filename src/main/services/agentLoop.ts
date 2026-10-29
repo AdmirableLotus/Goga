@@ -1,7 +1,10 @@
 import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
-import { FLUX_TASK, plannerOffers } from './agentRouting'
+import { FLUX_TASK, TRADING_TASK, plannerOffers } from './agentRouting'
+
+const SECURITY_HINT = '- Security workspace: only security.code.* and web.fetch can run. For a source-code asset: security.code.fetch once (it needs approval), then security.code.search for risky patterns (sudo rules, chmod, eval, curl | sh, temp files, unquoted variables) and security.code.read to check each match. Never run, build or install the code. Report suspected bugs with file:line and why they matter; the user decides and submits.'
+const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before suggesting a trade, analyze it and give entry, stop (from ATR) and target. Practice trades only through trading.order, with a stop and the reason. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
 import { SECURITY_TASK } from './securityScope'
@@ -504,7 +507,8 @@ export class AgentLoop {
     const facts = await this.brain.findRelevantFacts(task, 6)
     // Flux's 20 tools and the hardware tools only earn their room in the prompt for hardware tasks.
     const fluxTask = FLUX_TASK.test(task)
-    const offered = plannerOffers(task)
+    const securityMode = !!SecurityWorkspaceService.getInstance().getActive()
+    const offered = plannerOffers(task, securityMode)
     const toolSchema = this.registry.toPromptSummary(offered)
 
     // The newest result gets room to be used in the answer; older ones stay short to fit the context window.
@@ -532,7 +536,8 @@ RULES:
 - "CHECK FAILED" means the tool ran but its effect did not happen. Treat it as a failure and try a different approach.
 - Only claim success in "reply" for what the step history shows actually worked. Never say a task is done when its key step failed.
 - To save text to a file, ALWAYS use notepad.saveText — never shell.execute or process.start for this purpose.
-${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}
+- For the user's own open browser tab ("my tab", "this page", a site they are signed in to), bring that window to the front with computer.focus.window, then use vision.analyze. Do not open a new browser for it: Goga's own browser is not signed in.
+${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}${TRADING_TASK.test(task) ? `${TRADING_HINT}\n` : ''}
 RESPONSE FORMAT (strict JSON):
 {"thought": "...", "tool": "tool.name", "params": {...}, "done": false}
 OR when complete:

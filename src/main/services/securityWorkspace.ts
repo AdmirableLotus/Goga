@@ -5,6 +5,9 @@ import type { SecurityWorkspace, SecurityFinding, EvidenceEntry, SecurityAuditEn
 import { nanoid } from '../utils/nanoid'
 import { LogService } from './logs'
 import { matchesSecurityAsset, securityActionTarget } from './securityScope'
+import { policyFingerprint } from './securityGuide'
+import { githubRepo } from './securityCode'
+import { POLICY_TOPICS } from '../../shared/securityGuide'
 
 interface WorkspaceStore {
   workspaces: SecurityWorkspace[]
@@ -66,6 +69,7 @@ export class SecurityWorkspaceService {
     if (data.hackerOne && !trustedImport) throw new Error('HackerOne scope must be imported through the official API')
     const ws: SecurityWorkspace = {
       ...data,
+      policyReview: undefined,
       id: nanoid(),
       findings: [],
       evidence: [],
@@ -130,13 +134,81 @@ export class SecurityWorkspaceService {
 
   invalidateApprovals() { this.approvalEpoch++ }
 
-  evaluateAction(tool: string, params: Record<string, unknown>, workspaceId?: string): { allowed: boolean; reason: string; target: string } {
+  beginPolicyRefresh(id: string) {
+    const ws = this.get(id)
+    if (!ws?.hackerOne) throw new Error('Imported workspace required')
+    this.invalidateApprovals()
+    ws.policyReview = undefined
+    this.save()
+  }
+
+  refreshPolicy(id: string, imported: Awaited<ReturnType<import('./hackerOne').HackerOneService['importProgram']>>): SecurityWorkspace {
+    const ws = this.get(id)
+    if (!ws?.hackerOne || ws.hackerOne.handle !== imported.hackerOne.handle) throw new Error('Matching imported workspace required')
+    const previous = policyFingerprint(ws)
+    const next = policyFingerprint(imported)
+    this.invalidateApprovals()
+    Object.assign(ws, imported, { testNotes: ws.testNotes, updatedAt: Date.now(), policyReview: { fingerprint: next, refreshedAt: Date.now(), changed: previous !== next, answers: [] } })
+    this.save()
+    this.logAudit(id, { tool: 'policy.refresh', target: ws.programUrl, params: {}, result: previous === next ? 'Policy unchanged; review required' : 'Policy or scope changed; review required', inScope: true })
+    return ws
+  }
+
+  reviewPolicy(id: string, fingerprint: string, answers: string[]): SecurityWorkspace {
+    const ws = this.get(id)
+    if (!ws?.policyReview || ws.policyReview.fingerprint !== fingerprint || policyFingerprint(ws) !== fingerprint || Date.now() - ws.policyReview.refreshedAt > 86_400_000) throw new Error('Refresh current policy before review')
+    if (!Array.isArray(answers) || answers.length !== POLICY_TOPICS.length || answers.some(a => typeof a !== 'string' || !a.trim() || a.length > 4000)) throw new Error('Record a policy passage or explicit uncertainty for every checklist topic')
+    this.invalidateApprovals()
+    ws.policyReview = { ...ws.policyReview, answers: answers.map(a => a.trim()), reviewedAt: Date.now() }
+    this.save()
+    this.logAudit(id, { tool: 'policy.review', target: ws.programUrl, params: {}, result: 'Checklist reviewed; individual testing approvals still required', inScope: true })
+    return ws
+  }
+
+  /** The GitHub repositories this workspace lists as eligible source-code assets. */
+  codeRepos(ws: SecurityWorkspace): string[] {
+    const assets = ws.hackerOne
+      ? ws.hackerOne.scopes.filter(s => s.eligible && s.type === 'SOURCE_CODE').map(s => s.identifier)
+      : ws.authorizedAssets.filter(a => !ws.excludedAssets.some(x => githubRepo(x) === githubRepo(a)))
+    return [...new Set(assets.map(githubRepo).filter((r): r is string => !!r))]
+  }
+
+  /** The repository a code tool works on: the one named, or the only one in scope. */
+  codeRepo(ws: SecurityWorkspace, requested: unknown): { repo: string | null; reason: string } {
+    const repos = this.codeRepos(ws)
+    if (requested === undefined || requested === '') {
+      return repos.length === 1 ? { repo: repos[0], reason: `Eligible source-code asset: ${repos[0]}` }
+        : { repo: null, reason: repos.length ? `Name the repository: ${repos.join(', ')}` : 'This workspace has no GitHub source-code asset in scope' }
+    }
+    const repo = githubRepo(requested)
+    if (!repo) return { repo: null, reason: 'Give the repository as https://github.com/owner/name' }
+    return repos.includes(repo) ? { repo, reason: `Eligible source-code asset: ${repo}` }
+      : { repo: null, reason: `${repo} is not an eligible source-code asset in this workspace` }
+  }
+
+  evaluateAction(tool: string, params: Record<string, unknown>, workspaceId?: string): { allowed: boolean; reason: string; target: string; approval?: boolean } {
     const active = this.getActive()
     if (!active || (workspaceId && workspaceId !== active.id)) return { allowed: false, reason: 'An active matching security workspace is required', target: '' }
+    if (tool.startsWith('security.code.')) return this.evaluateCodeAction(active, tool, params)
     const target = securityActionTarget(tool, params)
     if (!target) return { allowed: false, reason: 'Blocked: missing verifiable target or unsupported security action. This release permits only individually approved web.fetch requests; shell, scans, browser navigation and desktop inputs are disabled in security mode.', target: '' }
+    if (active.hackerOne && (!active.policyReview?.reviewedAt || Date.now() - active.policyReview.refreshedAt > 86_400_000 || active.policyReview.fingerprint !== policyFingerprint(active))) return { allowed: false, reason: 'Refresh and review program policy before testing (review expires after 24 hours)', target }
     const scope = this.checkScope(active.id, target)
     return { allowed: scope.inScope, reason: scope.reason, target }
+  }
+
+  // Copying the repository reaches the network and needs the same approval as a request;
+  // reading the copy on this computer touches nothing outside it, so it runs without one.
+  private evaluateCodeAction(active: SecurityWorkspace, tool: string, params: Record<string, unknown>) {
+    const { repo, reason } = this.codeRepo(active, params.repo)
+    if (!repo) return { allowed: false, reason, target: '' }
+    if (tool === 'security.code.fetch') {
+      if (active.hackerOne && (!active.policyReview?.reviewedAt || Date.now() - active.policyReview.refreshedAt > 86_400_000 || active.policyReview.fingerprint !== policyFingerprint(active))) return { allowed: false, reason: 'Refresh and review program policy before fetching the code (review expires after 24 hours)', target: repo }
+      if (active.hackerOne && active.hackerOne.submissionState !== 'open') return { allowed: false, reason: 'Imported program is not open for submissions', target: repo }
+      return { allowed: true, reason, target: repo }
+    }
+    if (['security.code.list', 'security.code.search', 'security.code.read'].includes(tool)) return { allowed: true, reason: `Local read of ${repo}`, target: repo, approval: false }
+    return { allowed: false, reason: `Unknown code tool: ${tool}`, target: repo }
   }
 
   issueApproval(workspaceId: string, tool: string, params: Record<string, unknown>): object {
@@ -154,7 +226,7 @@ export class SecurityWorkspaceService {
     const decision = this.evaluateAction(tool, params, workspaceId)
     const grant = ticket ? this.approvals.get(ticket) : undefined
     if (ticket) this.approvals.delete(ticket)
-    const approved = decision.allowed && grant && grant.epoch === this.approvalEpoch && grant.workspaceId === active?.id && grant.tool === tool && grant.params === JSON.stringify(params)
+    const approved = decision.allowed && (decision.approval === false || grant && grant.epoch === this.approvalEpoch && grant.workspaceId === active?.id && grant.tool === tool && grant.params === JSON.stringify(params))
     const reason = !decision.allowed ? decision.reason : !approved ? 'Fresh explicit security approval required' : null
     if (active) this.logAudit(active.id, { tool, target: decision.target, params: {}, result: reason ? `blocked: ${reason}` : 'approved dispatch', inScope: decision.allowed })
     return reason

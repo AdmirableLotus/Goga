@@ -5,7 +5,7 @@ import type { SecurityWorkspace } from '../../shared/types'
 
 interface Credentials { username: string; token: string }
 interface ApiResource { id?: string; type?: string; attributes?: Record<string, unknown> }
-interface ApiDocument { data?: ApiResource | ApiResource[]; links?: { next?: string | null }; errors?: Array<{ title?: string; detail?: string }> }
+interface ApiDocument extends ApiResource { data?: ApiResource | ApiResource[]; links?: { next?: string | null }; errors?: Array<{ title?: string; detail?: string }> }
 
 const API_ORIGIN = 'https://api.hackerone.com'
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{0,99}$/i
@@ -13,6 +13,16 @@ const MAX_RESPONSE_BYTES = 1_000_000
 const PAGE_SIZE = 100
 const MAX_PAGES = 100
 class HackerOneError extends Error {}
+
+/** The program handle from what the user pasted: "acme", "acme?type=team" or a hackerone.com address. */
+export function programHandle(input: string): string | null {
+  let text = input.trim()
+  const address = text.match(/^(?:https?:\/\/)?(?:www\.)?hackerone\.com\/(.*)$/i)
+  if (address) text = address[1]
+  else if (/[:/.]/.test(text.split(/[?#]/)[0])) return null
+  const handle = text.split(/[/?#]/)[0]
+  return HANDLE_RE.test(handle) ? handle : null
+}
 
 export class HackerOneService {
   private static instance: HackerOneService
@@ -102,14 +112,15 @@ export class HackerOneService {
 
   async importProgram(handleInput: string) {
     if (typeof handleInput !== 'string') throw new Error('Enter a valid HackerOne program handle.')
-    const handle = handleInput.trim()
-    if (!HANDLE_RE.test(handle)) throw new Error('Enter a valid HackerOne program handle.')
+    const handle = programHandle(handleInput)
+    if (!handle) throw new Error('Enter a valid HackerOne program handle.')
     const encoded = encodeURIComponent(handle)
     const [programDoc, exclusionsDoc] = await Promise.all([
       this.getJson(`/v1/hackers/programs/${encoded}`),
       this.getJson(`/v1/hackers/programs/${encoded}/scope_exclusions`)
     ])
-    const program = Array.isArray(programDoc.data) ? programDoc.data[0] : programDoc.data
+    // The hacker API returns the program itself at the top level; other endpoints wrap it in "data".
+    const program = Array.isArray(programDoc.data) ? programDoc.data[0] : programDoc.data ?? programDoc
     if (!program?.attributes) throw new Error('HackerOne did not return program details for this handle.')
     const attributes = program.attributes
     if (typeof attributes.policy !== 'string' || !attributes.policy.trim()) throw new Error('HackerOne did not return a program policy. No workspace was created.')
