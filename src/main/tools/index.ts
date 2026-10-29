@@ -13,5 +13,6 @@ import './electronics'
 import './microcontroller'
 import './trading'
 import './securityCode'
+import './securityLab'
 
 export { ToolRegistry } from './registry'

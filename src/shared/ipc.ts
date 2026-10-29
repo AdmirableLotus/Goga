@@ -123,6 +123,9 @@ export interface MainHandlers {
   'security:inventory': () => Promise<import('./securityGuide').ToolInventoryEntry[]>
   'security:refreshPolicy': (id: string) => Promise<SecurityWorkspace>
   'security:reviewPolicy': (id: string, fingerprint: string, answers: string[]) => Promise<SecurityWorkspace>
+  'security:labStart': () => Promise<{ running: boolean; baseUrl: string; workspaceId?: string; findings: number; notesBugFound: boolean; falsePositive: boolean; outOfScopeAttempts: number }>
+  'security:labStop': () => Promise<{ running: boolean }>
+  'security:labStatus': () => Promise<{ running: boolean; baseUrl: string; workspaceId?: string; findings: number; notesBugFound: boolean; falsePositive: boolean; outOfScopeAttempts: number }>
   'security:h1Status': () => Promise<{ configured: boolean; encryptionAvailable: boolean }>
   'security:h1SaveCredentials': (username: string, token: string) => Promise<{ configured: true }>
   'security:h1ClearCredentials': () => Promise<void>

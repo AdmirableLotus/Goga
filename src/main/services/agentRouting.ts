@@ -120,7 +120,7 @@ export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bi
  * own tools plus web, memory and notes); other tasks get everything but those.
  */
 // In a security workspace only these can run; showing the rest just invites blocked steps.
-const SECURITY_TOOLS = /^(security\.code\.|web\.fetch$)/
+const SECURITY_TOOLS = /^(security\.(code|lab)\.|web\.fetch$)/
 
 export function plannerOffers(task: string, security = false): (name: string) => boolean {
   if (security) return name => SECURITY_TOOLS.test(name)

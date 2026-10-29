@@ -6,6 +6,7 @@ import { FLUX_TASK, TRADING_TASK, plannerOffers } from './agentRouting'
 const SECURITY_HINT = `- Security workspace: only security.code.* and web.fetch can run. For a source-code asset: security.code.fetch once (it needs approval; skip it if a step already fetched), then go through these searches in order with security.code.search, reading each match with security.code.read before judging it:
   1. root without a password: "NOPASSWD|sudoers"  2. files anyone can change: "chmod (-R )?(777|666|o\\+w|a\\+w)|install -m ?0?7?77"  3. code run from text: "eval |bash -c|sh -c"  4. downloads run unchecked: "curl[^|]*\\| *(sudo )?(ba)?sh|wget[^|]*\\| *sh"  5. temporary files: "/tmp/|mktemp"  6. secrets in code: "(api|secret|token|passw)[a-z_]*=[\\"']"
   A bug only counts if someone with less access gains access they did not have. For each real suspect, save it with security.code.draftFinding (exact quote, file, line, who gains what). Never run, build or install the code. In the reply list only files and lines the tools showed; say plainly when nothing qualifies.`
+const LAB_HINT = `- Practice lab: only security.lab.* can run, against the local lab app. Steps: security.lab.request "/" to see the endpoints, then request pages as "alice" and as "bob" to learn normal behaviour (each should see only their own). When you suspect one account can read another's resource, confirm it with security.lab.verify (owner, other, path) — never judge from a single request. Only when it returns supported:true, save it with security.lab.report. Report only what the evidence shows; invent nothing.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before suggesting a trade, analyze it and give entry, stop (from ATR) and target. Practice trades only through trading.order, with a stop and the reason. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
@@ -552,7 +553,7 @@ RULES:
 - Only claim success in "reply" for what the step history shows actually worked. Never say a task is done when its key step failed.
 - To save text to a file, ALWAYS use notepad.saveText — never shell.execute or process.start for this purpose.
 - For the user's own open browser tab ("my tab", "this page", a site they are signed in to), bring that window to the front with computer.focus.window, then use vision.analyze. Do not open a new browser for it: Goga's own browser is not signed in.
-${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}${TRADING_TASK.test(task) ? `${TRADING_HINT}\n` : ''}
+${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}${TRADING_TASK.test(task) ? `${TRADING_HINT}\n` : ''}${securityMode ? `${this.registry.has('security.lab.request') && SecurityWorkspaceService.getInstance().getActive()?.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a)) ? LAB_HINT : SECURITY_HINT}\n` : ''}
 RESPONSE FORMAT (strict JSON):
 {"thought": "...", "tool": "tool.name", "params": {...}, "done": false}
 OR when complete:

@@ -209,6 +209,7 @@ export class SecurityWorkspaceService {
     const active = this.getActive()
     if (!active || (workspaceId && workspaceId !== active.id)) return { allowed: false, reason: 'An active matching security workspace is required', target: '' }
     if (tool.startsWith('security.code.')) return this.evaluateCodeAction(active, tool, params)
+    if (tool.startsWith('security.lab.')) return this.evaluateLabAction(active, tool, params)
     const target = securityActionTarget(tool, params)
     if (!target) return { allowed: false, reason: 'Blocked: missing verifiable target or unsupported security action. This release permits only individually approved web.fetch requests; shell, scans, browser navigation and desktop inputs are disabled in security mode.', target: '' }
     if (active.hackerOne && (!active.policyReview?.reviewedAt || Date.now() - active.policyReview.refreshedAt > 86_400_000 || active.policyReview.fingerprint !== policyFingerprint(active))) return { allowed: false, reason: 'Refresh and review program policy before testing (review expires after 24 hours)', target }
@@ -228,6 +229,14 @@ export class SecurityWorkspaceService {
     }
     if (['security.code.list', 'security.code.search', 'security.code.read', 'security.code.draftFinding'].includes(tool)) return { allowed: true, reason: `Local read of ${repo}`, target: repo, approval: false }
     return { allowed: false, reason: `Unknown code tool: ${tool}`, target: repo }
+  }
+
+  // The practice lab: only in a workspace scoped to a loopback address, and only there.
+  private evaluateLabAction(active: SecurityWorkspace, tool: string, _params: Record<string, unknown>) {
+    const loopback = active.authorizedAssets.find(a => /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(a.trim()))
+    if (!loopback) return { allowed: false, reason: 'The lab tools only run in a workspace scoped to the practice lab (127.0.0.1).', target: '' }
+    if (['security.lab.request', 'security.lab.verify', 'security.lab.report'].includes(tool)) return { allowed: true, reason: `Practice lab ${loopback}`, target: loopback, approval: false }
+    return { allowed: false, reason: `Unknown lab tool: ${tool}`, target: loopback }
   }
 
   issueApproval(workspaceId: string, tool: string, params: Record<string, unknown>): object {

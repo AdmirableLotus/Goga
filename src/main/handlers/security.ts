@@ -4,6 +4,7 @@ import { HackerOneService } from '../services/hackerOne'
 import { ToolRegistry } from '../tools/registry'
 import { emergencyStop } from '../services/emergencyStop'
 import { githubRepo } from '../services/securityCode'
+import { practiceLab } from '../services/practiceLab'
 import { inventoryTools, readResearch, searchResearch } from '../services/securityGuide'
 import type { SecurityFinding, EvidenceEntry, SecurityWorkspace } from '../../shared/types'
 
@@ -60,4 +61,40 @@ export function registerSecurityHandlers(ipcMain: IpcMain) {
     if (ws && repo && svc.codeRepos(ws).includes(repo)) return { inScope: true, reason: `Eligible source-code asset: ${repo}. Goga reviews it with its code tools (copy and read); requests to github.com stay out of scope.` }
     return svc.checkScope(workspaceId, target)
   })
+
+  // Practice lab: a local vulnerable app and its scoped workspace, for safe training.
+  ipcMain.handle('security:labStart', async () => {
+    const url = await practiceLab().start()
+    let ws = svc.list().find(w => w.program === LAB_PROGRAM)
+    if (!ws) ws = svc.create({ program: LAB_PROGRAM, programUrl: url, authorizedAssets: [url], excludedAssets: [], allowedTechniques: ['read-only GET as a test account'], prohibitedTechniques: [], rateLimit: '', programRules: `Local practice app on ${url}. Test accounts: alice, bob (synthetic). Find whether one account can read another's data. Read-only.`, testNotes: 'Practice only. Nothing here is real.' })
+    emergencyStop('Practice lab activated')
+    svc.setActive(ws.id)
+    return labStatus(ws.id)
+  })
+  ipcMain.handle('security:labStop', async () => { await practiceLab().stop(); return { running: false } })
+  ipcMain.handle('security:labStatus', () => {
+    const ws = svc.list().find(w => w.program === LAB_PROGRAM)
+    return labStatus(ws?.id)
+  })
+}
+
+const LAB_PROGRAM = 'Practice lab (local)'
+
+/** Whether the lab is running, and how the active findings score against the planted bug. */
+function labStatus(workspaceId?: string) {
+  const svc = SecurityWorkspaceService.getInstance()
+  const ws = workspaceId ? svc.get(workspaceId) : null
+  const findings = ws?.findings ?? []
+  const notesBugFound = findings.some(f => /\/api\/notes\/\d+/.test(f.target))
+  const falsePositive = findings.some(f => /\/api\/profiles\//.test(f.target))
+  const outOfScopeAttempts = (ws?.auditLog ?? []).filter(e => e.inScope === false).length
+  return {
+    running: practiceLab().running,
+    baseUrl: practiceLab().baseUrl,
+    workspaceId: ws?.id,
+    findings: findings.length,
+    notesBugFound,
+    falsePositive,
+    outOfScopeAttempts,
+  }
 }

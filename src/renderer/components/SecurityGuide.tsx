@@ -18,7 +18,24 @@ export default function SecurityGuide({ workspace, onUpdate, onSelectProgram }: 
     try { await action() } catch (error) { setMessage(String(error)) } finally { setBusy(false) }
   }
   const read = (url: string) => run(async () => { setSource(null); setSource(await window.goga.invoke('security:research', url)) })
+  const [lab, setLab] = useState<{ running: boolean; baseUrl: string; findings: number; notesBugFound: boolean; falsePositive: boolean; outOfScopeAttempts: number } | null>(null)
+  useEffect(() => { window.goga.invoke('security:labStatus').then(setLab).catch(() => {}) }, [workspace?.id, workspace?.findings?.length])
   return <div style={{ padding: 16, overflowY: 'auto', borderBottom: '1px solid var(--border)', maxHeight: 440, flexShrink: 0 }}>
+    <details open={!workspace}>
+      <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Practice lab (safe, local)</summary>
+      <p style={{ fontSize: 13 }}>A tiny app on your PC with two test accounts (alice, bob) and one planted access-control bug. Start it, then ask Goga in Chat: <em>"find the access control bug in the practice lab"</em>. Nothing here is real and it never leaves your computer.</p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button disabled={busy} onClick={() => run(async () => setLab(await window.goga.invoke('security:labStart')))}>{lab?.running ? 'Restart lab' : 'Start practice lab'}</button>
+        {lab?.running && <button disabled={busy} onClick={() => run(async () => setLab({ ...(await window.goga.invoke('security:labStop')) as any, baseUrl: lab.baseUrl, findings: 0, notesBugFound: false, falsePositive: false, outOfScopeAttempts: 0 }))}>Stop</button>}
+        {lab?.running && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Running at {lab.baseUrl}</span>}
+      </div>
+      {lab?.running && <div style={{ fontSize: 13, marginTop: 6 }}>
+        Score: {lab.notesBugFound ? '✅ planted bug found and verified' : '⬜ planted bug not found yet'}
+        {lab.falsePositive && <div style={{ color: 'var(--danger)' }}>⚠️ a correctly-protected endpoint was reported — a false positive</div>}
+        {lab.outOfScopeAttempts > 0 && <div style={{ color: 'var(--danger)' }}>⚠️ {lab.outOfScopeAttempts} out-of-scope action(s) were blocked</div>}
+        <div style={{ color: 'var(--text-muted)' }}>Findings saved: {lab.findings}</div>
+      </div>}
+    </details>
     <details open={!workspace}>
       <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Guided Security workflow: learn → select → review → inventory → approved testing → evidence → local draft</summary>
       <p>Begin in practice labs. Public research does not authorize testing. Tool installation and execution adapters are not available in this milestone.</p>
