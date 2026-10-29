@@ -4,7 +4,7 @@ import { FLUX_HINT } from './fluxLink'
 import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers } from './agentRouting'
 
 const LIBRARY_HINT = `- Reading books/documents: to add one from the web, call library.import with a DIRECT https link ending in .pdf/.epub/.txt — never a github.com page link and never a hand-built URL. For a GitHub repo, call library.listRepo FIRST and use the exact "url" it returns for each file. Import only freely/legally shared documents (OWASP guides, author-released free books); skip copyrighted commercial books (tell the user to buy those). After importing, the user can ask about the book in chat.`
-const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before suggesting a trade, analyze it and give entry, stop (from ATR) and target. Practice trades only through trading.order, with a stop and the reason. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
+const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before any trade, call trading.plan to build the plan (entry, ATR stop, 1R/2R/3R targets, size, reward-to-risk), show the plan, and wait for the user to approve. Only then place it with trading.order using that plan\'s stop and target. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
 import { AuthorizationService } from './authorization'
 import { SettingsService } from './settings'
 import { LogService } from './logs'

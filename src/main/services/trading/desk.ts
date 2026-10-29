@@ -31,6 +31,12 @@ export function marketData(): MarketData {
   return data ??= new MarketData(alpacaKeys)
 }
 
+/** The user's practice-trade risk limits from settings. */
+export function tradingLimits() {
+  const s = SettingsService.getInstance().get()
+  return { maxPositionPct: s.tradingMaxPositionPct ?? 10, requireStop: s.tradingRequireStop ?? true, dailyLossPct: s.tradingDailyLossPct ?? 3 }
+}
+
 export function paperTrading(): PaperTrading {
   return paper ??= new PaperTrading({
     keys: alpacaKeys,

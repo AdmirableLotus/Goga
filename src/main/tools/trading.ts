@@ -2,6 +2,8 @@ import { ToolRegistry } from './registry'
 import { marketData, paperTrading } from '../services/trading/desk'
 import { STRATEGIES, backtest, backtestReport, chartSummary, type Strategy } from '../services/trading/indicators'
 import { TIMEFRAMES, timeframe } from '../services/trading/marketData'
+import { tradePlan } from '../services/trading/tradePlan'
+import { tradingLimits } from '../services/trading/desk'
 import type { OrderRequest } from '../services/trading/paperTrading'
 
 const reg = ToolRegistry.getInstance()
@@ -30,6 +32,31 @@ reg.register({
   try {
     const { inst, tf, bars } = await marketData().bars(String(p.symbol), timeframe(p.timeframe))
     return { success: true, data: chartSummary(inst.symbol, bars, tf) }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'trading.plan',
+  description: 'Build a trade PLAN for a practice trade — no order is placed. Returns entry (current price), an ATR-based stop, 1R/2R/3R targets, a position size for the chosen risk, and reward-to-risk. Show it to the user to approve before calling trading.order. Use this whenever considering a buy or sell.',
+  parameters: {
+    type: 'object',
+    properties: {
+      symbol: symbolParam,
+      side: { type: 'string', enum: ['buy', 'sell'], description: 'buy (long) or sell (short).' },
+      riskPct: { type: 'number', description: 'Percent of account to risk if the stop is hit (default 1, max 5).' },
+      timeframe: timeframeParam,
+    },
+    required: ['symbol', 'side'],
+  },
+  riskLevel: 'low', reversible: true, category: 'web',
+}, async p => {
+  try {
+    const { inst, tf, bars } = await marketData().bars(String(p.symbol), timeframe(p.timeframe))
+    let equity = 100000
+    try { const accts = await paperTrading().accounts(); if (accts[0]?.equity) equity = accts[0].equity } catch { /* keys may be missing; use the default practice equity */ }
+    const limits = tradingLimits()
+    const plan = tradePlan(inst.symbol, bars, p.side === 'sell' ? 'sell' : 'buy', { equity, riskPct: Number(p.riskPct) || undefined, maxPositionPct: limits.maxPositionPct })
+    return { success: true, data: plan }
   } catch (err) { return failure(err) }
 })
 
