@@ -11,12 +11,9 @@ import { AgentLoop } from './agentLoop'
 import { ToolRegistry } from '../tools/registry'
 import { nanoid } from '../utils/nanoid'
 import { buildMediaRequest } from './mediaRequest'
-import { SecurityWorkspaceService } from './securityWorkspace'
-import { practiceLab } from './practiceLab'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-import { groundSecurityReply } from './securityGrounding'
 import { chatHonestyNote, parseRoute, routeQuestion } from './replyHonesty'
 import { looksLikeAgentTask, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer } from './agentRouting'
 import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes } from './longText'
@@ -28,9 +25,6 @@ import { gogaIdentity } from './persona'
 import { FactLearner } from './factLearning'
 import { ROUTINE_QUESTION } from './routine'
 import { routineSummary } from '../sleepMode'
-
-// "stop practice lab", "exit security mode", "deactivate workspace" — a real off switch.
-const SECURITY_OFF = /^\s*(stop|exit|leave|deactivate|turn off|end|close|disable|quit|get out of)\s+(the\s+)?(practice\s*lab|security(\s*(mode|workspace))?|workspace|lab|engagement)\s*\.?$/i
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -66,14 +60,6 @@ export class OrchestratorService {
       this.brain.addMessage(reply)
       onToken?.(reply.content)
       return reply
-    }
-
-    // Switch modes from chat, as a real action — the chat brain used to falsely claim it
-    // deactivated security while the workspace stayed on, locking everything else out.
-    // The regex check stays synchronous so the normal path adds no extra await.
-    if (SECURITY_OFF.test(userMessage.content.trim())) {
-      const modeReply = await this.handleModeSwitchOff()
-      this.brain.addMessage(modeReply); onToken?.(modeReply.content); return modeReply
     }
 
     // An action is waiting for approval: answer it from chat, or say what is waiting.
@@ -116,25 +102,6 @@ export class OrchestratorService {
     }
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
-
-    // The practice lab is just training, so it must never trap other work: if a lab workspace
-    // is active and the next message isn't about the lab, leave security mode automatically.
-    const labWs = SecurityWorkspaceService.getInstance().getActive()
-    if (labWs?.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a)) && !isConfirmation(content) &&
-        !/\b(lab|access[- ]?control|practice|the bug|vuln|note)\b/i.test(content)) {
-      try { await practiceLab().stop() } catch { /* ignore */ }
-      SecurityWorkspaceService.getInstance().setActive(null)
-      this.log.info('Auto-left practice lab for an unrelated request')
-    }
-
-    // In a security workspace the chat brain cannot act, and asked to it invents progress,
-    // files and findings. Everything but a plain question goes to the scoped tools.
-    if (SecurityWorkspaceService.getInstance().getActive() && !isConversationalQuestion(content) && this.agent.getState().status !== 'running') {
-      const goAhead = isConfirmation(content) || CONFIRM_TRIGGERS.test(content)
-      const earlier = [...history].reverse().slice(1).find(m => m.role === 'user' && !isConfirmation(m.content) && !CONFIRM_TRIGGERS.test(m.content.trim()))?.content
-      plannerDiagnostic('routing.decision', { task: content, route: 'security-agent', agentTask: true })
-      return this.startAgentTask(goAhead ? earlier ?? 'Review the in-scope repository for the bounty.' : content, onTaskComplete)
-    }
 
     // Discuss, then act: Goga described what it would do and asked; the user agreed.
     // A plan that operates the PC becomes a task; writing, organising or advice is
@@ -327,22 +294,9 @@ export class OrchestratorService {
     }
   }
 
-  /** Actually turn security/lab mode off (not the chat brain pretending to). */
-  private async handleModeSwitchOff(): Promise<ChatMessage> {
-    const sec = SecurityWorkspaceService.getInstance()
-    const was = sec.getActive()
-    try { await practiceLab().stop() } catch { /* already stopped */ }
-    sec.setActive(null)
-    const text = was
-      ? `Done — security mode is off. I deactivated "${was.program}" and stopped the practice lab. I can read books, use the web, and work normally again.`
-      : 'Security mode was already off; nothing to stop. I can work normally.'
-    return { id: nanoid(), role: 'assistant', content: text, timestamp: Date.now(), fromTools: true }
-  }
-
-  /** A chat answer, with a warning when it claims what no tool did. */
+  /** A chat answer, with a warning when it claims an action no tool performed. */
   private grounded(reply: ChatMessage): ChatMessage {
-    const checked = groundSecurityReply(reply.content, false)
-    return { ...reply, content: checked !== reply.content ? checked : reply.content + chatHonestyNote(reply.content) }
+    return { ...reply, content: reply.content + chatHonestyNote(reply.content) }
   }
 
   /** For a message the phrase rules did not recognise: does the brain read it as a request to act now? */
@@ -368,7 +322,6 @@ export class OrchestratorService {
   private async buildSystemPrompt(userInput: string): Promise<string> {
     const settings = SettingsService.getInstance().get()
     const facts = await this.brain.findRelevantFacts(userInput)
-    const securityStatus = SecurityWorkspaceService.getInstance().chatStatus()
     const books = this.library.list()
     const bookChunks = this.library.search(userInput, 3)
     const remembered = await this.brain.rememberConversations(userInput)
@@ -395,7 +348,6 @@ ${bookChunks.length > 0 ? `Relevant book passages:\n${bookChunks.map(c => c.text
 
 You can also operate this PC: browser, files, apps, desktop. You can design electronics too: look up real parts and build circuits (netlist, parts list, rule check) with KiCad on this PC, and work in ${settings.userName}'s Flux (flux.ai) circuit-board projects when Flux is connected in Settings. Like Schematik, you can make Arduino, ESP32 and Raspberry Pi Pico projects (code, parts to buy, wiring, build steps), compile them and upload them to a plugged-in board, and read ${settings.userName}'s Schematik (schematik.io) projects. You are also ${settings.userName}'s trading coach: with real prices and history (US stocks, ETFs, crypto, forex) you read charts, test strategies on history, and place practice trades with fake money in a paper account, within ${settings.userName}'s risk rules. You do not know current prices from memory: never state one without fetching it. Teach the why (trend, risk per trade, stops, position size, keeping a journal), be honest that no one can predict markets, and never promise profit. For electronics, plan the blocks, parts and power first, and point out anything that needs an engineer's review (safety, medical use, mains power).When ${settings.userName} wants something done, talk it through like a partner: say in a few plain sentences what you would do, mention anything risky or irreversible and anything ${settings.userName} must do personally (such as typing a password or a two-factor code), then end by asking "Want me to go ahead?". When ${settings.userName} agrees, you will carry out that plan. Do not refuse reasonable requests or tell ${settings.userName} to rephrase; if you have a concern, explain it and let ${settings.userName} decide. In this reply itself you have not acted yet: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer.
 
-${securityStatus ? `\n${securityStatus}\n` : ''}
 You have the full conversation history. Read it before replying and don't ignore earlier context.`
   }
 
@@ -476,7 +428,6 @@ You have the full conversation history. Read it before replying and don't ignore
   }
 
   async executeAction(action: Action): Promise<unknown> {
-    if (SecurityWorkspaceService.getInstance().getActive()) throw new Error('Legacy desktop execution is disabled in security mode; use scoped approved tools.')
     this.store.setStatus(action.id, 'running')
     this.log.info(`Executing legacy action: ${action.label}`, { actionId: action.id })
     // Legacy path only — agent-owned actions are never routed here.

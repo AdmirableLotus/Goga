@@ -11,7 +11,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: vi.fn() }) } }))
 vi.mock('../missionEngine', () => ({ MissionEngine: { getInstance: () => ({ listMissions: () => [], stop: vi.fn() }) } }))
 vi.mock('../../handlers/developer', () => ({ stopDeveloperTask: vi.fn() }))
 

@@ -1,10 +1,8 @@
 import type { IpcMain } from 'electron'
 import { DesktopAdapter } from '../adapters/desktop'
 import { LogService } from '../services/logs'
-import { SecurityWorkspaceService } from '../services/securityWorkspace'
 
 function requireNormalMode() {
-  if (SecurityWorkspaceService.getInstance().getActive()) throw new Error('Direct desktop controls are disabled while a security workspace is active. Security actions require scoped explicit approval.')
 }
 
 const desktop = new DesktopAdapter()

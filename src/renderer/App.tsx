@@ -7,7 +7,6 @@ import ApprovalsPage from './pages/ApprovalsPage'
 import MemoryPage from './pages/MemoryPage'
 import LibraryPage from './pages/LibraryPage'
 import SettingsPage from './pages/SettingsPage'
-import SecurityPage from './pages/SecurityPage'
 import MissionPage from './pages/MissionPage'
 import DesktopPage from './pages/DesktopPage'
 import StopButton from './components/StopButton'
@@ -15,14 +14,13 @@ import MissionMode from './components/MissionMode'
 import DeveloperPage from './pages/DeveloperPage'
 import { GogaVisualProvider } from './context/GogaVisualContext'
 
-type Tab = 'markets' | 'developer' | 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
+type Tab = 'markets' | 'developer' | 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'settings'
 
 // Chat-first: Goga switches what he does from the message. Advanced panels stay in code
 // but off the bar to keep the interface simple.
 const TABS: { id: Tab; label: string }[] = [
   { id: 'chat',      label: '💬 Chat' },
   { id: 'library',   label: '📚 Library' },
-  { id: 'security',  label: '🔐 Security' },
   { id: 'memory',    label: '🧠 Memory' },
   { id: 'settings',  label: '⚙️ Settings' },
 ]
@@ -77,7 +75,6 @@ export default function App() {
           {tab === 'library'   && <LibraryPage />}
           {tab === 'mission'   && <MissionPage />}
           {tab === 'desktop'   && <DesktopPage />}
-          {tab === 'security'  && <SecurityPage />}
           {tab === 'settings'  && <SettingsPage />}
         </main>
 

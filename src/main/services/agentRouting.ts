@@ -26,12 +26,7 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(read|import|download|add|learn from|study)\b.{0,40}\b(book|pdf|epub|paper|guide)\b/i,
   /\b(calculate|compute|plot|chart|graph|simulate|solve)\b/i,
   /\b(read|import|download|add|learn from)\b.{0,40}https?:\/\//i,
-  /\b(review|audit|read|go through|look through)\b.{0,40}\b(code|repo|repository|source|scripts?)\b/i,
-  // Bounty and code-review requests need the tools; answered in chat, the small brain invents what it "saw".
-  /\b(review|audit|check|scan|analy[sz]e|inspect|go through|look (?:at|through|into))\b.{0,80}\bgithub\.com\/[\w.-]+\/[\w.-]+/i,
-  /\b(review|audit|check|test|hunt|look|work)\b.{0,80}\b(?:bug\s*)?bount(?:y|ies)\b/i,
-  /\b(help|assist).{0,30}\b(bounty|bug\s*bounty|pentest|hack|ctf|exploit|vuln|recon|security)\b/i,
-  /\b(help me with|work on|complete|finish|do)\b.{0,60}\b(task|project|bounty|workflow)\b/i,
+  /\b(help me with|work on|complete|finish|do)\b.{0,60}\b(task|project|workflow)\b/i,
   /\b(run|execute|install|build|compile)\b/i,
   /\b(fill|submit|complete)\b.{0,40}\b(form|field|input|fields|inputs)\b/i,
   /\bdo (this|that|it)\b/i,
@@ -43,7 +38,6 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(price|quote|chart|analy[sz]e|technical analysis|news)\b.{0,30}\b(stocks?|crypto|bitcoin|btc|eth|ethereum|solana|forex|eur\/?usd|gbp\/?usd|usd\/?jpy|spy|qqq|aapl|tsla|nvda|msft|amzn|[a-z]{2,5}\/usd)\b/i,
   /\b(bitcoin|btc|ethereum|eth|solana|the stock market|eur\/?usd)\b.{0,20}\b(price|doing|today|now|chart)\b/i,
   /\bschematik\.io\b|\b(upload|flash)\b.{0,40}\b(arduino|esp32|pico|board|sketch)\b|\b(make|create|build)\b.{0,30}\b(arduino|esp32|pico|microcontroller) project\b/i,
-  /\b(what is|what are|how (do|does|to)|tell me about|explain|show me).{0,60}\b(hackerone|bugcrowd|intigriti|synack|bounty|cve|exploit|payload|xss|sqli|rce|ssrf|lfi|idor)\b/i,
 ]
 
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
@@ -123,18 +117,13 @@ export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bi
  * The tools the planner sees for a task. Hardware and trading tasks get a focused set (their
  * own tools plus web, memory and notes); other tasks get everything but those.
  */
-// In a security workspace only these can run; showing the rest just invites blocked steps.
-const SECURITY_TOOLS = /^(security\.(code|lab)\.|web\.fetch$)/
-
-export function plannerOffers(task: string, security = false): (name: string) => boolean {
-  if (security) return name => SECURITY_TOOLS.test(name)
+export function plannerOffers(task: string): (name: string) => boolean {
   const hardware = HARDWARE_TASK.test(task), trading = TRADING_TASK.test(task)
-  if (!hardware && !trading) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.') && !name.startsWith('security.')
+  if (!hardware && !trading) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.')
   const flux = FLUX_TASK.test(task)
   return name => {
     if (name.startsWith('flux.')) return flux && !FLUX_RARELY_NEEDED.test(name)
     if (name.startsWith('trading.')) return trading
-    if (name.startsWith('security.')) return false
     return (hardware && HARDWARE_TOOLS.test(name)) || HARDWARE_SIDE_TOOLS.test(name)
   }
 }

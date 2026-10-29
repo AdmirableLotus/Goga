@@ -21,7 +21,6 @@ vi.mock('../localLlama', async importOriginal => ({
 }))
 vi.mock('../ollamaClient', () => ({ OllamaClient: vi.fn(() => ({ chat: boundary.ollamaChat })) }))
 vi.mock('../taskMemory', () => ({ TaskMemoryService: { getInstance: () => ({ findRelevant: () => [], save_pattern: vi.fn() }) } }))
-vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: () => {} }) } }))
 vi.mock('../authorization', () => ({ AuthorizationService: { getInstance: () => ({ evaluateAndLog: () => ({ allowed: true, requiresApproval: false }) }) } }))
 vi.mock('../../adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({ screenshot: vi.fn(), activeWindow: vi.fn() })) }))
 vi.mock('../../index', () => ({ getMainWindow: () => null }))

@@ -14,7 +14,6 @@ vi.mock('../../../main/services/actionStore', () => ({ ActionStore: { getInstanc
 vi.mock('../../../main/services/localLlama', () => ({ LocalLlamaService: { getInstance: () => ({ isReady: () => true, chat: boundary.chat }) } }))
 vi.mock('../../../main/services/ollamaClient', () => ({ OllamaClient: vi.fn(() => ({})) }))
 vi.mock('../../../main/services/taskMemory', () => ({ TaskMemoryService: { getInstance: () => ({}) } }))
-vi.mock('../../../main/services/securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: () => {} }) } }))
 vi.mock('../../../main/services/authorization', () => ({ AuthorizationService: { getInstance: () => ({}) } }))
 vi.mock('../../../main/services/focusManager', () => ({ FocusManager: { getInstance: () => ({}) } }))
 vi.mock('../../../main/adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({ observeWindowIdentity: boundary.active, observeWindowText: boundary.ui })) }))
@@ -56,7 +55,6 @@ beforeEach(() => {
     },
     invoke: vi.fn((channel: string, text?: string) => {
       if (channel === 'agent:state') return Promise.resolve(agent.getState())
-      if (channel === 'security:getActive') return Promise.resolve(null)
       if (channel === 'logs:list') return Promise.resolve([])
       if (channel === 'voice:stopSpeaking') return Promise.resolve()
       if (channel === 'chat:send') {

@@ -213,8 +213,6 @@ export interface AppSettings {
   visionModelName: string
   // Ollama embedding model for semantic memory recall ('' disables, keyword match only)
   embeddingModelName: string
-  // Ollama model that plans security code reviews ('' uses the local brain)
-  reviewModelName: string
   agentMaxSteps: number
   primaryModel: 'local' | 'ollama'
   voiceEnabled: boolean
@@ -298,8 +296,6 @@ export interface Mission {
   observations: MissionObservation[]
   finalResult?: string
   error?: string
-  // Security context — required for any security-testing mission
-  securityWorkspaceId?: string
 }
 
 // Structured activity events emitted by MissionEngine
@@ -359,7 +355,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelName: 'llama3',
   visionModelName: 'qwen3-vl:4b',
   embeddingModelName: 'nomic-embed-text',
-  reviewModelName: '',
   agentMaxSteps: 20,
   voiceEnabled: true,
   voiceName: '',
@@ -386,62 +381,4 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tradingMaxPositionPct: 10,
   tradingRequireStop: true,
   tradingDailyLossPct: 3
-}
-
-// ── Security Workspace ────────────────────────────────────────────────────────
-
-export interface SecurityFinding {
-  id: string
-  title: string
-  severity: 'info' | 'low' | 'medium' | 'high' | 'critical'
-  target: string
-  description: string
-  steps: string
-  evidenceIds: string[]
-  status: 'draft' | 'submitted' | 'triaged' | 'resolved'
-  createdAt: number
-  updatedAt: number
-}
-
-export interface EvidenceEntry {
-  id: string
-  type: 'screenshot' | 'request' | 'response' | 'note' | 'file'
-  label: string
-  content: string   // base64 for screenshots, raw text for others
-  createdAt: number
-}
-
-export interface SecurityAuditEntry {
-  id: string
-  timestamp: number
-  tool: string
-  target: string
-  params: Record<string, unknown>
-  result: string
-  inScope: boolean
-}
-
-export interface SecurityWorkspace {
-  policyReview?: import('./securityGuide').PolicyReview
-  hackerOne?: {
-    handle: string
-    importedAt: number
-    submissionState: string
-    scopes: Array<{ id: string; identifier: string; type: string; eligible: boolean; instruction: string }>
-  }
-  id: string
-  program: string
-  programUrl: string
-  authorizedAssets: string[]   // globs like *.acme.com or CIDR like 10.0.0.0/8
-  excludedAssets: string[]
-  allowedTechniques: string[]
-  prohibitedTechniques: string[]
-  rateLimit: string
-  programRules: string
-  testNotes: string
-  findings: SecurityFinding[]
-  evidence: EvidenceEntry[]
-  auditLog: SecurityAuditEntry[]
-  createdAt: number
-  updatedAt: number
 }

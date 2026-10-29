@@ -1,4 +1,4 @@
-import type { Action, ChatMessage, LogEntry, MemoryEntry, AppSettings, AgentState, AgentStep, SecurityWorkspace, SecurityFinding, EvidenceEntry } from './types'
+import type { Action, ChatMessage, LogEntry, MemoryEntry, AppSettings, AgentState, AgentStep } from './types'
 import type { ScreenshotResult, ActiveWindowResult } from '../main/adapters/desktop'
 
 export type { ScreenshotResult, ActiveWindowResult }
@@ -119,29 +119,6 @@ export interface MainHandlers {
     cached: boolean; cacheDir: string; source: string
   }>
 
-  // Security workspace
-  'security:research': (url: string) => Promise<import('./securityGuide').ResearchSource>
-  'security:searchResearch': (query: string, kind: 'programs' | 'disclosures') => Promise<Array<{ title: string; url: string; retrievedAt: string }>>
-  'security:inventory': () => Promise<import('./securityGuide').ToolInventoryEntry[]>
-  'security:refreshPolicy': (id: string) => Promise<SecurityWorkspace>
-  'security:reviewPolicy': (id: string, fingerprint: string, answers: string[]) => Promise<SecurityWorkspace>
-  'security:labStart': () => Promise<{ running: boolean; baseUrl: string; workspaceId?: string; findings: number; notesBugFound: boolean; falsePositive: boolean; outOfScopeAttempts: number }>
-  'security:labStop': () => Promise<{ running: boolean }>
-  'security:labStatus': () => Promise<{ running: boolean; baseUrl: string; workspaceId?: string; findings: number; notesBugFound: boolean; falsePositive: boolean; outOfScopeAttempts: number }>
-  'security:h1Status': () => Promise<{ configured: boolean; encryptionAvailable: boolean }>
-  'security:h1SaveCredentials': (username: string, token: string) => Promise<{ configured: true }>
-  'security:h1ClearCredentials': () => Promise<void>
-  'security:h1Import': (handle: string) => Promise<SecurityWorkspace>
-  'security:list': () => Promise<SecurityWorkspace[]>
-  'security:get': (id: string) => Promise<SecurityWorkspace | null>
-  'security:create': (data: Omit<SecurityWorkspace, 'id' | 'findings' | 'evidence' | 'auditLog' | 'createdAt' | 'updatedAt'>) => Promise<SecurityWorkspace>
-  'security:update': (id: string, patch: Partial<SecurityWorkspace>) => Promise<SecurityWorkspace>
-  'security:delete': (id: string) => Promise<void>
-  'security:setActive': (id: string | null) => Promise<void>
-  'security:getActive': () => Promise<SecurityWorkspace | null>
-  'security:addFinding': (workspaceId: string, finding: Omit<SecurityFinding, 'id' | 'createdAt' | 'updatedAt'>) => Promise<SecurityFinding>
-  'security:addEvidence': (workspaceId: string, evidence: Omit<EvidenceEntry, 'id' | 'createdAt'>) => Promise<EvidenceEntry>
-  'security:checkScope': (workspaceId: string, target: string) => Promise<{ inScope: boolean; reason: string }>
 }
 
 // Channels: main -> renderer (on)

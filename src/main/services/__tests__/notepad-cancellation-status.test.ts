@@ -13,7 +13,6 @@ vi.mock('../actionStore', () => ({ ActionStore: { getInstance: () => ({ stopAll:
 vi.mock('../localLlama', () => ({ LocalLlamaService: { getInstance: () => ({}) } }))
 vi.mock('../ollamaClient', () => ({ OllamaClient: vi.fn(() => ({})) }))
 vi.mock('../taskMemory', () => ({ TaskMemoryService: { getInstance: () => ({ findRelevant: () => [], save_pattern: boundary.savePattern }) } }))
-vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: () => {} }) } }))
 vi.mock('../authorization', () => ({ AuthorizationService: { getInstance: () => ({ evaluateAndLog: () => ({ allowed: true, requiresApproval: false }) }) } }))
 vi.mock('../../adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({
   screenshot: vi.fn().mockRejectedValue(new Error('No desktop in unit test')),

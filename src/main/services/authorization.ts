@@ -2,7 +2,6 @@ import type { RiskLevel, ToolDefinition } from '../../shared/types'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
 import { riskAtLeast } from '../tools/registry'
-import { SecurityWorkspaceService } from './securityWorkspace'
 
 export interface AuthDecision {
   allowed: boolean
@@ -11,8 +10,7 @@ export interface AuthDecision {
 }
 
 export interface AuthContext {
-  mode: 'normal' | 'security-research'
-  securityWorkspaceId?: string
+  mode: 'normal'
 }
 
 // Tools that are ALWAYS auto-approved regardless of settings — purely observational, read-only
@@ -65,12 +63,6 @@ export class AuthorizationService {
   }
 
   evaluate(tool: ToolDefinition, params: Record<string, unknown>, ctx: AuthContext): AuthDecision {
-    const security = SecurityWorkspaceService.getInstance()
-    if (ctx.mode === 'security-research' || security.getActive()) {
-      const decision = security.evaluateAction(tool.name, params, ctx.securityWorkspaceId)
-      if (decision.allowed && decision.approval === false) return { allowed: true, requiresApproval: false, reason: decision.reason }
-      return { allowed: decision.allowed, requiresApproval: decision.allowed, reason: decision.allowed ? 'Security testing always requires fresh explicit approval' : decision.reason }
-    }
     const settings = SettingsService.getInstance().get()
 
     // 1. Always-auto tools (observational / read-only)
@@ -106,9 +98,6 @@ export class AuthorizationService {
   // Convenience: log the decision
   evaluateAndLog(tool: ToolDefinition, params: Record<string, unknown>, ctx: AuthContext): AuthDecision {
     const decision = this.evaluate(tool, params, ctx)
-    const security = SecurityWorkspaceService.getInstance()
-    const workspace = security.getActive()
-    if (workspace) security.logAudit(workspace.id, { tool: tool.name, target: typeof params.url === 'string' ? params.url : '', params: {}, result: `${decision.allowed ? 'approval required' : 'blocked'}: ${decision.reason}`, inScope: decision.allowed })
     if (!decision.allowed) {
       this.log.warn(`BLOCKED tool=${tool.name} reason=${decision.reason}`)
     } else if (decision.requiresApproval) {

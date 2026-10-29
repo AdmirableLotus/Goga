@@ -10,7 +10,6 @@ vi.mock('../actionStore', () => ({ ActionStore: { getInstance: () => ({ stopAll:
 vi.mock('../localLlama', () => ({ LocalLlamaService: { getInstance: () => ({}) } }))
 vi.mock('../ollamaClient', () => ({ OllamaClient: vi.fn(() => ({})) }))
 vi.mock('../taskMemory', () => ({ TaskMemoryService: { getInstance: () => ({ findRelevant: () => [], save_pattern: boundary.savePattern }) } }))
-vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null, invalidateApprovals: () => {} }) } }))
 vi.mock('../authorization', () => ({ AuthorizationService: { getInstance: () => ({ evaluateAndLog: () => ({ allowed: true, requiresApproval: false }) }) } }))
 vi.mock('../verificationEngine', () => ({ VerificationEngine: { getInstance: () => ({ verify: boundary.verify }) } }))
 vi.mock('../../adapters/desktop', () => ({ DesktopAdapter: vi.fn(() => ({

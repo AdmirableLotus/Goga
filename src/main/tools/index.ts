@@ -14,7 +14,5 @@ import './microcontroller'
 import './trading'
 import './python'
 import './library'
-import './securityCode'
-import './securityLab'
 
 export { ToolRegistry } from './registry'

@@ -4,7 +4,6 @@ import path from 'path'
 import { spawn, execFile, type ChildProcess } from 'child_process'
 import { promisify } from 'util'
 import type { DeveloperState, DeveloperEvent, DeveloperProject } from '../../shared/developer'
-import { SecurityWorkspaceService } from './securityWorkspace'
 
 const execute = promisify(execFile)
 const MAX_TEXT = 16_000
@@ -91,7 +90,6 @@ export class DeveloperService {
   }
 
   start(task: string, mode: 'plan' | 'build'): DeveloperState {
-    if (SecurityWorkspaceService.getInstance().getActive()) throw new Error('Developer execution is disabled while a security workspace is active; coding agents cannot bypass security approvals.')
     if (typeof task !== 'string' || !task.trim() || task.length > 24_000) throw new Error('Enter a task up to 24,000 characters')
     if (mode !== 'plan' && mode !== 'build') throw new Error('Invalid developer mode')
     if (this.child || this.selecting) throw new Error('A developer operation is already running')

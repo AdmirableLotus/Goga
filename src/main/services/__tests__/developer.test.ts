@@ -7,7 +7,6 @@ import { PassThrough } from 'stream'
 
 const mock = vi.hoisted(() => ({ spawn: vi.fn(), execFile: vi.fn() }))
 vi.mock('child_process', () => ({ spawn: mock.spawn, execFile: mock.execFile }))
-vi.mock('../securityWorkspace', () => ({ SecurityWorkspaceService: { getInstance: () => ({ getActive: () => null }) } }))
 import { DeveloperService, developerEnvironment, describeDeveloperEvent } from '../developer'
 
 const dirs: string[] = []

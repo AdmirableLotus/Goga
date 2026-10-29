@@ -12,7 +12,6 @@ import { registerSettingsHandlers } from './handlers/settings'
 import { registerDesktopHandlers } from './handlers/desktop'
 import { registerLibraryHandlers } from './handlers/library'
 import { registerBrainHandlers } from './handlers/brain'
-import { registerSecurityHandlers } from './handlers/security'
 import { registerAgentHandlers } from './handlers/agent'
 import { registerMissionHandlers } from './handlers/mission'
 import { registerSttHandlers } from './handlers/stt'
@@ -114,7 +113,6 @@ app.whenReady().then(() => {
   registerDesktopHandlers(ipcMain)
   registerLibraryHandlers(ipcMain)
   registerBrainHandlers(ipcMain)
-  registerSecurityHandlers(ipcMain)
   registerAgentHandlers(ipcMain)
   registerMissionHandlers(ipcMain)
   registerVoiceHandlers(ipcMain, getMainWindow)
