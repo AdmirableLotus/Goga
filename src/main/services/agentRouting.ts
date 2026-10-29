@@ -139,6 +139,16 @@ export function plannerOffers(task: string, security = false): (name: string) =>
 // chat path even if they contain words that would otherwise trigger the agent.
 const CONVERSATIONAL_PREFIX = /^\s*(explain|how (do|does|to|can|would|should)|what (is|are|was|were|does|would)|why (is|does|would)|when (is|does|would)|tell me (about|how|what|why)|what'?s the best|should i|can you explain|could you explain)/i
 
+// Answers to a waiting approval. Kept to plain, whole replies so a sentence that merely
+// contains "yes" never approves an action.
+export const APPROVE_REPLY = /^(approve|approved|yes|yes please|yes approve|ok|okay|allow|allowed|go ahead|do it)[.!]?$/i
+export const DENY_REPLY = /^(deny|denied|no|no thanks|reject|rejected|don'?t|cancel|stop)[.!]?$/i
+
+/** A plain question or request for an explanation, not a request to act. */
+export function isConversationalQuestion(message: string): boolean {
+  return CONVERSATIONAL_PREFIX.test(message)
+}
+
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
   if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false

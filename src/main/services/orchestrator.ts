@@ -15,7 +15,9 @@ import { SecurityWorkspaceService } from './securityWorkspace'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-import { looksLikeAgentTask, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer } from './agentRouting'
+import { groundSecurityReply } from './securityGrounding'
+import { chatHonestyNote, parseRoute, routeQuestion } from './replyHonesty'
+import { looksLikeAgentTask, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer } from './agentRouting'
 import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes } from './longText'
 import { app } from 'electron'
 import path from 'path'
@@ -62,6 +64,21 @@ export class OrchestratorService {
       return reply
     }
 
+    // An action is waiting for approval: answer it from chat, or say what is waiting.
+    const waiting = this.agent.getState().pendingApproval
+    if (waiting && !userMessage.attachments?.length) {
+      const said = userMessage.content.trim()
+      const approved = APPROVE_REPLY.test(said) ? true : DENY_REPLY.test(said) ? false : null
+      const answered = approved === null ? null : this.agent.answerPendingApproval(approved)
+      const content = answered
+        ? `${approved ? 'Approved' : 'Denied'}: ${answered.tool}.${approved ? ' Continuing.' : " I'll stop that step."}`
+        : `I'm waiting for your approval to run ${waiting.tool} (${waiting.label}). Say "approve" or "deny", or use the buttons above the chat.`
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
+      this.brain.addMessage(reply)
+      onToken?.(content)
+      return reply
+    }
+
     if (userMessage.attachments?.length) {
       let content: string
       try {
@@ -88,6 +105,15 @@ export class OrchestratorService {
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
 
+    // In a security workspace the chat brain cannot act, and asked to it invents progress,
+    // files and findings. Everything but a plain question goes to the scoped tools.
+    if (SecurityWorkspaceService.getInstance().getActive() && !isConversationalQuestion(content) && this.agent.getState().status !== 'running') {
+      const goAhead = isConfirmation(content) || CONFIRM_TRIGGERS.test(content)
+      const earlier = [...history].reverse().slice(1).find(m => m.role === 'user' && !isConfirmation(m.content) && !CONFIRM_TRIGGERS.test(m.content.trim()))?.content
+      plannerDiagnostic('routing.decision', { task: content, route: 'security-agent', agentTask: true })
+      return this.startAgentTask(goAhead ? earlier ?? 'Review the in-scope repository for the bounty.' : content, onTaskComplete)
+    }
+
     // Discuss, then act: Goga described what it would do and asked; the user agreed.
     // A plan that operates the PC becomes a task; writing, organising or advice is
     // answered right here in chat, where the brain can see the conversation.
@@ -105,7 +131,8 @@ export class OrchestratorService {
     }
 
     const vagueWebsite = !agreedInChat && isVagueOpenWebsite(content)
-    const agentTask = !agreedInChat && looksLikeAgentTask(content, lastAssistant)
+    const agentTask = !agreedInChat && (looksLikeAgentTask(content, lastAssistant)
+      || (!isVagueOpenWebsite(content) && await this.brainWantsAction(content, lastAssistant, signal)))
     plannerDiagnostic('routing.decision', { task: content, vagueWebsite, agentTask, route: vagueWebsite ? 'clarify' : agentTask ? 'agent' : 'chat' })
 
     // "Open a website" with no named site/URL → ask which one instead of
@@ -157,7 +184,7 @@ export class OrchestratorService {
     if (useOllama) {
       const ollamaAvailable = await this.ollama.isAvailable()
       if (ollamaAvailable) {
-        const reply = await this.thinkWithOllama(content, onToken, signal)
+        const reply = this.grounded(await this.thinkWithOllama(content, onToken, signal))
         this.brain.addMessage(reply)
         void this.factLearner.learnFrom(content.slice(0, 2000))
         return reply
@@ -167,7 +194,7 @@ export class OrchestratorService {
 
     // ── PRIMARY: node-llama-cpp local model ───────────────────────────────────
     if (this.llama.isReady()) {
-      const reply = await this.thinkWithLocalLlama(content, onToken, signal)
+      const reply = this.grounded(await this.thinkWithLocalLlama(content, onToken, signal))
       this.brain.addMessage(reply)
       void this.factLearner.learnFrom(content.slice(0, 2000))
       return reply
@@ -179,7 +206,7 @@ export class OrchestratorService {
       this.log.info(`LocalLlama still loading — waiting up to ${BRAIN_LOAD_WAIT_MS / 1000}s…`)
       const ready = await this.llama.waitWhileLoading(BRAIN_LOAD_WAIT_MS, signal)
       if (ready) {
-        const reply = await this.thinkWithLocalLlama(content, onToken, signal)
+        const reply = this.grounded(await this.thinkWithLocalLlama(content, onToken, signal))
         this.brain.addMessage(reply)
         void this.factLearner.learnFrom(content.slice(0, 2000))
         return reply
@@ -192,7 +219,7 @@ export class OrchestratorService {
 
     if (ollamaAvailable) {
       this.log.warn('LocalLlama unavailable — falling back to Ollama')
-      const reply = await this.thinkWithOllama(content, onToken, signal)
+      const reply = this.grounded(await this.thinkWithOllama(content, onToken, signal))
       this.brain.addMessage(reply)
       void this.factLearner.learnFrom(content.slice(0, 2000))
       return reply
@@ -248,7 +275,7 @@ export class OrchestratorService {
         finishOnce({ status: 'success', reply: answer.content, state: ran })
         return
       }
-      const msg: ChatMessage = { id: nanoid(), role: 'assistant', content: reply, timestamp: Date.now() }
+      const msg: ChatMessage = { id: nanoid(), role: 'assistant', content: reply, timestamp: Date.now(), fromTools: true }
       this.brain.addMessage(msg)
       getMainWindow()?.webContents.send('chat:message', msg)
       const agentState = this.agent.getState()
@@ -276,6 +303,32 @@ export class OrchestratorService {
       content: `On it, ${settings.userName}.`,
       timestamp: Date.now()
     }
+  }
+
+  /** A chat answer, with a warning when it claims what no tool did. */
+  private grounded(reply: ChatMessage): ChatMessage {
+    const checked = groundSecurityReply(reply.content, false)
+    return { ...reply, content: checked !== reply.content ? checked : reply.content + chatHonestyNote(reply.content) }
+  }
+
+  /** For a message the phrase rules did not recognise: does the brain read it as a request to act now? */
+  private async brainWantsAction(content: string, lastAssistant: string | undefined, signal?: AbortSignal): Promise<boolean> {
+    if (isConversationalQuestion(content) || isConfirmation(content) || content.length > 600 || !this.llama.isReady()) return false
+    if (this.agent.getState().status === 'running' || this.agent.getState().status === 'waiting-approval') return false
+    // The brain has no one-word limit: stop it as soon as it has answered, and after 10 s.
+    const stop = new AbortController()
+    const timer = setTimeout(() => stop.abort(), 10_000)
+    signal?.addEventListener('abort', () => stop.abort(), { once: true })
+    let said = ''
+    try {
+      said = await this.llama.chat(routeQuestion(content, lastAssistant), token => {
+        said += token
+        if (parseRoute(said)) stop.abort()
+      }, stop.signal)
+    } catch { /* stopped once answered, or failed: use what was said */ } finally { clearTimeout(timer) }
+    const route = parseRoute(said)
+    plannerDiagnostic('routing.brain', { task: content, route })
+    return route === 'act' && !signal?.aborted
   }
 
   private async buildSystemPrompt(userInput: string): Promise<string> {

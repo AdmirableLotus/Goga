@@ -11,7 +11,7 @@ import { keywordScore, recallFacts, type StoredEmbedding } from './semanticRecal
 
 export interface MemoryNote { id: string; from: number; to: number; text: string }
 
-interface ArchivedMessage { role: 'user' | 'assistant'; content: string; timestamp: number }
+interface ArchivedMessage { role: 'user' | 'assistant'; content: string; timestamp: number; fromTools?: boolean }
 
 interface MemoryFile {
   pending: ArchivedMessage[]          // not yet written up as a note
@@ -53,8 +53,15 @@ Write 2 to 5 short bullet points ("- ..."):
 - what was decided or agreed,
 - what is still open or planned next.
 
+Lines from "Goga (chat)" are only what Goga said: never write from them that anything was opened, fetched, scanned, found, verified or done. Take what happened only from ${userName}'s own words and from "Goga (from its tools)" lines. Leave out lines marked UNVERIFIED: they were caught making things up.
 Be specific (names, projects, numbers that matter). Leave out greetings and small talk. Never include passwords, codes, card or account numbers, keys or tokens.
 If nothing worth remembering happened, write only: NOTHING`
+}
+
+function speaker(m: ArchivedMessage, userName: string): string {
+  if (m.role === 'user') return userName
+  if (m.content.includes('⚠️ Goga\'s check')) return 'Goga (chat, UNVERIFIED)'
+  return m.fromTools ? 'Goga (from its tools)' : 'Goga (chat)'
 }
 
 /** Bullet lines of a note, without secrets; empty when there is nothing to keep. */
@@ -112,7 +119,7 @@ export class ConversationMemory {
    */
   record(msg: ChatMessage): void {
     if (msg.role !== 'user' && msg.role !== 'assistant') return
-    this.data.pending.push({ role: msg.role, content: msg.content.slice(0, MESSAGE_CHARS), timestamp: msg.timestamp })
+    this.data.pending.push({ role: msg.role, content: msg.content.slice(0, MESSAGE_CHARS), timestamp: msg.timestamp, ...(msg.fromTools ? { fromTools: true } : {}) })
     this.save()
     if (msg.role !== 'assistant') return
     this.scheduleNote()
@@ -144,7 +151,7 @@ export class ConversationMemory {
     this.writing = true
     try {
       const userName = this.deps.userName()
-      const transcript = batch.map(m => `${m.role === 'user' ? userName : 'Goga'}: ${m.content}`).join('\n\n')
+      const transcript = batch.map(m => `${speaker(m, userName)}: ${m.content}`).join('\n\n')
       const raw = await this.deps.chat([
         { role: 'system', content: notePrompt(userName) },
         { role: 'user', content: `Conversation on ${noteDate(batch[0].timestamp)}:\n\n${transcript}` },

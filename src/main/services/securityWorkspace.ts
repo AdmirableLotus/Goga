@@ -226,7 +226,7 @@ export class SecurityWorkspaceService {
       if (active.hackerOne && active.hackerOne.submissionState !== 'open') return { allowed: false, reason: 'Imported program is not open for submissions', target: repo }
       return { allowed: true, reason, target: repo }
     }
-    if (['security.code.list', 'security.code.search', 'security.code.read'].includes(tool)) return { allowed: true, reason: `Local read of ${repo}`, target: repo, approval: false }
+    if (['security.code.list', 'security.code.search', 'security.code.read', 'security.code.draftFinding'].includes(tool)) return { allowed: true, reason: `Local read of ${repo}`, target: repo, approval: false }
     return { allowed: false, reason: `Unknown code tool: ${tool}`, target: repo }
   }
 

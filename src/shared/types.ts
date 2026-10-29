@@ -165,6 +165,8 @@ export interface AgentState {
   error?: string
   /** Completed task text, retained with the latest state for UI reopening. */
   reply?: string
+  /** The action waiting for the user's approval, shown in chat with Approve / Deny. */
+  pendingApproval?: { id: string; tool: string; label: string }
 }
 
 export interface ChatMessage {
@@ -175,6 +177,8 @@ export interface ChatMessage {
   timestamp: number
   actionIds?: string[]
   turnId?: string
+  /** An answer written from what Goga's tools did, not only from chat. */
+  fromTools?: boolean
 }
 
 export interface LogEntry {
@@ -209,6 +213,8 @@ export interface AppSettings {
   visionModelName: string
   // Ollama embedding model for semantic memory recall ('' disables, keyword match only)
   embeddingModelName: string
+  // Ollama model that plans security code reviews ('' uses the local brain)
+  reviewModelName: string
   agentMaxSteps: number
   primaryModel: 'local' | 'ollama'
   voiceEnabled: boolean
@@ -353,6 +359,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelName: 'llama3',
   visionModelName: 'qwen3-vl:4b',
   embeddingModelName: 'nomic-embed-text',
+  reviewModelName: '',
   agentMaxSteps: 20,
   voiceEnabled: true,
   voiceName: '',

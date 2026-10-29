@@ -122,6 +122,18 @@ export class SecurityCodeService {
     return { matches, truncated: false }
   }
 
+  /** The line `quote` comes from, checked against the copy: a finding must point at real code. */
+  quoteAt(workspaceId: string, repo: string, file: string, line: number, quote: string): { file: string; line: number; text: string } {
+    const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
+    const want = squash(String(quote ?? ''))
+    if (want.length < 4) throw new Error('Quote the suspicious code exactly, as security.code.read showed it.')
+    const { file: name, lines } = this.read(workspaceId, repo, file, Math.max(1, Number(line) - 3), 7)
+    const hit = lines.split('\n').map(l => ({ n: Number(l.slice(0, l.indexOf(':'))), text: l.slice(l.indexOf(':') + 2) }))
+      .find(l => squash(l.text).includes(want) || (want.includes(squash(l.text)) && squash(l.text).length >= 8))
+    if (!hit) throw new Error(`${name} has no line near ${line} that says "${want.slice(0, 80)}". Read it again with security.code.read and quote what is really there.`)
+    return { file: name, line: hit.n, text: hit.text.trim() }
+  }
+
   read(workspaceId: string, repo: string, file: string, startLine = 1, lineCount = MAX_READ_LINES): { file: string; lines: string; totalLines: number } {
     const folder = this.folder(workspaceId, repo)
     const target = insideRepo(folder, file)

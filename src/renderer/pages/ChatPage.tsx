@@ -222,6 +222,15 @@ export default function ChatPage() {
               <button onClick={() => { window.goga.invoke('agent:stop'); setLoading(false) }} style={{ ...S.miniBtn, color: 'var(--danger)' }}>⏹</button>
             </div>
           </div>
+          {agentState?.pendingApproval && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: '1px solid #2a2040', fontSize: 12 }}>
+              <span style={{ flex: 1, color: 'var(--text)' }}>
+                Goga wants to run <code>{agentState.pendingApproval.tool}</code>: {agentState.pendingApproval.label}
+              </span>
+              <button onClick={() => window.goga.invoke('action:approve', agentState.pendingApproval!.id)} style={{ ...S.miniBtn, color: '#00ffcc' }}>Approve</button>
+              <button onClick={() => window.goga.invoke('action:reject', agentState.pendingApproval!.id)} style={{ ...S.miniBtn, color: 'var(--danger)' }}>Deny</button>
+            </div>
+          )}
           {showSteps && (
             <div style={S.stepList}>
               {agentSteps.map((step, i) => (

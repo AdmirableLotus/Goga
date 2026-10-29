@@ -16,6 +16,7 @@ import { SecurityWorkspaceService } from '../securityWorkspace'
 import { AuthorizationService } from '../authorization'
 import { SecurityCodeService, githubRepo, insideRepo, repoFolder } from '../securityCode'
 import { looksLikeAgentTask, plannerOffers } from '../agentRouting'
+import { codeRoot, groundSecurityReply, unknownNames } from '../securityGrounding'
 
 const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
 const scopes = [
@@ -120,6 +121,43 @@ describe('code review in a security workspace', () => {
     for (const ask of ['please review https://github.com/omacom/omarchy for the bounty', 'check the omarchy code for the bug bounty', 'audit the omarchy repository'])
       expect(looksLikeAgentTask(ask)).toBe(true)
     expect(looksLikeAgentTask('what is a bug bounty?')).toBe(false)
+  })
+
+  it('flags files, endpoints and progress the reply invents, and leaves real ones alone', async () => {
+    const { security, ws } = await workspace()
+    vi.spyOn(SecurityWorkspaceService, 'getInstance').mockReturnValue(security)
+    const folder = repoFolder(codeRoot(), ws.id, 'https://github.com/omacom/omarchy')
+    fs.mkdirSync(path.join(folder, 'install/helpers'), { recursive: true })
+    fs.mkdirSync(path.join(folder, 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(folder, 'install/helpers/logging.sh'), 'chmod 666 "$LOG"\n')
+    fs.writeFileSync(path.join(folder, 'bin/omarchy-dns'), '#!/bin/bash\n')
+
+    // The report the chat brain made up for Omarchy, a repository of shell scripts.
+    const invented = groundSecurityReply('I found a potential IDOR in the `handlers.go` file: POST to /api/profile/update with user_id 102.', false)
+    expect(invented).toContain('`handlers.go`')
+    expect(invented).toContain('`/api/profile/update`')
+    expect(invented).toContain('not from Goga\'s tools')
+
+    const real = 'install/helpers/logging.sh:1 makes the log world-writable; bin/omarchy-dns runs as root. See logging.sh.'
+    expect(groundSecurityReply(real, true)).toBe(real)
+    expect(unknownNames('bin/omarchy-nope and https://github.com/omacom/omarchy', folder)).toEqual(['bin/omarchy-nope'])
+
+    security.setActive(null)
+    expect(groundSecurityReply('I found handlers.go', false)).toBe('I found handlers.go')
+  })
+
+  it('saves a finding only when its quote is really at that file and line', async () => {
+    const { ws } = await workspace()
+    const root = path.join(boundary.dir, 'security-code'), repo = 'https://github.com/omacom/omarchy'
+    const folder = repoFolder(root, ws.id, repo)
+    fs.mkdirSync(path.join(folder, 'install/helpers'), { recursive: true })
+    fs.writeFileSync(path.join(folder, 'install/helpers/logging.sh'), 'mkdir -p "$dir"\ntouch "$LOG"\nchmod 666 "$LOG" 2>/dev/null || true\n')
+    const code = new SecurityCodeService(root)
+    expect(code.quoteAt(ws.id, repo, 'install/helpers/logging.sh', 3, 'chmod 666 "$LOG"')).toEqual({ file: 'install/helpers/logging.sh', line: 3, text: 'chmod 666 "$LOG" 2>/dev/null || true' })
+    expect(code.quoteAt(ws.id, repo, 'install/helpers/logging.sh', 2, 'chmod   666 "$LOG"').line).toBe(3)   // near, spacing aside
+    expect(() => code.quoteAt(ws.id, repo, 'install/helpers/logging.sh', 3, 'func UpdateProfile(')).toThrow('no line near 3')
+    expect(() => code.quoteAt(ws.id, repo, 'handlers.go', 1, 'func UpdateProfile(')).toThrow('Not a file')
+    expect(() => code.quoteAt(ws.id, repo, 'install/helpers/logging.sh', 3, 'x')).toThrow('Quote')
   })
 
   it('shows the planner only the security tools while a workspace is active', () => {

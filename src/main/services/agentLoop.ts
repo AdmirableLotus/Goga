@@ -3,11 +3,14 @@ import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
 import { FLUX_TASK, TRADING_TASK, plannerOffers } from './agentRouting'
 
-const SECURITY_HINT = '- Security workspace: only security.code.* and web.fetch can run. For a source-code asset: security.code.fetch once (it needs approval), then security.code.search for risky patterns (sudo rules, chmod, eval, curl | sh, temp files, unquoted variables) and security.code.read to check each match. Never run, build or install the code. Report suspected bugs with file:line and why they matter; the user decides and submits.'
+const SECURITY_HINT = `- Security workspace: only security.code.* and web.fetch can run. For a source-code asset: security.code.fetch once (it needs approval; skip it if a step already fetched), then go through these searches in order with security.code.search, reading each match with security.code.read before judging it:
+  1. root without a password: "NOPASSWD|sudoers"  2. files anyone can change: "chmod (-R )?(777|666|o\\+w|a\\+w)|install -m ?0?7?77"  3. code run from text: "eval |bash -c|sh -c"  4. downloads run unchecked: "curl[^|]*\\| *(sudo )?(ba)?sh|wget[^|]*\\| *sh"  5. temporary files: "/tmp/|mktemp"  6. secrets in code: "(api|secret|token|passw)[a-z_]*=[\\"']"
+  A bug only counts if someone with less access gains access they did not have. For each real suspect, save it with security.code.draftFinding (exact quote, file, line, who gains what). Never run, build or install the code. In the reply list only files and lines the tools showed; say plainly when nothing qualifies.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before suggesting a trade, analyze it and give entry, stop (from ATR) and target. Practice trades only through trading.order, with a stop and the reason. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
 import { SECURITY_TASK } from './securityScope'
+import { groundSecurityReply } from './securityGrounding'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
 import { BrainService } from './brain'
@@ -103,6 +106,18 @@ export class AgentLoop {
       this.pendingApprovals.delete(actionId)
       pending.resolve(approved)
     }
+  }
+
+  /** Answer the waiting approval from chat ("approve" / "deny"), like its buttons do. */
+  answerPendingApproval(approved: boolean): { tool: string; label: string } | null {
+    const pending = this.state.pendingApproval
+    if (!pending || !this.pendingApprovals.has(pending.id)) return null
+    const store = ActionStore.getInstance()
+    try { if (approved) store.approve(pending.id); else store.reject(pending.id) } catch { /* not in the store: the gate still decides */ }
+    getMainWindow()?.webContents.send('action:update', (() => { try { return store.get(pending.id) } catch { return undefined } })())
+    this.log.info(`Action ${approved ? 'approved' : 'rejected'} in chat: ${pending.label}`)
+    this.resolveApproval(pending.id, approved)
+    return pending
   }
 
   /** Publish dedicated read-only work through the same state/step/Stop contracts. */
@@ -490,7 +505,7 @@ export class AgentLoop {
       this.setState({ status: 'error', error: 'task_timeout' })
     }
     if (this.state.status === 'running') this.setState({ status: 'done' })
-    return finalReply
+    return groundSecurityReply(finalReply, true)
   }
 
   // ── LLM PLANNING ───────────────────────────────────────────────────────────
@@ -579,7 +594,14 @@ What is the next single action to take?`
         model: this.llama.isReady() ? this.llama.getState().modelPath : settings.modelName,
         systemInstruction: systemPrompt, userInstruction: userContent
       })
-      if (this.llama.isReady()) {
+      const reviewModel = securityMode ? settings.reviewModelName : ''
+      const reviewed = reviewModel ? await this.ollama.chatWith(reviewModel, messages, undefined, signal, { num_ctx: 8192 }).catch(err => {
+        this.log.warn(`Agent: code review model ${reviewModel} failed (${err instanceof Error ? err.message : String(err)}) — using the local brain`)
+        return null
+      }) : null
+      if (reviewed !== null) {
+        raw = reviewed
+      } else if (this.llama.isReady()) {
         raw = await this.llama.chat(messages as { role: 'system' | 'user' | 'assistant'; content: string }[], undefined, signal)
       } else {
         // Try native tool calls first (supported by llama3.1+, qwen2.5, etc.)
@@ -808,7 +830,7 @@ Respond with ONLY: {"success": true/false, "reason": "brief explanation"}`
       const actionId = nanoid()
       const win = getMainWindow()
 
-      this.setState({ status: 'waiting-approval' })
+      this.setState({ status: 'waiting-approval', pendingApproval: { id: actionId, tool: call.tool, label: call.thought.slice(0, 160) } })
 
       const action = {
         id: actionId,
@@ -826,13 +848,14 @@ Respond with ONLY: {"success": true/false, "reason": "brief explanation"}`
       win?.webContents.send('action:approval-required', action)
 
       this.pendingApprovals.set(actionId, { resolve: (approved) => {
-        this.setState({ status: 'running' })
+        this.setState({ status: 'running', pendingApproval: undefined })
         resolve(approved)
       }})
 
       // Auto-reject if aborted while waiting
       signal.addEventListener('abort', () => {
         this.pendingApprovals.delete(actionId)
+        this.state = { ...this.state, pendingApproval: undefined }
         resolve(false)
       }, { once: true })
     })

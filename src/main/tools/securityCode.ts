@@ -1,12 +1,11 @@
-import path from 'path'
-import { app } from 'electron'
 import { ToolRegistry } from './registry'
 import { SecurityCodeService } from '../services/securityCode'
 import { SecurityWorkspaceService } from '../services/securityWorkspace'
+import { codeRoot } from '../services/securityGrounding'
 
 const reg = ToolRegistry.getInstance()
 let code: SecurityCodeService | null = null
-const service = () => code ??= new SecurityCodeService(path.join(app.getPath('userData'), 'security-code'))
+const service = () => code ??= new SecurityCodeService(codeRoot())
 
 const failure = (err: unknown) => ({ success: false, error: err instanceof Error ? err.message : String(err) })
 
@@ -68,5 +67,40 @@ reg.register({
   try {
     const { workspaceId, repo } = target(p)
     return { success: true, data: service().read(workspaceId, repo, String(p.file ?? ''), Number(p.startLine ?? 1), Number(p.lines ?? 200)) }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'security.code.draftFinding',
+  description: 'Security review: save a suspicious line as an UNVERIFIED draft in the workspace Findings, after checking the quote is really at that file and line. Use only for code you read with security.code.read.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Short title, e.g. "Install log is world-writable".' },
+      file: { type: 'string', description: 'Path inside the repository.' },
+      line: { type: 'number', description: 'Line number from security.code.read.' },
+      quote: { type: 'string', description: 'The suspicious code, copied exactly.' },
+      why: { type: 'string', description: 'Who could exploit it and what they would gain that they did not have.' },
+      severity: { type: 'string', enum: ['info', 'low', 'medium', 'high', 'critical'], description: 'Your guess; the program decides.' },
+      repo: repoParam,
+    },
+    required: ['title', 'file', 'line', 'quote', 'why'],
+  },
+  riskLevel: 'low', reversible: true, category: 'filesystem',
+}, async (p) => {
+  try {
+    const { workspaceId, repo } = target(p)
+    const at = service().quoteAt(workspaceId, repo, String(p.file ?? ''), Number(p.line), String(p.quote ?? ''))
+    const severity = ['info', 'low', 'medium', 'high', 'critical'].includes(String(p.severity)) ? p.severity as 'info' : 'low'
+    const finding = SecurityWorkspaceService.getInstance().addFinding(workspaceId, {
+      title: `[UNVERIFIED] ${String(p.title ?? '').slice(0, 120)}`,
+      severity,
+      target: `${repo}/blob/HEAD/${at.file}#L${at.line}`,
+      description: `${String(p.why ?? '').slice(0, 2000)}\n\nCode (${at.file}:${at.line}):\n${at.text}\n\nFound by Goga's code review. Not verified: reproduce it in a test machine and write a working proof-of-concept before reporting.`,
+      steps: '',
+      evidenceIds: [],
+      status: 'draft',
+    })
+    return { success: true, data: { saved: finding.title, at: `${at.file}:${at.line}`, note: 'Saved as an unverified draft in Findings. The user must reproduce it.' } }
   } catch (err) { return failure(err) }
 })

@@ -217,6 +217,14 @@ export default function SettingsPage() {
               </select>
             : <input value={settings.visionModelName} onChange={e => update({ visionModelName: e.target.value })} style={{ width: 200 }} placeholder="qwen3-vl:4b" />}
         </Field>
+        <Field label="Code review model (Ollama)">
+          <select value={settings.reviewModelName ?? ''} onChange={e => update({ reviewModelName: e.target.value })} style={styles.select}>
+            <option value="">Local brain (default)</option>
+            {settings.reviewModelName && !ollamaModels.some(m => sameModel(m, settings.reviewModelName)) && <option value={settings.reviewModelName}>{settings.reviewModelName} (not installed)</option>}
+            {ollamaModels.filter(m => !/vl|llava|vision|embed/i.test(m)).map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Plans security code reviews. A larger coding model finds more, but shares the 10 GB graphics card with the local brain and runs slower if it does not fit.</div>
+        </Field>
         <Field label="Memory model (Ollama)">
           {ollamaModels.length > 0
             ? <select value={settings.embeddingModelName} onChange={e => update({ embeddingModelName: e.target.value })} style={styles.select}>
