@@ -15,7 +15,7 @@ import { HackerOneService } from '../hackerOne'
 import { SecurityWorkspaceService } from '../securityWorkspace'
 import { AuthorizationService } from '../authorization'
 import { SecurityCodeService, githubRepo, insideRepo, repoFolder } from '../securityCode'
-import { plannerOffers } from '../agentRouting'
+import { looksLikeAgentTask, plannerOffers } from '../agentRouting'
 
 const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
 const scopes = [
@@ -48,7 +48,9 @@ describe('repository addresses and paths', () => {
   it('accepts only GitHub repository addresses', () => {
     expect(githubRepo('https://github.com/omacom/omarchy')).toBe('https://github.com/omacom/omarchy')
     expect(githubRepo('https://github.com/Omacom/Omarchy.git/')).toBe('https://github.com/omacom/omarchy')
-    for (const bad of ['http://github.com/omacom/omarchy', 'https://github.com/omacom/omarchy/tree/main', 'https://evil.test/omacom/omarchy', 'https://github.com/omacom/..', 'git@github.com:omacom/omarchy.git', 42]) expect(githubRepo(bad)).toBeNull()
+    for (const loose of ['github.com/omacom/omarchy', 'omacom/omarchy', '"https://www.github.com/omacom/omarchy".', 'https://github.com/omacom/omarchy/tree/main/bin', 'http://github.com/omacom/omarchy'])
+      expect(githubRepo(loose)).toBe('https://github.com/omacom/omarchy')
+    for (const bad of ['https://evil.test/omacom/omarchy', 'https://github.com.evil.test/omacom/omarchy', 'https://github.com/omacom/..', 'git@github.com:omacom/omarchy.git', 'omarchy', 'https://github.com/omacom/omarchy/issues', 42]) expect(githubRepo(bad)).toBeNull()
   })
 
   it('keeps reads inside the copy and out of .git', () => {
@@ -74,11 +76,25 @@ describe('code review in a security workspace', () => {
     expect(security.enforceDispatch('security.code.search', { pattern: 'sudo' }, ws.id)).toBeNull()
   })
 
+  it('tells the chat brain what is really done, so it cannot claim progress', async () => {
+    const unreviewed = await workspace(false)
+    const before = unreviewed.security.chatStatus()!
+    expect(before).toContain('Save reviewed checklist')
+    expect(before).toContain('never describe a project')
+    const { security } = await workspace()
+    expect(security.chatStatus()).toContain('policy review is done')
+    security.setActive(null)
+    expect(security.chatStatus()).toBeNull()
+  })
+
   it('refuses repositories that are not eligible source-code assets', async () => {
     const { security, ws } = await workspace()
-    for (const repo of ['https://github.com/omacom/old', 'https://github.com/someone/else', 'https://github.com/omacom/omarchy/tree/main'])
+    for (const repo of ['https://github.com/omacom/old', 'https://github.com/someone/else', 'omacom/omarchy-fork'])
       expect(security.evaluateAction('security.code.read', { repo, file: 'x' }, ws.id).allowed).toBe(false)
     expect(security.codeRepos(ws)).toEqual(['https://github.com/omacom/omarchy'])
+    // Something that is not a repository address means the only one in scope.
+    for (const odd of ['.', 'omarchy', 'bin', 'https://evil.test/x/y'])
+      expect(security.codeRepo(ws, odd).repo).toBe('https://github.com/omacom/omarchy')
     // A source-code asset never makes requests to its host in scope.
     expect(security.checkScope(ws.id, 'https://github.com/omacom/omarchy').inScope).toBe(false)
   })
@@ -98,6 +114,12 @@ describe('code review in a security workspace', () => {
     expect(() => code.read(ws.id, repo, '../../goga-security-workspaces.json')).toThrow('Not a file')
     expect(() => code.read(ws.id, repo, 'blob.bin')).toThrow('binary')
     expect(() => new SecurityCodeService(root).list('other', repo)).toThrow('Fetch it first')
+  })
+
+  it('sends bounty and repository reviews to the tools, not to chat', () => {
+    for (const ask of ['please review https://github.com/omacom/omarchy for the bounty', 'check the omarchy code for the bug bounty', 'audit the omarchy repository'])
+      expect(looksLikeAgentTask(ask)).toBe(true)
+    expect(looksLikeAgentTask('what is a bug bounty?')).toBe(false)
   })
 
   it('shows the planner only the security tools while a workspace is active', () => {

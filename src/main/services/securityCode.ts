@@ -5,7 +5,9 @@ import { execFile } from 'child_process'
 // Read-only review of a source-code asset: Goga copies the repository and reads
 // it, and never runs, builds or installs anything from it.
 
-const GITHUB_REPO = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/
+// Loose on the spelling a model writes ("github.com/o/r", "o/r", ".git", "/tree/main");
+// the result must still equal an in-scope repository exactly.
+const GITHUB_REPO = /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/)?([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?(?:\/(?:tree|blob)\/[^\s]*)?\/?$/
 const MAX_FILE_BYTES = 1_000_000
 const MAX_MATCHES = 60
 const MAX_LINE_CHARS = 300
@@ -15,7 +17,7 @@ const MAX_FILES = 50_000
 /** "https://github.com/owner/repo" for a GitHub repository address, else null. */
 export function githubRepo(input: unknown): string | null {
   if (typeof input !== 'string') return null
-  const m = input.trim().match(GITHUB_REPO)
+  const m = input.trim().replace(/^[<"'`(]+|[>"'`).,]+$/g, '').match(GITHUB_REPO)
   if (!m || m[2] === '.' || m[2] === '..') return null
   return `https://github.com/${m[1]}/${m[2]}`.toLowerCase()
 }

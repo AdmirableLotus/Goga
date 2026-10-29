@@ -24,6 +24,9 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(organize|sort|move|rename|delete)\b.{0,30}\b(files?|folders?)\b/i,
   /\b(fix|debug|edit|update|modify)\b.{0,40}\b(code|file|project)\b/i,
   /\b(review|audit|read|go through|look through)\b.{0,40}\b(code|repo|repository|source|scripts?)\b/i,
+  // Bounty and code-review requests need the tools; answered in chat, the small brain invents what it "saw".
+  /\b(review|audit|check|scan|analy[sz]e|inspect|go through|look (?:at|through|into))\b.{0,80}\bgithub\.com\/[\w.-]+\/[\w.-]+/i,
+  /\b(review|audit|check|test|hunt|look|work)\b.{0,80}\b(?:bug\s*)?bount(?:y|ies)\b/i,
   /\b(help|assist).{0,30}\b(bounty|bug\s*bounty|pentest|hack|ctf|exploit|vuln|recon|security)\b/i,
   /\b(help me with|work on|complete|finish|do)\b.{0,60}\b(task|project|bounty|workflow)\b/i,
   /\b(run|execute|install|build|compile)\b/i,

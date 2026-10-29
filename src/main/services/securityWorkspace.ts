@@ -9,6 +9,8 @@ import { policyFingerprint } from './securityGuide'
 import { githubRepo } from './securityCode'
 import { POLICY_TOPICS } from '../../shared/securityGuide'
 
+const POLICY_REVIEW_NEEDED = 'The program policy review is not finished. In the Security tab, open Program policy review, click "Refresh policy and scope", fill in all 7 checklist topics (a quote from the policy, or "not specified"), then click "Save reviewed checklist". It expires after 24 hours.'
+
 interface WorkspaceStore {
   workspaces: SecurityWorkspace[]
   activeWorkspaceId: string | null
@@ -165,12 +167,27 @@ export class SecurityWorkspaceService {
     return ws
   }
 
+  /** What the chat brain must know in security mode, so it does not invent progress it has not made. */
+  chatStatus(): string | null {
+    const ws = this.getActive()
+    if (!ws) return null
+    const reviewed = !ws.hackerOne || (!!ws.policyReview?.reviewedAt && Date.now() - ws.policyReview.refreshedAt <= 86_400_000 && ws.policyReview.fingerprint === policyFingerprint(ws))
+    const repos = this.codeRepos(ws)
+    return [
+      `SECURITY MODE is on: workspace "${ws.program}". In scope: ${ws.authorizedAssets.join(', ') || 'nothing yet'}.`,
+      reviewed ? 'The program policy review is done.' : `Not ready to test: ${POLICY_REVIEW_NEEDED}`,
+      repos.length ? `In-scope source code (${repos.join(', ')}) is reviewed by copying it with security.code.fetch (approved in the approval prompt or the Approvals tab, never by typing "approved" in chat), then searching and reading the copy. Nothing from it is run.` : '',
+      `In security mode you cannot use the browser, a terminal, the keyboard or mouse, or download software. You have not read any code unless a tool result in this conversation shows it: never describe a project's language, files, endpoints or bugs from memory, and never say you are fetching, cloning or opening something. To start the review, tell the user to ask, for example: "review the repository for the bounty".`,
+    ].filter(Boolean).join('\n')
+  }
+
   /** The GitHub repositories this workspace lists as eligible source-code assets. */
   codeRepos(ws: SecurityWorkspace): string[] {
     const assets = ws.hackerOne
       ? ws.hackerOne.scopes.filter(s => s.eligible && s.type === 'SOURCE_CODE').map(s => s.identifier)
       : ws.authorizedAssets.filter(a => !ws.excludedAssets.some(x => githubRepo(x) === githubRepo(a)))
-    return [...new Set(assets.map(githubRepo).filter((r): r is string => !!r))]
+    // A scope entry is a repository only when it names github.com itself.
+    return [...new Set(assets.filter(a => /^(https?:\/\/)?(www\.)?github\.com\//i.test(a.trim())).map(githubRepo).filter((r): r is string => !!r))]
   }
 
   /** The repository a code tool works on: the one named, or the only one in scope. */
@@ -181,7 +198,9 @@ export class SecurityWorkspaceService {
         : { repo: null, reason: repos.length ? `Name the repository: ${repos.join(', ')}` : 'This workspace has no GitHub source-code asset in scope' }
     }
     const repo = githubRepo(requested)
-    if (!repo) return { repo: null, reason: 'Give the repository as https://github.com/owner/name' }
+    // Not a repository address at all (a folder name, "."): the tools can only ever use the one in scope.
+    if (!repo && repos.length === 1) return { repo: repos[0], reason: `Eligible source-code asset: ${repos[0]}` }
+    if (!repo) return { repo: null, reason: `"${String(requested).slice(0, 80)}" is not a repository. Give it as https://github.com/owner/name: ${repos.join(', ') || 'none in scope'}` }
     return repos.includes(repo) ? { repo, reason: `Eligible source-code asset: ${repo}` }
       : { repo: null, reason: `${repo} is not an eligible source-code asset in this workspace` }
   }
@@ -203,7 +222,7 @@ export class SecurityWorkspaceService {
     const { repo, reason } = this.codeRepo(active, params.repo)
     if (!repo) return { allowed: false, reason, target: '' }
     if (tool === 'security.code.fetch') {
-      if (active.hackerOne && (!active.policyReview?.reviewedAt || Date.now() - active.policyReview.refreshedAt > 86_400_000 || active.policyReview.fingerprint !== policyFingerprint(active))) return { allowed: false, reason: 'Refresh and review program policy before fetching the code (review expires after 24 hours)', target: repo }
+      if (active.hackerOne && (!active.policyReview?.reviewedAt || Date.now() - active.policyReview.refreshedAt > 86_400_000 || active.policyReview.fingerprint !== policyFingerprint(active))) return { allowed: false, reason: POLICY_REVIEW_NEEDED, target: repo }
       if (active.hackerOne && active.hackerOne.submissionState !== 'open') return { allowed: false, reason: 'Imported program is not open for submissions', target: repo }
       return { allowed: true, reason, target: repo }
     }
