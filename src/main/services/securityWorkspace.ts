@@ -136,6 +136,16 @@ export class SecurityWorkspaceService {
 
   invalidateApprovals() { this.approvalEpoch++ }
 
+  /** Clear a practice workspace's findings and audit log for a fresh attempt (lab only). */
+  resetTraining(id: string) {
+    const ws = this.get(id)
+    if (!ws || !ws.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a))) return
+    ws.findings = []
+    ws.auditLog = []
+    ws.updatedAt = Date.now()
+    this.save()
+  }
+
   beginPolicyRefresh(id: string) {
     const ws = this.get(id)
     if (!ws?.hackerOne) throw new Error('Imported workspace required')

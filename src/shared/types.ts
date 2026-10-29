@@ -349,7 +349,7 @@ export const MAX_PERSONALITY_CHARS = 1500
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   requireApprovalForAll: false,
-  autoApproveBelow: 'medium',
+  autoApproveBelow: 'critical',   // do tasks without nagging; only delete/kill/shell still confirm
   logRetentionDays: 30,
   localModelPath: 'E:\\Goga-Models\\hf_bartowski_Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf',
   localModelContextSize: 4096,

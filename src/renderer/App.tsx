@@ -17,17 +17,13 @@ import { GogaVisualProvider } from './context/GogaVisualContext'
 
 type Tab = 'markets' | 'developer' | 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
 
+// Chat-first: Goga switches what he does from the message. Advanced panels stay in code
+// but off the bar to keep the interface simple.
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'markets', label: 'Markets' },
-  { id: 'developer', label: 'Developer' },
   { id: 'chat',      label: '💬 Chat' },
-  { id: 'mission',   label: '⚡ Mission' },
-  { id: 'desktop',   label: '🖥 Desktop' },
-  { id: 'activity',  label: '📋 Activity' },
-  { id: 'approvals', label: '✅ Approvals' },
-  { id: 'memory',    label: '🧠 Memory' },
   { id: 'library',   label: '📚 Library' },
   { id: 'security',  label: '🔐 Security' },
+  { id: 'memory',    label: '🧠 Memory' },
   { id: 'settings',  label: '⚙️ Settings' },
 ]
 

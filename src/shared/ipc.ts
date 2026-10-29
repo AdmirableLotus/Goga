@@ -78,6 +78,8 @@ export interface MainHandlers {
   'library:list': () => Promise<import('./types').BookMeta[]>
   'library:delete': (bookId: string) => Promise<void>
   'library:search': (query: string, topK?: number) => Promise<import('./types').BookChunk[]>
+  'library:listRepo': (repoUrl: string) => Promise<import('../main/services/webLibrary').RepoDoc[]>
+  'library:importUrl': (url: string) => Promise<import('./types').BookMeta>
 
   // Brain
   'brain:facts': () => Promise<import('./types').GogaFact[]>

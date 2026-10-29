@@ -13,6 +13,15 @@ export default function LibraryPage() {
   const [books, setBooks] = useState<BookMeta[]>([])
   const [ingesting, setIngesting] = useState(false)
   const [error, setError] = useState('')
+  const [url, setUrl] = useState('')
+
+  const addFromUrl = async () => {
+    if (!url.trim()) return
+    setIngesting(true); setError('')
+    try { await window.goga.invoke('library:importUrl', url.trim()); setUrl(''); await load() }
+    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setIngesting(false) }
+  }
 
   const load = async () => setBooks(await window.goga.invoke('library:list'))
   useEffect(() => { load() }, [])
@@ -46,6 +55,12 @@ export default function LibraryPage() {
             {ingesting ? '⏳ Reading…' : '+ Add Book'}
           </button>
         </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+        <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addFromUrl() }}
+          placeholder="…or paste a direct link to a PDF / EPUB / TXT" style={{ flex: 1, padding: '6px 10px', fontSize: 13 }} disabled={ingesting} />
+        <button onClick={addFromUrl} disabled={ingesting || !url.trim()} style={styles.addBtn}>Read from web</button>
       </div>
 
       {books.length === 0 ? (

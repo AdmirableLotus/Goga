@@ -36,6 +36,11 @@ export default function ChatPage() {
 
   const inConversation = hasConversation(messages)
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
+  const [secWorkspace, setSecWorkspace] = useState<string | null>(null)
+  useEffect(() => {
+    const poll = () => { try { window.goga.invoke('security:getActive').then(ws => setSecWorkspace(ws ? ws.program : null)).catch(() => {}) } catch { /* ignore */ } }
+    poll(); const t = setInterval(poll, 2000); return () => clearInterval(t)
+  }, [])
 
   // Derive a single streaming text for display: the most-recently-active turn
   // that has not yet been finalised. In practice at most one turn streams at a time.
@@ -195,6 +200,15 @@ export default function ChatPage() {
 
   return (
     <div style={S.page}>
+
+      {/* Security mode banner — makes the mode visible and one click to leave */}
+      {secWorkspace && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px', background: 'rgba(255,170,0,0.12)', borderBottom: '1px solid rgba(255,170,0,0.4)', fontSize: 12 }}>
+          <span style={{ color: '#ffb000', fontWeight: 600 }}>🔒 Security mode: {secWorkspace}</span>
+          <span style={{ color: 'var(--text-muted)' }}>Only scoped security tools run; books and normal tasks are paused.</span>
+          <button onClick={async () => { await window.goga.invoke('security:setActive', null); try { await window.goga.invoke('security:labStop') } catch { /* ignore */ } setSecWorkspace(null) }} style={{ marginLeft: 'auto', ...S.miniBtn }}>Exit security mode</button>
+        </div>
+      )}
 
       {/* Triangle */}
       <div style={{ ...S.coreWrap, height: coreH, transition: 'height 0.6s cubic-bezier(0.4,0,0.2,1)' }}>

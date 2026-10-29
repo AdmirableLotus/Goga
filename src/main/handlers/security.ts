@@ -68,6 +68,7 @@ export function registerSecurityHandlers(ipcMain: IpcMain) {
     let ws = svc.list().find(w => w.program === LAB_PROGRAM)
     if (!ws) ws = svc.create({ program: LAB_PROGRAM, programUrl: url, authorizedAssets: [url], excludedAssets: [], allowedTechniques: ['read-only GET as a test account'], prohibitedTechniques: [], rateLimit: '', programRules: `Local practice app on ${url}. Test accounts: alice, bob (synthetic). Find whether one account can read another's data. Read-only.`, testNotes: 'Practice only. Nothing here is real.' })
     emergencyStop('Practice lab activated')
+    svc.resetTraining(ws.id)   // fresh scoreboard each start
     svc.setActive(ws.id)
     return labStatus(ws.id)
   })
@@ -87,7 +88,7 @@ function labStatus(workspaceId?: string) {
   const findings = ws?.findings ?? []
   const notesBugFound = findings.some(f => /\/api\/notes\/\d+/.test(f.target))
   const falsePositive = findings.some(f => /\/api\/profiles\//.test(f.target))
-  const outOfScopeAttempts = (ws?.auditLog ?? []).filter(e => e.inScope === false).length
+  const outOfScopeAttempts = (ws?.auditLog ?? []).filter(e => typeof e.result === 'string' && e.result.startsWith('blocked')).length
   return {
     running: practiceLab().running,
     baseUrl: practiceLab().baseUrl,

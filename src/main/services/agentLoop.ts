@@ -1,12 +1,19 @@
 import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
-import { FLUX_TASK, TRADING_TASK, plannerOffers } from './agentRouting'
+import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers } from './agentRouting'
 
 const SECURITY_HINT = `- Security workspace: only security.code.* and web.fetch can run. For a source-code asset: security.code.fetch once (it needs approval; skip it if a step already fetched), then go through these searches in order with security.code.search, reading each match with security.code.read before judging it:
   1. root without a password: "NOPASSWD|sudoers"  2. files anyone can change: "chmod (-R )?(777|666|o\\+w|a\\+w)|install -m ?0?7?77"  3. code run from text: "eval |bash -c|sh -c"  4. downloads run unchecked: "curl[^|]*\\| *(sudo )?(ba)?sh|wget[^|]*\\| *sh"  5. temporary files: "/tmp/|mktemp"  6. secrets in code: "(api|secret|token|passw)[a-z_]*=[\\"']"
   A bug only counts if someone with less access gains access they did not have. For each real suspect, save it with security.code.draftFinding (exact quote, file, line, who gains what). Never run, build or install the code. In the reply list only files and lines the tools showed; say plainly when nothing qualifies.`
-const LAB_HINT = `- Practice lab: only security.lab.* can run, against the local lab app. Steps: security.lab.request "/" to see the endpoints, then request pages as "alice" and as "bob" to learn normal behaviour (each should see only their own). When you suspect one account can read another's resource, confirm it with security.lab.verify (owner, other, path) — never judge from a single request. Only when it returns supported:true, save it with security.lab.report. Report only what the evidence shows; invent nothing.`
+const LAB_HINT = `- Practice lab: find whether one account can read another's data. Only security.lab.* runs. Use the exact paths the responses give you; never invent a path like "/alice". Follow these steps once each, in order, without repeating a step:
+  1. security.lab.request path "/api/notes" as "alice" — the response lists alice's notes, each with an "id" number (for example 101, 102). Write those ids down.
+  2. security.lab.request path "/api/notes" as "bob" — these are bob's ids. Do NOT request "/api/notes" again after this; you have the ids now.
+  3. This is the key step: take one of ALICE's ids from step 1 and request the single note at "/api/notes/<that id>" as "bob" (for example path "/api/notes/102" as "bob"). The body it returns is the real test. If bob gets HTTP 200 with alice's note text, that is the bug. You cannot "see" notes any other way — there is no screen to look at; the request body IS the note.
+  4. Confirm it: security.lab.verify path "/api/notes/<that id>", owner "alice", other "bob". owner and other must differ.
+  5. If verify returns supported:true, security.lab.report with that path, owner, other and the impact, then set done:true.
+  6. If supported:false, try the same with a bob id read by alice, then stop. Report only what the evidence shows.`
+const LIBRARY_HINT = `- Reading books/documents: to add one from the web, call library.import with a DIRECT https link ending in .pdf/.epub/.txt — never a github.com page link and never a hand-built URL. For a GitHub repo, call library.listRepo FIRST and use the exact "url" it returns for each file. Import only freely/legally shared documents (OWASP guides, author-released free books); skip copyrighted commercial books (tell the user to buy those). After importing, the user can ask about the book in chat.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before suggesting a trade, analyze it and give entry, stop (from ATR) and target. Practice trades only through trading.order, with a stop and the reason. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
 import { AuthorizationService } from './authorization'
 import { SecurityWorkspaceService } from './securityWorkspace'
@@ -187,6 +194,9 @@ export class AgentLoop {
 
     // Security context
     const activeWorkspace = SecurityWorkspaceService.getInstance().getActive()
+    // The tools the planner may use this turn — so a blocked step can name the allowed ones.
+    const labMode = !!activeWorkspace?.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a))
+    const offered = labMode ? (name: string) => name.startsWith('security.lab.') : plannerOffers(task, !!activeWorkspace)
     if (!activeWorkspace && SECURITY_TASK.test(task)) {
       this.setState({ status: 'error', error: 'security_workspace_required' })
       return 'Security testing requires an active program workspace with explicit in-scope targets. Import and review the program in Security first.'
@@ -205,6 +215,7 @@ export class AgentLoop {
     const completedSteps: AgentStep[] = []
     let finalReply = ''
     let recoveryAttempts = 0
+    let blockedCount = 0
 
     // ── Resilience guards (shared pure helpers) ─────────────────────────────
     const taskStart = Date.now()
@@ -311,7 +322,21 @@ export class AgentLoop {
         plannerDiagnostic('validation.authorization', { tool: toolCall.tool, ...decision })
 
         if (!decision.allowed) {
-          finalReply = `I can't do that: ${decision.reason}`
+          // A blocked tool used to end the whole turn. In a workspace the planner often just
+          // reached for a tool it cannot use here; tell it and let it try a valid one.
+          if (activeWorkspace && ++blockedCount <= 3) {
+            const offeredNames = this.registry.list().map(t => t.name).filter(offered)
+            const errorStep: AgentStep = {
+              index: i, thought: toolCall.thought, tool: toolCall.tool, params: toolCall.params,
+              result: { success: false, error: `${decision.reason} In this workspace use only: ${offeredNames.join(', ')}.` },
+              verified: false, timestamp: Date.now(),
+            }
+            completedSteps.push(errorStep); this.state.steps.push(errorStep); this.pushState()
+            continue
+          }
+          finalReply = activeWorkspace
+            ? `I kept reaching for tools that aren't allowed in this workspace and stopped. ${decision.reason}`
+            : `I can't do that: ${decision.reason}`
           this.setState({ status: 'done' })
           break
         }
@@ -439,12 +464,17 @@ export class AgentLoop {
         // Security audit log
         if (activeWorkspace) {
           const target = this.extractTarget(toolCall.params)
+          // The code and lab tools decide their own scope; checkScope on a bare path or repo
+          // name would wrongly read an allowed call as out of scope.
+          const inScope = toolCall.tool.startsWith('security.code.') || toolCall.tool.startsWith('security.lab.')
+            ? SecurityWorkspaceService.getInstance().evaluateAction(toolCall.tool, toolCall.params, activeWorkspace.id).allowed
+            : target ? SecurityWorkspaceService.getInstance().checkScope(activeWorkspace.id, target).inScope : true
           SecurityWorkspaceService.getInstance().logAudit(activeWorkspace.id, {
             tool: toolCall.tool,
             target,
             params: toolCall.params,
             result: result.success ? 'success' : (result.error ?? 'failed'),
-            inScope: target ? SecurityWorkspaceService.getInstance().checkScope(activeWorkspace.id, target).inScope : true
+            inScope
           })
         }
       }
@@ -523,8 +553,11 @@ export class AgentLoop {
     const facts = await this.brain.findRelevantFacts(task, 6)
     // Flux's 20 tools and the hardware tools only earn their room in the prompt for hardware tasks.
     const fluxTask = FLUX_TASK.test(task)
-    const securityMode = !!SecurityWorkspaceService.getInstance().getActive()
-    const offered = plannerOffers(task, securityMode)
+    const activeWs = SecurityWorkspaceService.getInstance().getActive()
+    const securityMode = !!activeWs
+    // The practice lab is loopback only: offer its tools alone, never web.fetch.
+    const labMode = !!activeWs?.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a))
+    const offered = labMode ? (name: string) => name.startsWith('security.lab.') : plannerOffers(task, securityMode)
     const toolSchema = this.registry.toPromptSummary(offered)
 
     // The newest result gets room to be used in the answer; older ones stay short to fit the context window.
@@ -553,7 +586,7 @@ RULES:
 - Only claim success in "reply" for what the step history shows actually worked. Never say a task is done when its key step failed.
 - To save text to a file, ALWAYS use notepad.saveText — never shell.execute or process.start for this purpose.
 - For the user's own open browser tab ("my tab", "this page", a site they are signed in to), bring that window to the front with computer.focus.window, then use vision.analyze. Do not open a new browser for it: Goga's own browser is not signed in.
-${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}${TRADING_TASK.test(task) ? `${TRADING_HINT}\n` : ''}${securityMode ? `${this.registry.has('security.lab.request') && SecurityWorkspaceService.getInstance().getActive()?.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a)) ? LAB_HINT : SECURITY_HINT}\n` : ''}
+${fluxTask && this.registry.has('flux.list_projects') ? `${FLUX_HINT}\n` : ''}${TRADING_TASK.test(task) ? `${TRADING_HINT}\n` : ''}${!securityMode && LIBRARY_TASK.test(task) ? `${LIBRARY_HINT}\n` : ''}${securityMode ? `${labMode ? LAB_HINT : SECURITY_HINT}\n` : ''}
 RESPONSE FORMAT (strict JSON):
 {"thought": "...", "tool": "tool.name", "params": {...}, "done": false}
 OR when complete:

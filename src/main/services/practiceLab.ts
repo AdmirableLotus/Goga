@@ -97,7 +97,8 @@ export class PracticeLab {
       if (owner !== user) return this.send(res, 403, { error: 'not your profile' })
       return this.send(res, 200, { id: Number(profile[1]), username: owner, email: `${owner}@lab.invalid` })
     }
-    return this.send(res, 404, { error: 'not found' })
+    // A wrong guess (e.g. /alice) gets pointed back at the real endpoints.
+    return this.send(res, 404, { error: 'not found', hint: 'Valid paths: GET /api/notes, GET /api/notes/<id>, GET /api/profiles/<id>.' })
   }
 }
 

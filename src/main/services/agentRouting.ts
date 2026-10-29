@@ -23,6 +23,8 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(find|search for|look up|research)\b/i,
   /\b(organize|sort|move|rename|delete)\b.{0,30}\b(files?|folders?)\b/i,
   /\b(fix|debug|edit|update|modify)\b.{0,40}\b(code|file|project)\b/i,
+  /\b(read|import|download|add|learn from|study)\b.{0,40}\b(book|pdf|epub|paper|guide)\b/i,
+  /\b(read|import|download|add|learn from)\b.{0,40}https?:\/\//i,
   /\b(review|audit|read|go through|look through)\b.{0,40}\b(code|repo|repository|source|scripts?)\b/i,
   // Bounty and code-review requests need the tools; answered in chat, the small brain invents what it "saw".
   /\b(review|audit|check|scan|analy[sz]e|inspect|go through|look (?:at|through|into))\b.{0,80}\bgithub\.com\/[\w.-]+\/[\w.-]+/i,
@@ -105,6 +107,7 @@ export function isReadOnlyObservationRequest(message: string): boolean {
 
 /** Whether a task is about Flux, so its tools are worth the room in the planner's prompt. */
 export const FLUX_TASK = /\bflux\b/i
+export const LIBRARY_TASK = /\b(book|pdf|epub|library|read\s+through|learn\s+from)\b|library\.(import|listRepo)|raw\.githubusercontent|github\.com\/[\w-]+\/[\w.-]+/i
 const HARDWARE_TASK = /\b(flux|schematik|kicad|arduino|esp32|pico|microcontroller|circuit|schematic|netlist|pcb|isfet|sensor board|breadboard|solder)\b/i
 const HARDWARE_TOOLS = /^(electronics\.|microcontroller\.|schematik\.)/
 // Hardware work goes through Flux, the part libraries, the board tools and the web, not by

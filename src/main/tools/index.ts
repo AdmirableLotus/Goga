@@ -12,6 +12,7 @@ import './notepadSave'
 import './electronics'
 import './microcontroller'
 import './trading'
+import './library'
 import './securityCode'
 import './securityLab'
 

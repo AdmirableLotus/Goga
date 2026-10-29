@@ -56,6 +56,7 @@ beforeEach(() => {
     },
     invoke: vi.fn((channel: string, text?: string) => {
       if (channel === 'agent:state') return Promise.resolve(agent.getState())
+      if (channel === 'security:getActive') return Promise.resolve(null)
       if (channel === 'logs:list') return Promise.resolve([])
       if (channel === 'voice:stopSpeaking') return Promise.resolve()
       if (channel === 'chat:send') {

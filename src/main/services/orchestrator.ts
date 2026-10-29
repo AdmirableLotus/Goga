@@ -12,6 +12,7 @@ import { ToolRegistry } from '../tools/registry'
 import { nanoid } from '../utils/nanoid'
 import { buildMediaRequest } from './mediaRequest'
 import { SecurityWorkspaceService } from './securityWorkspace'
+import { practiceLab } from './practiceLab'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
@@ -27,6 +28,9 @@ import { gogaIdentity } from './persona'
 import { FactLearner } from './factLearning'
 import { ROUTINE_QUESTION } from './routine'
 import { routineSummary } from '../sleepMode'
+
+// "stop practice lab", "exit security mode", "deactivate workspace" — a real off switch.
+const SECURITY_OFF = /^\s*(stop|exit|leave|deactivate|turn off|end|close|disable|quit|get out of)\s+(the\s+)?(practice\s*lab|security(\s*(mode|workspace))?|workspace|lab|engagement)\s*\.?$/i
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -62,6 +66,14 @@ export class OrchestratorService {
       this.brain.addMessage(reply)
       onToken?.(reply.content)
       return reply
+    }
+
+    // Switch modes from chat, as a real action — the chat brain used to falsely claim it
+    // deactivated security while the workspace stayed on, locking everything else out.
+    // The regex check stays synchronous so the normal path adds no extra await.
+    if (SECURITY_OFF.test(userMessage.content.trim())) {
+      const modeReply = await this.handleModeSwitchOff()
+      this.brain.addMessage(modeReply); onToken?.(modeReply.content); return modeReply
     }
 
     // An action is waiting for approval: answer it from chat, or say what is waiting.
@@ -104,6 +116,16 @@ export class OrchestratorService {
     }
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
+
+    // The practice lab is just training, so it must never trap other work: if a lab workspace
+    // is active and the next message isn't about the lab, leave security mode automatically.
+    const labWs = SecurityWorkspaceService.getInstance().getActive()
+    if (labWs?.authorizedAssets.some(a => /127\.0\.0\.1|localhost/i.test(a)) && !isConfirmation(content) &&
+        !/\b(lab|access[- ]?control|practice|the bug|vuln|note)\b/i.test(content)) {
+      try { await practiceLab().stop() } catch { /* ignore */ }
+      SecurityWorkspaceService.getInstance().setActive(null)
+      this.log.info('Auto-left practice lab for an unrelated request')
+    }
 
     // In a security workspace the chat brain cannot act, and asked to it invents progress,
     // files and findings. Everything but a plain question goes to the scoped tools.
@@ -303,6 +325,18 @@ export class OrchestratorService {
       content: `On it, ${settings.userName}.`,
       timestamp: Date.now()
     }
+  }
+
+  /** Actually turn security/lab mode off (not the chat brain pretending to). */
+  private async handleModeSwitchOff(): Promise<ChatMessage> {
+    const sec = SecurityWorkspaceService.getInstance()
+    const was = sec.getActive()
+    try { await practiceLab().stop() } catch { /* already stopped */ }
+    sec.setActive(null)
+    const text = was
+      ? `Done — security mode is off. I deactivated "${was.program}" and stopped the practice lab. I can read books, use the web, and work normally again.`
+      : 'Security mode was already off; nothing to stop. I can work normally.'
+    return { id: nanoid(), role: 'assistant', content: text, timestamp: Date.now(), fromTools: true }
   }
 
   /** A chat answer, with a warning when it claims what no tool did. */
