@@ -24,6 +24,7 @@ import { registerTradingHandlers } from './handlers/trading'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
+import { SettingsService } from './services/settings'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
 import { TelegramService } from './services/telegram'
 import { OrchestratorService } from './services/orchestrator'
@@ -143,8 +144,11 @@ app.whenReady().then(() => {
     }
   }
 
-  // Start loading the primary local model immediately (non-blocking)
-  LocalLlamaService.getInstance().initialize().catch(() => { /* errors logged inside */ })
+  // Start loading the local 9B brain immediately — unless the brain is an Ollama model
+  // (e.g. a 14B), in which case loading the 9B too would exhaust the GPU. Let Ollama own it.
+  if (SettingsService.getInstance().get().primaryModel !== 'ollama') {
+    LocalLlamaService.getInstance().initialize().catch(() => { /* errors logged inside */ })
+  }
 
   // Global emergency stop: Ctrl+Shift+Escape
   globalShortcut.register('CommandOrControl+Shift+Escape', () => {

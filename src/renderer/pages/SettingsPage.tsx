@@ -223,7 +223,7 @@ export default function SettingsPage() {
             {settings.reviewModelName && !ollamaModels.some(m => sameModel(m, settings.reviewModelName)) && <option value={settings.reviewModelName}>{settings.reviewModelName} (not installed)</option>}
             {ollamaModels.filter(m => !/vl|llava|vision|embed/i.test(m)).map(m => <option key={m} value={m}>{m}</option>)}
           </select>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Plans security code reviews. A larger coding model finds more, but shares the 10 GB graphics card with the local brain and runs slower if it does not fit.</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Plans security code reviews with a stronger model (e.g. qwen2.5:14b). For an all-round stronger Goga, set Primary model to Ollama and its name to qwen2.5:14b — the 9B brain then stays unloaded so the 14B fits on the graphics card.</div>
         </Field>
         <Field label="Memory model (Ollama)">
           {ollamaModels.length > 0

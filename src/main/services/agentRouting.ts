@@ -24,6 +24,7 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(organize|sort|move|rename|delete)\b.{0,30}\b(files?|folders?)\b/i,
   /\b(fix|debug|edit|update|modify)\b.{0,40}\b(code|file|project)\b/i,
   /\b(read|import|download|add|learn from|study)\b.{0,40}\b(book|pdf|epub|paper|guide)\b/i,
+  /\b(calculate|compute|plot|chart|graph|simulate|solve)\b/i,
   /\b(read|import|download|add|learn from)\b.{0,40}https?:\/\//i,
   /\b(review|audit|read|go through|look through)\b.{0,40}\b(code|repo|repository|source|scripts?)\b/i,
   // Bounty and code-review requests need the tools; answered in chat, the small brain invents what it "saw".
