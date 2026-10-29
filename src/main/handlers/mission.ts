@@ -13,6 +13,9 @@ export function registerMissionHandlers(ipcMain: IpcMain) {
     getMainWindow()?.webContents.send('mission:event', evt)
   })
 
+  // The tab is only shown while the experimental engine is on; Chat does multi-step tasks.
+  ipcMain.handle('mission:enabled', async () => isMissionEngineEnabled())
+
   ipcMain.handle('mission:start', async (_e, goal: string) => {
     if (!isMissionEngineEnabled()) {
       throw new Error('MissionEngine is disabled. Set GOGA_MISSION_ENGINE=true to enable.')

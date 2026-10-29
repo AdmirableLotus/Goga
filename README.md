@@ -40,6 +40,10 @@ src/
 
 Goga's local engine restores actual conversation history and passes cancellation to native generation. See [the native AI foundation and next milestone](docs/goga-native-ai.md). Developer Mode currently uses Codex CLI for code work; native self-review is a separate next milestone.
 
+### Historical Markets
+
+Open **Markets** to import daily CSV prices, manage a watchlist, and run deterministic historical portfolio simulations with separate development and evaluation periods. Chat command `/markets` reports verified local calculations and data timestamps. See [format, calculation assumptions and sample data](docs/markets.md). Live trading remains disabled.
+
 ### HackerOne workflow
 
 The existing Security page now supports encrypted HackerOne credentials and read-only program import. Imported scope is default-deny and testing requires fresh per-action approval; only scoped GET requests are supported in security mode. Reports remain local drafts. See [the integration and preview build notes](docs/hackerone-local-integration.md).

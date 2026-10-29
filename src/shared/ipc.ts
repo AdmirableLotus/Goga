@@ -5,6 +5,10 @@ export type { ScreenshotResult, ActiveWindowResult }
 
 // Channels: renderer -> main (invoke)
 export interface MainHandlers {
+  'markets:state': () => Promise<import('./markets').MarketsState>
+  'markets:import': (symbol: string, csv: string) => Promise<import('./markets').MarketsState>
+  'markets:watchlist': (symbols: string[]) => Promise<import('./markets').MarketsState>
+  'markets:backtest': (config: import('./markets').BacktestRequest) => Promise<import('./markets').MarketsState>
   'developer:state': () => Promise<import('./developer').DeveloperState>
   'developer:self': () => Promise<import('./developer').DeveloperState>
   'developer:choose': () => Promise<import('./developer').DeveloperState>
@@ -26,6 +30,7 @@ export interface MainHandlers {
   'agent:state': () => Promise<AgentState>
 
   // Phase D: Mission engine
+  'mission:enabled': () => Promise<boolean>
   'mission:start': (goal: string) => Promise<string>   // returns missionId
   'mission:stop': (missionId: string) => Promise<void>
   'mission:state': (missionId: string) => Promise<import('./types').Mission | null>
@@ -88,6 +93,9 @@ export interface MainHandlers {
   'flux:status': () => Promise<import('../main/services/fluxLink').FluxStatus>
   'flux:connect': () => Promise<import('../main/services/fluxLink').FluxStatus>
   'flux:disconnect': () => Promise<import('../main/services/fluxLink').FluxStatus>
+  'trading:status': () => Promise<import('../main/handlers/trading').TradingStatus>
+  'trading:saveKeys': (keyId: string, secret: string) => Promise<import('../main/handlers/trading').TradingStatus>
+  'trading:forgetKeys': () => Promise<import('../main/handlers/trading').TradingStatus>
 
   // Kokoro model management
   'model:kokoro-status': () => Promise<{ installed: boolean; downloading: boolean }>

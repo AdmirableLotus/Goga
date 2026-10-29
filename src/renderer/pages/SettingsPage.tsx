@@ -13,6 +13,9 @@ export default function SettingsPage() {
   const [remote, setRemote] = useState<Awaited<ReturnType<typeof window.goga.invoke<'remote:status'>>> | null>(null)
   const [pairCode, setPairCode] = useState<string | null>(null)
   const [flux, setFlux] = useState<Awaited<ReturnType<typeof window.goga.invoke<'flux:status'>>> | null>(null)
+  const [trading, setTrading] = useState<Awaited<ReturnType<typeof window.goga.invoke<'trading:status'>>> | null>(null)
+  const [alpacaId, setAlpacaId] = useState('')
+  const [alpacaSecret, setAlpacaSecret] = useState('')
   const [brainStatus, setBrainStatus] = useState<Awaited<ReturnType<typeof window.goga.invoke<'localModel:status'>>> | null>(null)
 
   // Kokoro install state
@@ -32,6 +35,7 @@ export default function SettingsPage() {
     checkBrain()
     checkRemote()
     window.goga.invoke('flux:status').then(setFlux).catch(() => {})
+    window.goga.invoke('trading:status').then(setTrading).catch(() => {})
     // Cleanup: remove progress listener if Settings unmounts mid-download
     return () => { unsubRef.current?.() }
   }, [])
@@ -326,6 +330,37 @@ export default function SettingsPage() {
                   setFlux(await window.goga.invoke('flux:connect'))
                 }} style={styles.smallBtn}>Connect Flux</button>}
           </div>
+        </Field>
+
+        <Section label="Trading (practice, fake money)" />
+        <Field label="Alpaca paper keys">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ color: trading?.paperValue != null ? 'var(--success)' : trading?.error ? 'var(--danger)' : 'var(--text-muted)' }}>
+              {trading === null ? 'Checking…'
+                : trading.paperValue != null ? `Connected — practice account value $${trading.paperValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                : trading.error ? `Not connected — ${trading.error}`
+                : 'Not connected. Crypto and forex prices work without keys; US stocks, news and the practice account need free Alpaca paper keys (alpaca.markets → Paper Trading → API keys).'}
+            </span>
+            {trading?.hasKeys && trading.paperValue != null
+              ? <div><button onClick={async () => setTrading(await window.goga.invoke('trading:forgetKeys'))} style={styles.smallBtn}>Remove keys</button></div>
+              : <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <input placeholder="Key ID (starts with PK)" value={alpacaId} onChange={e => setAlpacaId(e.target.value)} style={{ width: 200 }} />
+                  <input placeholder="Secret key" type="password" value={alpacaSecret} onChange={e => setAlpacaSecret(e.target.value)} style={{ width: 260 }} />
+                  <button disabled={!alpacaId || !alpacaSecret} onClick={async () => {
+                    setTrading(await window.goga.invoke('trading:saveKeys', alpacaId, alpacaSecret))
+                    setAlpacaSecret('')
+                  }} style={styles.smallBtn}>Save keys</button>
+                </div>}
+          </div>
+        </Field>
+        <Field label="Biggest position (% of account)">
+          <input type="number" min={1} max={100} value={settings.tradingMaxPositionPct ?? 10} onChange={e => update({ tradingMaxPositionPct: Number(e.target.value) })} style={{ width: 80 }} />
+        </Field>
+        <Field label="Stop trading for the day after losing (%)">
+          <input type="number" min={0.5} max={50} step={0.5} value={settings.tradingDailyLossPct ?? 3} onChange={e => update({ tradingDailyLossPct: Number(e.target.value) })} style={{ width: 80 }} />
+        </Field>
+        <Field label="Every new trade needs a stop">
+          <input type="checkbox" checked={settings.tradingRequireStop ?? true} onChange={e => update({ tradingRequireStop: e.target.checked })} />
         </Field>
 
         <Section label="Voice & Speech" />

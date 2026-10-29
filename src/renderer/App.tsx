@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import MarketsPage from './pages/MarketsPage'
+import React, { useEffect, useState } from 'react'
 import type { ElectronCSSProperties } from './types/electron-styles'
 import ChatPage from './pages/ChatPage'
 import ActivityPage from './pages/ActivityPage'
@@ -14,9 +15,10 @@ import MissionMode from './components/MissionMode'
 import DeveloperPage from './pages/DeveloperPage'
 import { GogaVisualProvider } from './context/GogaVisualContext'
 
-type Tab = 'developer' | 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
+type Tab = 'markets' | 'developer' | 'mission-mode' | 'chat' | 'mission' | 'desktop' | 'activity' | 'approvals' | 'memory' | 'library' | 'security' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'markets', label: 'Markets' },
   { id: 'developer', label: 'Developer' },
   { id: 'chat',      label: '💬 Chat' },
   { id: 'mission',   label: '⚡ Mission' },
@@ -32,6 +34,9 @@ const TABS: { id: Tab; label: string }[] = [
 export default function App() {
   // Default to mission-mode (cinematic primary view)
   const [tab, setTab] = useState<Tab>('chat')
+  const [missionEngine, setMissionEngine] = useState(false)
+  useEffect(() => { window.goga.invoke('mission:enabled').then(setMissionEngine).catch(() => {}) }, [])
+  const tabs = TABS.filter(t => t.id !== 'mission' || missionEngine)
 
   return (
     <GogaVisualProvider>
@@ -46,7 +51,7 @@ export default function App() {
               title="Back to Mission Mode"
             >Goga</button>
             <nav style={styles.nav}>
-              {TABS.map(t => (
+              {tabs.map(t => (
                 <button
                   key={t.id}
                   onClick={() => setTab(t.id)}
@@ -61,6 +66,7 @@ export default function App() {
         )}
 
         <main style={styles.main}>
+          {tab === 'markets' && <MarketsPage />}
           {tab === 'developer' && <DeveloperPage />}
           {tab === 'mission-mode' && (
             <MissionMode

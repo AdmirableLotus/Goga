@@ -17,7 +17,7 @@ vi.mock('http', () => ({ default: { request: (_opts: unknown, onResponse: (res: 
   return req
 } } }))
 import { ToolRegistry } from '../../tools/registry'
-import { imageSize, toScreenPixels } from '../../tools/vision'
+import { imageSize, toScreenPixels, visionAnswer } from '../../tools/vision'
 
 // Minimal image headers: enough for the size reader, not a full decodable image.
 function png(width: number, height: number): string {
@@ -41,6 +41,12 @@ beforeEach(() => {
 })
 
 describe('vision helpers', () => {
+  it('uses the thinking when Qwen3-VL leaves the answer empty', () => {
+    expect(visionAnswer(JSON.stringify({ response: ' The button is top right. ', thinking: 'hmm', done: true }))).toBe('The button is top right.')
+    expect(visionAnswer(JSON.stringify({ response: '', thinking: 'API Keys is on the right side.', done: true }))).toBe('API Keys is on the right side.')
+    expect(visionAnswer(`${JSON.stringify({ response: 'a' })}\n${JSON.stringify({ response: 'b', done: true })}`)).toBe('ab')
+  })
+
   it('reads PNG and JPEG sizes, and rejects other data', () => {
     expect(imageSize(png(1280, 720))).toEqual({ width: 1280, height: 720 })
     expect(imageSize(jpeg(1920, 1080))).toEqual({ width: 1920, height: 1080 })

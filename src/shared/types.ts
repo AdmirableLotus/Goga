@@ -236,6 +236,10 @@ export interface AppSettings {
   startWithWindows: boolean
   guardianEnabled: boolean
   routineLearning: boolean
+  // Practice trading risk rules, enforced in code on every order
+  tradingMaxPositionPct: number
+  tradingRequireStop: boolean
+  tradingDailyLossPct: number
 }
 
 // ── Phase D: Mission types ───────────────────────────────────────────────────
@@ -371,7 +375,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sleepOnClose: true,
   startWithWindows: true,
   guardianEnabled: true,
-  routineLearning: true
+  routineLearning: true,
+  tradingMaxPositionPct: 10,
+  tradingRequireStop: true,
+  tradingDailyLossPct: 3
 }
 
 // ── Security Workspace ────────────────────────────────────────────────────────

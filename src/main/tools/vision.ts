@@ -9,7 +9,19 @@ const log = LogService.getInstance()
 
 interface OllamaVisionResponse {
   response: string
+  thinking?: string
   done: boolean
+}
+
+/** The answer, or — when Qwen3-VL puts all of it in its thinking despite think:false — the thinking. */
+export function visionAnswer(raw: string): string {
+  let response = '', thinking = ''
+  for (const line of raw.trim().split('\n').filter(Boolean)) {
+    const json: OllamaVisionResponse = JSON.parse(line)
+    response += json.response ?? ''
+    thinking += json.thinking ?? ''
+  }
+  return (response.trim() || thinking.trim().slice(-1500)).trim()
 }
 
 const desktop = new DesktopAdapter()
@@ -42,20 +54,15 @@ async function queryVision(base64Image: string, prompt: string): Promise<string>
       path: '/api/generate',
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      timeout: 60_000
+      // Loading the model next to the brain on a 10 GB card can take a while on the first look.
+      timeout: 150_000
     }, (res) => {
       let raw = ''
       res.on('data', (chunk: Buffer) => { raw += chunk.toString() })
       res.on('end', () => {
         try {
           // Ollama streams newline-delimited JSON even with stream:false for generate
-          const lines = raw.trim().split('\n').filter(Boolean)
-          let full = ''
-          for (const line of lines) {
-            const json: OllamaVisionResponse = JSON.parse(line)
-            full += json.response ?? ''
-          }
-          resolve(full.trim())
+          resolve(visionAnswer(raw))
         } catch (e) {
           reject(new Error(`Vision parse error: ${e}`))
         }

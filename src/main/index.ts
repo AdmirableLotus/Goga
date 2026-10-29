@@ -1,3 +1,4 @@
+import { registerMarketsHandlers } from './handlers/markets'
 import 'dotenv/config'
 import { app, BrowserWindow, ipcMain, globalShortcut } from 'electron'
 import path from 'path'
@@ -19,6 +20,7 @@ import { registerVoiceHandlers } from './handlers/voice'
 import { registerModelHandlers } from './handlers/model'
 import { registerRemoteHandlers, applyRemoteSettings, stopRemoteLink } from './handlers/remote'
 import { registerFluxHandlers, resumeFluxLink, stopFluxLink } from './handlers/flux'
+import { registerTradingHandlers } from './handlers/trading'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -102,6 +104,7 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(() => {
   registerChatHandlers(ipcMain)
+  registerMarketsHandlers(ipcMain)
   registerDeveloperHandlers(ipcMain)
   registerActionHandlers(ipcMain)
   registerMemoryHandlers(ipcMain)
@@ -117,6 +120,7 @@ app.whenReady().then(() => {
   registerModelHandlers(ipcMain, getMainWindow)
   registerRemoteHandlers(ipcMain)
   registerFluxHandlers(ipcMain)
+  registerTradingHandlers(ipcMain)
   createWindow()
   startSleepMode(getMainWindow, createWindow)
   void applyRemoteSettings()
