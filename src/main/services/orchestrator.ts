@@ -37,6 +37,8 @@ export class OrchestratorService {
   private desktop  = new DesktopAdapter()
   private agent    = AgentLoop.getInstance()
   private registry = ToolRegistry.getInstance()
+  // The last trade plan shown, so "place it" submits exactly that (never a hallucinated order).
+  private pendingPlan: { symbol: string; side: 'buy' | 'sell'; stop: number; target: number; qty: number } | null = null
   // Notes on long documents the user pasted, so they fit the brain's context (see longText.ts).
   private notes = new NotesStore((() => { try { return path.join(app.getPath('userData'), 'document-notes.json') } catch { return undefined } })())
   // Learns lasting facts about the user from what they say, after each reply (never blocks it).
@@ -105,6 +107,14 @@ export class OrchestratorService {
     // Trader mode: a clear trading request runs the exact trading tool directly, so it always
     // works regardless of whether the local model emits perfect JSON.
     if (this.agent.getState().status !== 'running') {
+      // "place it" after a trade plan actually submits the order — the chat brain used to
+      // pretend it placed trades (with a made-up ID) while nothing reached the broker.
+      if (this.pendingPlan && /^\s*(place|submit|execute|take|confirm|approve|do|make)\s*(it|the (trade|order|plan))?\s*[.!]?$/i.test(content)) {
+        const plan = this.pendingPlan; this.pendingPlan = null
+        const reply = await this.runTradingCommand({ tool: 'trading.order', params: { symbol: plan.symbol, side: plan.side, qty: plan.qty, stopPrice: plan.stop, takeProfit: plan.target, reason: 'Practice trade placed from the approved plan (2:1 reward-to-risk, ATR stop).' } }, signal)
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
       const cmd = parseTradingCommand(content)
       if (cmd) {
         const reply = await this.runTradingCommand(cmd, signal)
@@ -315,6 +325,13 @@ export class OrchestratorService {
     else if (typeof result.data === 'string') content = result.data
     else if (result.data && typeof result.data === 'object' && 'readable' in result.data) content = String((result.data as { readable: string }).readable)
     else content = '```json\n' + JSON.stringify(result.data, null, 2) + '\n```'
+    // Remember a plan so "place it" can submit exactly it; clear it once an order is placed.
+    if (cmd.tool === 'trading.plan' && result.success && result.data && typeof result.data === 'object') {
+      const p = result.data as { symbol: string; side: 'buy' | 'sell'; stop: number; suggestedQty: number; targets?: { r: number; price: number }[] }
+      const target = p.targets?.find(t => t.r === 2)?.price
+      this.pendingPlan = target ? { symbol: p.symbol, side: p.side, stop: p.stop, target, qty: p.suggestedQty } : null
+      if (this.pendingPlan) content += '\n\nSay "place it" to submit this exact practice trade.'
+    } else if (cmd.tool === 'trading.order') { this.pendingPlan = null }
     this.log.info(`Trader mode: ${cmd.tool} ${result.success ? 'ok' : 'failed'}`)
     return { id: nanoid(), role: 'assistant', content, timestamp: Date.now(), fromTools: true }
   }
