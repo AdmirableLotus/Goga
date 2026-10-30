@@ -11,6 +11,23 @@ function resolveDir(text: string): string {
   try { return app.getPath((m ? m[1].toLowerCase() : 'documents') as 'documents') } catch { return process.cwd() }
 }
 
+/** A folder path for a "review/go through/check everything in <folder>" request, else null. */
+export function parseFolderReview(task: string): { path: string } | null {
+  const t = task.trim()
+  if (!/\b(review|go through|check|look through|read|scan|explore|open)\b/i.test(t)) return null
+  const hasFolderWord = /\b(folder|directory|everything|all (the )?(files|docs|documents|materials|photos|images|stuff)|materials)\b/i.test(t)
+  // A quoted path, or a Windows drive path, or a POSIX-looking absolute path.
+  const quoted = t.match(/["'“”]([A-Za-z]:[\\/][^"'“”]+|\/[^"'“”]+)["'“”]/)
+  let p = quoted?.[1]
+  if (!p) {
+    const bare = t.match(/([A-Za-z]:[\\/].+)$/)
+    if (bare) p = bare[1].replace(/\s+(and|then)\s+(check|review|go|read|look|scan|see|tell|show).*$/i, '').trim()
+  }
+  if (!p) return null
+  if (!hasFolderWord && !/[\\/]/.test(p)) return null
+  return { path: p.replace(/["'“”]+$/, '').trim() }
+}
+
 /** {path, content} for a plain "write/create a text file" request, else null. */
 export function parseFileWrite(task: string): { path: string; content: string } | null {
   const t = task.trim()

@@ -1,5 +1,6 @@
 import { MarketsService } from './markets'
 import { parseTradingCommand } from './trading/command'
+import { parseFolderReview } from './fileCommand'
 import type { ChatMessage, Action, AgentState } from '../../shared/types'
 import { ActionStore } from './actionStore'
 import { LogService } from './logs'
@@ -102,6 +103,17 @@ export class OrchestratorService {
       const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: result, timestamp: Date.now() }
       this.brain.addMessage(reply)
       return reply
+    }
+
+    // "review this folder" runs the folder-review tool directly (reads every document and
+    // looks at every image), so it doesn't depend on the planner picking the right tool.
+    if (this.agent.getState().status !== 'running') {
+      const folder = parseFolderReview(content)
+      if (folder) {
+        const reply = await this.runTradingCommand({ tool: 'files.reviewFolder', params: { path: folder.path } }, signal)
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
     }
 
     // Trader mode: a clear trading request runs the exact trading tool directly, so it always

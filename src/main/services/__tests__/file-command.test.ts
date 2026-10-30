@@ -2,7 +2,7 @@ import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getPath: (k: string) => k === 'desktop' ? '/Users/x/Desktop' : k === 'downloads' ? '/Users/x/Downloads' : '/Users/x/Documents' } }))
-import { parseFileWrite } from '../fileCommand'
+import { parseFileWrite, parseFolderReview } from '../fileCommand'
 
 const norm = (p: string) => p.split(path.sep).join('/')
 
@@ -36,5 +36,17 @@ describe('file write parsing', () => {
   it('ignores non-file requests', () => {
     for (const s of ['analyze AAPL', 'hello', 'what is the weather', 'open notepad'])
       expect(parseFileWrite(s)).toBeNull()
+  })
+})
+
+describe('folder review parsing', () => {
+  it('extracts the folder path from review requests, quoted or bare', () => {
+    expect(parseFolderReview('review the folder "C:\\Users\\redre\\Desktop\\paper work for ring"')!.path).toBe('C:\\Users\\redre\\Desktop\\paper work for ring')
+    expect(parseFolderReview('go through C:\\Users\\redre\\Desktop\\paper work for ring and check everything')!.path).toBe('C:\\Users\\redre\\Desktop\\paper work for ring')
+    expect(parseFolderReview('check everything in C:/Users/redre/Desktop/paper work for ring')!.path).toBe('C:/Users/redre/Desktop/paper work for ring')
+  })
+
+  it('ignores requests with no folder', () => {
+    for (const s of ['analyze AAPL', 'what is the weather', 'review my trading']) expect(parseFolderReview(s)).toBeNull()
   })
 })

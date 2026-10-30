@@ -30,7 +30,7 @@ function visionModel(): string {
   return SettingsService.getInstance().get().visionModelName || 'qwen3-vl:4b'
 }
 
-async function queryVision(base64Image: string, prompt: string): Promise<string> {
+export async function queryVision(base64Image: string, prompt: string): Promise<string> {
   const settings = SettingsService.getInstance().get()
   const endpoint = new URL(settings.modelEndpoint)
 

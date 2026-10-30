@@ -13,6 +13,7 @@ import './electronics'
 import './microcontroller'
 import './trading'
 import './python'
+import './folderReview'
 import './library'
 
 export { ToolRegistry } from './registry'
