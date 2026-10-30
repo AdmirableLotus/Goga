@@ -118,7 +118,7 @@ describe('LibraryService — PDF ingestion (M3.1)', () => {
   })
 
   it('rejects unsupported formats with a clear error', async () => {
-    await expect(lib.ingest('file.docx'))
-      .rejects.toThrow('Unsupported format: docx')
+    await expect(lib.ingest('file.xyz'))
+      .rejects.toThrow('Unsupported format: xyz')
   })
 })

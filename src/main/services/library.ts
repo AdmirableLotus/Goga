@@ -20,7 +20,7 @@ export class LibraryService {
 
   async ingest(filePath: string): Promise<BookMeta> {
     const ext = path.extname(filePath).toLowerCase().slice(1) as BookMeta['format']
-    if (!['pdf', 'txt', 'epub'].includes(ext)) throw new Error(`Unsupported format: ${ext}`)
+    if (!['pdf', 'txt', 'epub', 'docx', 'md', 'csv'].includes(ext)) throw new Error(`Unsupported format: ${ext}`)
 
     const filename = path.basename(filePath)
     const title = path.basename(filePath, path.extname(filePath))
@@ -45,8 +45,19 @@ export class LibraryService {
   }
 
   private async extractText(filePath: string, format: BookMeta['format']): Promise<string> {
-    if (format === 'txt') {
+    if (format === 'txt' || format === 'md' || format === 'csv') {
       return fs.readFileSync(filePath, 'utf-8')
+    }
+
+    if (format === 'docx') {
+      // A .docx is a zip; the text lives in word/document.xml wrapped in XML tags.
+      const AdmZip = require('adm-zip')
+      const xml = new AdmZip(filePath).readAsText('word/document.xml')
+      const text = xml
+        .replace(/<\/w:p>/g, '\n')
+        .replace(/<w:tab\/>/g, '\t')
+        .replace(/<[^>]+>/g, '')
+      return text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/\n{3,}/g, '\n\n').trim()
     }
 
     if (format === 'pdf') {

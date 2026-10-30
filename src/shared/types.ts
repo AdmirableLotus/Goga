@@ -324,7 +324,7 @@ export interface BookMeta {
   id: string
   title: string
   filename: string
-  format: 'pdf' | 'txt' | 'epub'
+  format: 'pdf' | 'txt' | 'epub' | 'docx' | 'md' | 'csv'
   chunkCount: number
   ingestedAt: number
   sizeBytes: number

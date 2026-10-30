@@ -16,7 +16,7 @@ export function registerLibraryHandlers(ipcMain: IpcMain) {
       const result = await dialog.showOpenDialog(win!, {
         title: 'Add book to Goga',
         filters: [
-          { name: 'Books & Documents', extensions: ['pdf', 'txt', 'epub'] },
+          { name: 'Documents', extensions: ['pdf', 'txt', 'epub', 'docx', 'md', 'csv'] },
           { name: 'All Files', extensions: ['*'] }
         ],
         properties: ['openFile']
