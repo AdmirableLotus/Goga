@@ -4,12 +4,16 @@ import { parseTradingCommand, symbolIn } from '../trading/command'
 describe('symbol extraction', () => {
   it('reads tickers, pairs and crypto names', () => {
     expect(symbolIn('analyze AAPL')).toBe('AAPL')
-    expect(symbolIn('analyze aapl')).toBe('AAPL')
     expect(symbolIn('plan a buy on EUR/USD')).toBe('EUR/USD')
     expect(symbolIn('how is bitcoin doing')).toBe('BTC/USD')
     expect(symbolIn('price of eth')).toBe('ETH/USD')
     expect(symbolIn('news on NVDA today')).toBe('NVDA')
     expect(symbolIn('show my account')).toBeNull()
+    // Lowercase words and common acronyms are NOT tickers (no false trades on normal sentences).
+    expect(symbolIn('analyze aapl')).toBeNull()
+    expect(symbolIn('i need to buy tools for my table')).toBeNull()
+    expect(symbolIn('buy a USB cable and an LED')).toBeNull()
+    expect(symbolIn('analyze the ISFET and PPG sensors')).toBeNull()
   })
 })
 
@@ -38,6 +42,15 @@ describe('trading command parsing', () => {
     expect(parseTradingCommand('practice trading')).toEqual({ tool: 'trading.practice', params: {} })
     expect(parseTradingCommand('backtest sweep')).toEqual({ tool: 'trading.practice', params: {} })
     expect(parseTradingCommand('what is my practice account')).toEqual({ tool: 'trading.account', params: {} })
+  })
+
+  it('does not hijack ordinary sentences into trades', () => {
+    for (const s of [
+      'do we need tools as well, i have nothing, i need to buy a table and set up a station',
+      'buy a USB cable and an LED for the PCB',
+      'should I order the ISFET chips',
+      'help me plan what to buy for the R&D build',
+    ]) expect(parseTradingCommand(s)).toBeNull()
   })
 
   it('ignores non-trading messages', () => {

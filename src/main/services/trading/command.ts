@@ -16,6 +16,13 @@ const NOT_SYMBOL = new Set([
   'INTO', 'OVER', 'JUST', 'ALSO', 'VERY', 'MUCH', 'LETS', 'LET', 'SO', 'IF', 'BE', 'AS', 'BY', 'WE',
   'HE', 'SHE', 'THEY', 'OUR', 'YOUR', 'HIS', 'HER', 'NOT', 'NO', 'YES', 'OK', 'HI', 'HEY', 'SEE',
   'WERE', 'BEEN', 'THAN', 'THEM', 'LIKE', 'GOING', 'GONNA', 'WANNA', 'SHOULD', 'COULD', 'WOULD',
+  // Common acronyms that are not tickers — especially this user's hardware/grant vocabulary,
+  // so "buy a USB cable" or "analyze the ISFET" is never mistaken for a stock.
+  'USB', 'LED', 'PCB', 'PCBA', 'BOM', 'BLE', 'IMU', 'PPG', 'ISFET', 'ADPD', 'DOF', 'SWD', 'RF',
+  'CAD', 'STL', 'FMEA', 'API', 'CPU', 'GPU', 'RAM', 'ROM', 'SDK', 'LIPO', 'ECG', 'EEG', 'AFE',
+  'ADC', 'DAC', 'MCU', 'IOT', 'OS', 'PC', 'TV', 'USA', 'UK', 'FAQ', 'PDF', 'CSV', 'DOC', 'NSF',
+  'RFI', 'SBIR', 'STTR', 'NDA', 'CEO', 'CTO', 'FYI', 'ASAP', 'ETA', 'AKA', 'DIY', 'TODO', 'URL',
+  'WIFI', 'GPS', 'SIM', 'PIN', 'ATM', 'ID', 'NEW', 'OLD', 'ONE', 'TWO', 'TOOL', 'TOOLS', 'TABLE',
 ])
 
 const CRYPTO: Record<string, string> = {
@@ -29,11 +36,10 @@ export function symbolIn(text: string): string | null {
   if (pair) return `${pair[1].toUpperCase()}/${pair[2].toUpperCase()}`
   const crypto = text.match(/\b(bitcoin|btc|ethereum|eth|solana|sol|dogecoin|doge|xrp|ripple)\b/i)
   if (crypto) return CRYPTO[crypto[1].toLowerCase()]
-  const words = text.match(/\b[A-Za-z]{1,5}\b/g) ?? []
-  // Prefer a token that was written in capitals (AAPL, SPY, TSLA).
-  for (const w of words) { const u = w.toUpperCase(); if (!NOT_SYMBOL.has(u) && w === u) return u }
-  // Otherwise the first non-stopword 2–5 letter word (handles lowercase "analyze aapl").
-  for (const w of words) { const u = w.toUpperCase(); if (!NOT_SYMBOL.has(u) && w.length >= 2) return u }
+  // Only a ticker WRITTEN IN CAPITALS counts (AAPL, SPY, TSLA). We deliberately do NOT treat
+  // any lowercase word as a symbol — that turned ordinary sentences ("buy tools", "need a table")
+  // into bogus trades. Users naturally capitalise tickers.
+  for (const w of text.match(/\b[A-Z]{2,5}\b/g) ?? []) if (!NOT_SYMBOL.has(w)) return w
   return null
 }
 
