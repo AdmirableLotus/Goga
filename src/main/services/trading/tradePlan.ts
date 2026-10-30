@@ -45,11 +45,15 @@ export function tradePlan(symbol: string, bars: Bar[], side: 'buy' | 'sell', opt
   const maxValue = opts.equity * maxPositionPct / 100
   const warnings: string[] = []
   if (orderValue > maxValue) {
-    // Cap at the position-size limit even if that means risking less than riskPct.
-    suggestedQty = maxValue / entry
+    // Cap at the position-size limit, leaving a 2% margin so price drift between planning
+    // and a market fill can't push the order over the limit and get it rejected.
+    suggestedQty = maxValue * 0.98 / entry
     orderValue = suggestedQty * entry
     warnings.push(`Size capped at the ${maxPositionPct}% max position ($${maxValue.toFixed(0)}); actual risk is under ${riskPct}%.`)
   }
+  // Floor the quantity to 4 decimals so rounding never nudges the order value back over a limit.
+  suggestedQty = Math.floor(suggestedQty * 1e4) / 1e4
+  orderValue = suggestedQty * entry
 
   const s50 = sma(closes, 50), s200 = sma(closes, 200)
   const t50 = s50[s50.length - 1], t200 = s200[s200.length - 1]
@@ -74,7 +78,7 @@ export function tradePlan(symbol: string, bars: Bar[], side: 'buy' | 'sell', opt
 
   return {
     symbol, side, entry: round(entry, 6), stop: round(stop, 6), riskPerUnit: round(riskPerUnit, 6), atr: round(a, 6),
-    targets, suggestedQty: round(suggestedQty, 4), orderValue: round(orderValue, 2), riskAmount: round(riskAmount, 2),
+    targets, suggestedQty, orderValue: round(orderValue, 2), riskAmount: round(riskAmount, 2),
     riskPct, rewardToRisk: round((targets[1].price - entry) * dir / riskPerUnit, 2), trendNote, warnings, readable,
   }
 }
