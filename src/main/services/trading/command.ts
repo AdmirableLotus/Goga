@@ -58,8 +58,9 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
   if (!text || text.length > 200) return null
   const lower = text.toLowerCase()
 
-  // Account / journal need no symbol.
-  if (/\b(account|portfolio|positions|holdings|balance)\b/.test(lower) && /\b(my|practice|paper|account|portfolio|positions|holdings|balance|show|what)\b/.test(lower))
+  // Account / journal / connection status need no symbol.
+  if ((/\b(account|portfolio|positions|holdings|balance|buying power)\b/.test(lower) && /\b(my|practice|paper|account|portfolio|positions|holdings|balance|show|what)\b/.test(lower))
+    || /\b(my (trading|paper) (progress|status|results)|(are we|am i) connected to alpaca|alpaca (status|connected))\b/.test(lower))
     return { tool: 'trading.account', params: {} }
   if (/\b(journal|trade history|my trades|past trades)\b/.test(lower))
     return { tool: 'trading.journal', params: {} }
