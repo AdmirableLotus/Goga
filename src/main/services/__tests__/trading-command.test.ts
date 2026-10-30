@@ -33,6 +33,13 @@ describe('trading command parsing', () => {
     expect(parseTradingCommand('price of AAPL')).toEqual({ tool: 'trading.quote', params: { symbol: 'AAPL' } })
   })
 
+  it('routes practice/backtest sweeps, without catching "practice account"', () => {
+    expect(parseTradingCommand('run trading practice')).toEqual({ tool: 'trading.practice', params: {} })
+    expect(parseTradingCommand('practice trading')).toEqual({ tool: 'trading.practice', params: {} })
+    expect(parseTradingCommand('backtest sweep')).toEqual({ tool: 'trading.practice', params: {} })
+    expect(parseTradingCommand('what is my practice account')).toEqual({ tool: 'trading.account', params: {} })
+  })
+
   it('ignores non-trading messages', () => {
     for (const s of ['hello', 'write me a poem', 'what is the weather', 'open notepad', 'how are you'])
       expect(parseTradingCommand(s)).toBeNull()

@@ -58,6 +58,10 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
   if (/\b(journal|trade history|my trades|past trades)\b/.test(lower))
     return { tool: 'trading.journal', params: {} }
 
+  // Practice / backtest sweep — explicit phrases only, so it doesn't catch "practice account".
+  if (!/\baccount\b/.test(lower) && /\b(trading practice|practice trading|run (a )?practice|backtest (sweep|everything|all|my watchlist)|what (strategy|strategies) works?|which strateg\w+)\b/.test(lower))
+    return { tool: 'trading.practice', params: {} }
+
   // News (symbol optional).
   if (/\bnews\b/.test(lower)) return { tool: 'trading.news', params: symbolIn(text) ? { symbol: symbolIn(text) } : {} }
 

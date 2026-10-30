@@ -61,6 +61,39 @@ reg.register({
 })
 
 reg.register({
+  name: 'trading.practice',
+  description: 'Practice and learn: backtest every strategy on real history for a watchlist and report which beat buy-and-hold, with win rates — so you see what actually had an edge. No orders placed.',
+  parameters: {
+    type: 'object',
+    properties: {
+      symbols: { type: 'array', description: 'Optional watchlist, e.g. ["AAPL","BTC/USD"]. Defaults to a mix of stocks, crypto and forex.' },
+      timeframe: timeframeParam,
+    },
+  },
+  riskLevel: 'low', reversible: true, category: 'web',
+}, async p => {
+  const symbols = Array.isArray(p.symbols) && p.symbols.length ? (p.symbols as unknown[]).map(String).slice(0, 12) : ['SPY', 'AAPL', 'NVDA', 'BTC/USD', 'ETH/USD', 'EUR/USD']
+  const tf = timeframe(p.timeframe)
+  const strategies: Strategy[] = ['sma-cross', 'rsi-reversion', 'breakout']
+  const lines: string[] = []
+  let wins = 0, tested = 0
+  for (const sym of symbols) {
+    try {
+      const { inst, bars } = await marketData().bars(sym, tf)
+      const bh = backtest(bars, 'buy-and-hold').totalReturn
+      const best = strategies.map(s => backtest(bars, s)).filter(r => r.trades > 0).sort((a, b) => b.totalReturn - a.totalReturn)[0]
+      tested++
+      if (!best) { lines.push(`${inst.symbol}: no strategy traded on this history`); continue }
+      const beats = best.totalReturn > bh
+      if (beats) wins++
+      lines.push(`${inst.symbol}: best is ${best.strategy} → ${(best.totalReturn * 100).toFixed(1)}% (${best.trades} trades, ${(best.winRate * 100).toFixed(0)}% win) vs buy&hold ${(bh * 100).toFixed(1)}% — ${beats ? 'BEATS hold' : 'loses to hold'}`)
+    } catch (err) { lines.push(`${sym}: ${err instanceof Error ? err.message : String(err)}`) }
+  }
+  const readable = `Trading practice — backtests on real ${tf} history, fees included:\n\n${lines.join('\n')}\n\n${wins}/${tested} symbols had a rule that beat buy-and-hold. This is history, not a prediction — study a promising one with "backtest <strategy> on <symbol>", then plan a trade with "plan a buy on <symbol>".`
+  return { success: true, data: { readable } }
+})
+
+reg.register({
   name: 'trading.news',
   description: 'Latest market news headlines, for a symbol or the whole market.',
   parameters: { type: 'object', properties: { symbol: { type: 'string', description: 'Optional symbol, e.g. "NVDA" or "BTC/USD".' } } },
