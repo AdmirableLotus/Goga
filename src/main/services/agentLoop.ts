@@ -384,6 +384,15 @@ export class AgentLoop {
           }
           break
         }
+        // A direct "make a text file" request is done once the file is written — don't let
+        // the planner tack on an extra step (e.g. Notepad) that then fails.
+        if (result.success && toolCall.tool === 'filesystem.write' && i === 0 && parseFileWrite(task)) {
+          const d = result.data as { path: string; bytes: number }
+          finalReply = `Saved ${d.bytes} bytes to ${d.path}.`
+          this.setState({ status: 'done' })
+          this.log.info('Agent auto-completed: filesystem.write (direct file-write request)')
+          break
+        }
         if (result.success && (
           toolCall.tool === 'browser.openExternal' ||
           (toolCall.tool === 'browser.open' && AgentLoop.isSimpleOpenTask(task))
