@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto'
+import { remotePageHtml } from './remotePage'
 import fs from 'fs'
 import http from 'http'
 import os from 'os'
@@ -185,6 +186,14 @@ export class RemoteLink {
       if (!isPrivateAddress(req.socket.remoteAddress)) throw new HttpError(403, 'Home network only')
       const url = new URL(req.url ?? '/', 'http://goga.local')
       const route = `${req.method} ${url.pathname}`
+
+      // The phone page itself needs no key; the API calls it makes carry the Bearer token.
+      if (route === 'GET /' || route === 'GET /app') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+        res.end(remotePageHtml())
+        return
+      }
+      if (route === 'GET /favicon.ico') { res.writeHead(204); res.end(); return }
 
       if (route === 'POST /v1/pair') return send(200, this.pair(JSON.parse((await readBody(req, MAX_JSON_BYTES)).toString('utf8') || '{}')))
 
