@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest'
+import { parseTradingCommand, symbolIn } from '../trading/command'
+
+describe('symbol extraction', () => {
+  it('reads tickers, pairs and crypto names', () => {
+    expect(symbolIn('analyze AAPL')).toBe('AAPL')
+    expect(symbolIn('analyze aapl')).toBe('AAPL')
+    expect(symbolIn('plan a buy on EUR/USD')).toBe('EUR/USD')
+    expect(symbolIn('how is bitcoin doing')).toBe('BTC/USD')
+    expect(symbolIn('price of eth')).toBe('ETH/USD')
+    expect(symbolIn('news on NVDA today')).toBe('NVDA')
+    expect(symbolIn('show my account')).toBeNull()
+  })
+})
+
+describe('trading command parsing', () => {
+  it('routes analyze', () => {
+    expect(parseTradingCommand('analyze AAPL')).toEqual({ tool: 'trading.analyze', params: { symbol: 'AAPL' } })
+    expect(parseTradingCommand('analyse the TSLA chart')).toEqual({ tool: 'trading.analyze', params: { symbol: 'TSLA' } })
+  })
+
+  it('routes a plan with side and risk', () => {
+    expect(parseTradingCommand('plan a buy on EUR/USD risk 1%')).toEqual({ tool: 'trading.plan', params: { symbol: 'EUR/USD', side: 'buy', riskPct: 1 } })
+    expect(parseTradingCommand('should I short NVDA')).toEqual({ tool: 'trading.plan', params: { symbol: 'NVDA', side: 'sell' } })
+    expect(parseTradingCommand('buy BTC risk 2%')).toMatchObject({ tool: 'trading.plan', params: { symbol: 'BTC/USD', side: 'buy', riskPct: 2 } })
+  })
+
+  it('routes account, journal, news and quote', () => {
+    expect(parseTradingCommand('what is my practice account')).toEqual({ tool: 'trading.account', params: {} })
+    expect(parseTradingCommand('show my trading journal')).toEqual({ tool: 'trading.journal', params: {} })
+    expect(parseTradingCommand('news on NVDA')).toEqual({ tool: 'trading.news', params: { symbol: 'NVDA' } })
+    expect(parseTradingCommand('any market news')).toEqual({ tool: 'trading.news', params: {} })
+    expect(parseTradingCommand('price of AAPL')).toEqual({ tool: 'trading.quote', params: { symbol: 'AAPL' } })
+  })
+
+  it('ignores non-trading messages', () => {
+    for (const s of ['hello', 'write me a poem', 'what is the weather', 'open notepad', 'how are you'])
+      expect(parseTradingCommand(s)).toBeNull()
+  })
+})

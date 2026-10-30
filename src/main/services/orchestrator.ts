@@ -1,4 +1,5 @@
 import { MarketsService } from './markets'
+import { parseTradingCommand } from './trading/command'
 import type { ChatMessage, Action, AgentState } from '../../shared/types'
 import { ActionStore } from './actionStore'
 import { LogService } from './logs'
@@ -100,6 +101,18 @@ export class OrchestratorService {
       this.brain.addMessage(reply)
       return reply
     }
+
+    // Trader mode: a clear trading request runs the exact trading tool directly, so it always
+    // works regardless of whether the local model emits perfect JSON.
+    if (this.agent.getState().status !== 'running') {
+      const cmd = parseTradingCommand(content)
+      if (cmd) {
+        const reply = await this.runTradingCommand(cmd, signal)
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
+    }
+
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
 
@@ -292,6 +305,18 @@ export class OrchestratorService {
       content: `On it, ${settings.userName}.`,
       timestamp: Date.now()
     }
+  }
+
+  /** Run a parsed trading command directly and format the result as a chat reply. */
+  private async runTradingCommand(cmd: { tool: string; params: Record<string, unknown> }, signal?: AbortSignal): Promise<ChatMessage> {
+    const result = await this.registry.execute(cmd.tool, cmd.params, { abortSignal: signal ?? new AbortController().signal })
+    let content: string
+    if (!result.success) content = `Couldn't do that: ${result.error}`
+    else if (typeof result.data === 'string') content = result.data
+    else if (result.data && typeof result.data === 'object' && 'readable' in result.data) content = String((result.data as { readable: string }).readable)
+    else content = '```json\n' + JSON.stringify(result.data, null, 2) + '\n```'
+    this.log.info(`Trader mode: ${cmd.tool} ${result.success ? 'ok' : 'failed'}`)
+    return { id: nanoid(), role: 'assistant', content, timestamp: Date.now(), fromTools: true }
   }
 
   /** A chat answer, with a warning when it claims an action no tool performed. */
