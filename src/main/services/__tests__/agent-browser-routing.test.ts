@@ -669,22 +669,22 @@ describe('confirm-task — pending-task guard', () => {
 // Verifies the regex captures text and filename from the exact live test sentence
 // and from common variants, and returns null for non-save tasks.
 
-describe('AgentLoop.getHardcodedFirstStep — save-text pre-flight override', () => {
-  it('exact live test sentence → notepad.saveText with correct text and filename', () => {
+describe('AgentLoop.getHardcodedFirstStep — file-write pre-flight override', () => {
+  it('exact live test sentence → filesystem.write with correct content and filename', () => {
     const result = AgentLoop.getHardcodedFirstStep(
       'Using Notepad, save the text "Hello from Goga live test" to a new file named goga-live-20260930-03.txt in my Documents folder. Do not overwrite an existing file.'
     )
-    expect(result?.tool).toBe('notepad.saveText')
-    expect(result?.params.text).toBe('Hello from Goga live test')
-    expect(result?.params.filename).toBe('goga-live-20260930-03.txt')
+    expect(result?.tool).toBe('filesystem.write')
+    expect(result?.params.content).toBe('Hello from Goga live test')
+    expect(String(result?.params.path)).toMatch(/goga-live-20260930-03\.txt$/)
     expect(result?.done).toBe(false)
   })
 
   it('save "<text>" to <filename>.txt variant → matches', () => {
     const result = AgentLoop.getHardcodedFirstStep('save "hello world" to notes.txt')
-    expect(result?.tool).toBe('notepad.saveText')
-    expect(result?.params.text).toBe('hello world')
-    expect(result?.params.filename).toBe('notes.txt')
+    expect(result?.tool).toBe('filesystem.write')
+    expect(result?.params.content).toBe('hello world')
+    expect(String(result?.params.path)).toMatch(/notes\.txt$/)
   })
 
   it('non-save task → returns null', () => {
