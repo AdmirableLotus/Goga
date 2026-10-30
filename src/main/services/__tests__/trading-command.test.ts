@@ -1,19 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { parseTradingCommand, symbolIn } from '../trading/command'
 
-describe('symbol extraction', () => {
-  it('reads tickers, pairs and crypto names', () => {
-    expect(symbolIn('analyze AAPL')).toBe('AAPL')
+describe('symbol extraction (unambiguous symbols only: pair / crypto / $ticker)', () => {
+  it('reads pairs, crypto names and $tickers anywhere', () => {
     expect(symbolIn('plan a buy on EUR/USD')).toBe('EUR/USD')
     expect(symbolIn('how is bitcoin doing')).toBe('BTC/USD')
     expect(symbolIn('price of eth')).toBe('ETH/USD')
-    expect(symbolIn('news on NVDA today')).toBe('NVDA')
-    expect(symbolIn('show my account')).toBeNull()
-    // Lowercase words and common acronyms are NOT tickers (no false trades on normal sentences).
-    expect(symbolIn('analyze aapl')).toBeNull()
-    expect(symbolIn('i need to buy tools for my table')).toBeNull()
+    expect(symbolIn('what about $NVDA')).toBe('NVDA')
+    // A BARE uppercase ticker is NOT matched anywhere (only verb-adjacent, in the command parser),
+    // so acronyms in normal sentences never become trades.
+    expect(symbolIn('analyze AAPL')).toBeNull()
     expect(symbolIn('buy a USB cable and an LED')).toBeNull()
     expect(symbolIn('analyze the ISFET and PPG sensors')).toBeNull()
+    expect(symbolIn('show my account')).toBeNull()
   })
 })
 

@@ -30,17 +30,37 @@ const CRYPTO: Record<string, string> = {
   sol: 'SOL/USD', dogecoin: 'DOGE/USD', doge: 'DOGE/USD', xrp: 'XRP/USD', ripple: 'XRP/USD',
 }
 
-/** The symbol in a request: a pair like EUR/USD, an uppercase ticker, a crypto name, else null. */
+/** An unambiguous symbol anywhere in the text: a forex/crypto pair, a crypto name, or a
+ *  $-prefixed ticker. These are safe to match anywhere. Bare tickers are handled by adjacency. */
 export function symbolIn(text: string): string | null {
   const pair = text.match(/\b([A-Za-z]{2,5})\/([A-Za-z]{3})\b/)
   if (pair) return `${pair[1].toUpperCase()}/${pair[2].toUpperCase()}`
   const crypto = text.match(/\b(bitcoin|btc|ethereum|eth|solana|sol|dogecoin|doge|xrp|ripple)\b/i)
   if (crypto) return CRYPTO[crypto[1].toLowerCase()]
-  // Only a ticker WRITTEN IN CAPITALS counts (AAPL, SPY, TSLA). We deliberately do NOT treat
-  // any lowercase word as a symbol — that turned ordinary sentences ("buy tools", "need a table")
-  // into bogus trades. Users naturally capitalise tickers.
-  for (const w of text.match(/\b[A-Z]{2,5}\b/g) ?? []) if (!NOT_SYMBOL.has(w)) return w
+  const dollar = text.match(/\$([A-Za-z]{1,5})\b/)
+  if (dollar) return dollar[1].toUpperCase()
   return null
+}
+
+/** A single candidate token → a symbol, or null. Used for verb-adjacent matches like "buy AAPL". */
+function tokenSymbol(tok: string): string | null {
+  const t = tok.trim()
+  const pair = t.match(/^([A-Za-z]{2,5})\/([A-Za-z]{3})$/)
+  if (pair) return `${pair[1].toUpperCase()}/${pair[2].toUpperCase()}`
+  const c = t.toLowerCase().replace(/^\$/, '')
+  if (CRYPTO[c]) return CRYPTO[c]
+  const dollar = t.match(/^\$([A-Za-z]{1,5})$/)
+  if (dollar) return dollar[1].toUpperCase()
+  // A bare ticker must be ALL CAPS, 2–5 letters, and not a common acronym.
+  if (/^[A-Z]{2,5}$/.test(t) && !NOT_SYMBOL.has(t)) return t
+  return null
+}
+
+/** The symbol that an intent verb points at, e.g. "analyze AAPL", "buy 10 TSLA", "on EUR/USD". */
+function symbolAfter(text: string, verbs: string): string | null {
+  const re = new RegExp(`\\b(?:${verbs})\\b\\s+(?:to open\\s+|into\\s+|some\\s+|a\\s+|an\\s+|the\\s+|my\\s+|on\\s+|of\\s+|for\\s+|\\d+(?:\\.\\d+)?\\s+(?:shares?\\s+|units?\\s+|coins?\\s+)?(?:of\\s+)?)*(\\$?[A-Za-z]{2,5}(?:\\/[A-Za-z]{3})?)\\b`, 'i')
+  const m = text.match(re)
+  return m ? tokenSymbol(m[1]) : null
 }
 
 const TIMEFRAME: Record<string, string> = { hour: '1Hour', hourly: '1Hour', day: '1Day', daily: '1Day', week: '1Week', weekly: '1Week', minute: '1Min' }
@@ -69,25 +89,30 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
   if (!/\baccount\b/.test(lower) && /\b(trading practice|practice trading|run (a )?practice|backtest (sweep|everything|all|my watchlist)|what (strategy|strategies) works?|which strateg\w+)\b/.test(lower))
     return { tool: 'trading.practice', params: {} }
 
-  // News (symbol optional).
-  if (/\bnews\b/.test(lower)) return { tool: 'trading.news', params: symbolIn(text) ? { symbol: symbolIn(text) } : {} }
+  // News — for a named symbol (adjacent or unambiguous), or an explicit "market/stock/crypto news".
+  if (/\bnews\b/.test(lower)) {
+    const symbol = symbolAfter(text, 'news|on|about|for') ?? symbolIn(text)
+    if (symbol) return { tool: 'trading.news', params: { symbol } }
+    if (/\b(market|stock|stocks|crypto|financial|trading)\s+news\b/.test(lower)) return { tool: 'trading.news', params: {} }
+  }
 
-  // Plan a trade — a buy/sell/long/short intent. Always a plan, never a direct order.
-  const side = lower.match(/\b(buy|long)\b/) ? 'buy' : lower.match(/\b(sell|short)\b/) ? 'sell' : null
-  if (side && (/\b(plan|set\s*up|setup|should i|thinking of|consider)\b/.test(lower) || /\b(buy|sell|long|short)\b/.test(lower))) {
-    const symbol = symbolIn(text)
+  // Plan a trade. Symbol must sit right after the buy/sell verb ("buy AAPL"), or be an
+  // unambiguous pair/crypto/$ticker — so "what to buy for the QFN PCB" never trades.
+  if (/\b(buy|sell|long|short|plan a (buy|sell|trade)|go (long|short))\b/.test(lower)) {
+    const side = /\b(buy|long)\b/.test(lower) ? 'buy' : 'sell'
+    const symbol = symbolAfter(text, 'buy|sell|long|short|on') ?? symbolIn(text)
     if (symbol) return { tool: 'trading.plan', params: { symbol, side, ...(riskIn(text) !== undefined ? { riskPct: riskIn(text) } : {}), ...(timeframeIn(text) ? { timeframe: timeframeIn(text) } : {}) } }
   }
 
-  // Analyze a chart — needs an explicit chart/analysis word to avoid catching plain questions.
+  // Analyze a chart — the symbol must follow the analyze/chart word, or be a clear pair/crypto.
   if (/\b(analy[sz]e|chart|technicals?|technical analysis|candles?)\b/.test(lower)) {
-    const symbol = symbolIn(text)
+    const symbol = symbolAfter(text, 'analy[sz]e|chart|chart of|on|of|for') ?? symbolIn(text)
     if (symbol) return { tool: 'trading.analyze', params: { symbol, ...(timeframeIn(text) ? { timeframe: timeframeIn(text) } : {}) } }
   }
 
-  // Price / quote.
+  // Price / quote — likewise verb-adjacent or an unambiguous symbol.
   if (/\b(price|quote|worth|cost|trading at)\b/.test(lower)) {
-    const symbol = symbolIn(text)
+    const symbol = symbolAfter(text, 'price|quote|worth|cost|of|for|on') ?? symbolIn(text)
     if (symbol) return { tool: 'trading.quote', params: { symbol } }
   }
 
