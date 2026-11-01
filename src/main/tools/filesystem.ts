@@ -96,10 +96,10 @@ reg.register({
 }, async (p) => {
   const rootPath = (p.path as string).replace(/'/g, "''")
   const pattern = (p.pattern as string).replace(/'/g, "''")
-  let cmd = `Get-ChildItem -Path '${rootPath}' -Recurse -Filter '${pattern}' -ErrorAction SilentlyContinue | Select-Object FullName, Length | ConvertTo-Json -Compress`
+  let cmd = `Get-ChildItem -Path '${rootPath}' -Recurse -Filter '${pattern}' -ErrorAction SilentlyContinue | Select-Object -First 200 FullName, Length | ConvertTo-Json -Compress`
   if (p.content) {
     const needle = (p.content as string).replace(/'/g, "''")
-    cmd = `Get-ChildItem -Path '${rootPath}' -Recurse -Filter '${pattern}' -ErrorAction SilentlyContinue | Select-String -Pattern '${needle}' | Select-Object Path, LineNumber, Line | ConvertTo-Json -Compress`
+    cmd = `Get-ChildItem -Path '${rootPath}' -Recurse -Filter '${pattern}' -ErrorAction SilentlyContinue | Select-String -Pattern '${needle}' | Select-Object -First 200 Path, LineNumber, Line | ConvertTo-Json -Compress`
   }
   const result = await shellExecute(cmd)
   try {

@@ -15,11 +15,12 @@ import { OllamaClient } from './ollamaClient'
 import { BRAIN_LOAD_WAIT_MS, LocalLlamaService } from './localLlama'
 import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
-import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
+import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, canonicalizeParams, describeDone, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
 import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import { VerificationEngine } from './verificationEngine'
 import { gapFromAgentEnd, gapJournal } from './gapJournal'
+import { resolveToolAlias } from './toolAliases'
 import { gogaIdentity } from './persona'
 import { READ_ONLY_TOOLS, checkSpecFor, describeStepForPlanner, honestyNote, unresolvedFailures } from './stepVerification'
 import type { ObservationOutcome, ObservationProgress } from './screenObservation'
@@ -267,6 +268,22 @@ export class AgentLoop {
         // Unknown tool: inject a structured error into the step history and allow
         // ONE replanning attempt. The error lists valid tool names so the LLM can
         // self-correct. A second consecutive unknown-tool response hard-stops.
+        // Invented names for abilities Goga has ("terminal" → shell.execute). Mapped before the
+        // risk check below, so the real tool's approval rules still apply.
+        if (!this.registry.get(toolCall.tool)) {
+          const alias = resolveToolAlias(toolCall.tool, toolCall.params)
+          if (alias && 'ask' in alias) {
+            finalReply = alias.ask
+            this.setState({ status: 'done' })
+            break
+          }
+          if (alias && this.registry.get(alias.tool)) {
+            this.log.info(`Agent: tool "${toolCall.tool}" mapped to ${alias.tool}`)
+            toolCall.tool = alias.tool
+            toolCall.params = alias.params
+          }
+        }
+
         const toolDef = this.registry.get(toolCall.tool)?.definition
         if (!toolDef) {
           plannerDiagnostic('validation.rejected', { reason: 'Tool is not registered', tool: toolCall.tool })
@@ -319,8 +336,17 @@ export class AgentLoop {
         // ── DUPLICATE GUARD ───────────────────────────────────────────────────
         if (dedup.isDuplicate(toolCall.tool, toolCall.params)) {
           this.log.warn(`Agent duplicate action blocked: ${toolCall.tool} — stopping turn`)
-          finalReply = `I already performed ${toolCall.tool} with those arguments this turn. Stopping to avoid repeating the same action.`
-          this.setState({ status: 'error', error: `duplicate_action: ${toolCall.tool}` })
+          // Usually the first try worked and the planner just couldn't tell (the top gap in
+          // Goga's journal: opening a page twice). If it did, the task is done, not failed.
+          const key = canonicalizeParams(toolCall.params)
+          const earlier = [...completedSteps].reverse().find(s => s.tool === toolCall.tool && canonicalizeParams(s.params) === key)
+          if (earlier?.result.success && earlier.check?.outcome !== 'failed') {
+            finalReply = `Done — ${describeDone(earlier)}. (I stopped instead of doing it a second time.)` + honestyNote(completedSteps)
+            this.setState({ status: 'done' })
+          } else {
+            finalReply = `I already performed ${toolCall.tool} with those arguments this turn and it did not work, so I stopped instead of repeating it.`
+            this.setState({ status: 'error', error: `duplicate_action: ${toolCall.tool}` })
+          }
           break
         }
 

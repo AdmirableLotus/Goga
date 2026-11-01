@@ -112,3 +112,18 @@ export class FailureCycleTracker {
     return this.counts.get(failureSignature(tool, params, error)) ?? 0
   }
 }
+
+/** What a successful step did, in plain words ("opened https://…"). */
+export function describeDone(step: { tool: string; params: Record<string, unknown> }): string {
+  const p = step.params ?? {}
+  const s = (k: string) => String(p[k] ?? '').slice(0, 200)
+  switch (step.tool) {
+    case 'browser.open': case 'browser.openExternal': case 'browser.navigate': return `I opened ${s('url')}`
+    case 'process.start': return `I started ${s('executable')}`
+    case 'shell.execute': return 'I ran the command'
+    case 'filesystem.write': return `I saved ${s('path')}`
+    case 'browser.click': case 'browser.clickByRole': return 'I clicked it'
+    case 'browser.type': return 'I typed it in'
+    default: return `${step.tool} worked`
+  }
+}
