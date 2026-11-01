@@ -8,6 +8,10 @@ import { RoutineTracker } from './services/routine'
 import { SettingsService } from './services/settings'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
 import { DesktopAdapter } from './adapters/desktop'
+import { TradeWatcher, DEFAULT_WATCH_RULES, type WatchAlert } from './services/trading/tradeWatcher'
+import { AutoTrader, DEFAULT_AUTO_RULES, learningReport } from './services/trading/autoTrader'
+import { initGapJournal } from './services/gapJournal'
+import { alpacaKeys, marketData, paperTrading, tradingLimits } from './services/trading/desk'
 
 /**
  * Sleep mode: closing the window puts Goga in the tray by the clock instead of quitting.
@@ -23,6 +27,9 @@ let quitting = false
 let toldAboutTray = false
 let routine: RoutineTracker | undefined
 let guardian: GuardianService | undefined
+let tradeWatcher: TradeWatcher | undefined
+let autoTrader: AutoTrader | undefined
+let gapTimer: ReturnType<typeof setInterval> | undefined
 let wakeUp: () => void = () => {}
 const log = LogService.getInstance()
 const settings = () => SettingsService.getInstance().get()
@@ -35,6 +42,14 @@ export function wakeGoga(): void { wakeUp() }
 /** Recent apps and windows, for questions about the user's day ('' when nothing is known). */
 export function routineSummary(userName: string): string {
   return routine?.summary(userName) ?? ''
+}
+
+/** What Goga's own paper trading is doing and has learned, for chat ('' when he isn't trading). */
+export function autoTradingSummary(): string {
+  if (!autoTrader || !settings().autoTradeEnabled) return ''
+  const state = autoTrader.readState()
+  const open = Object.values(state.open).map(p => `${p.symbol} (${p.strategy}, stop ${p.stop}, target ${p.target})`).join(', ') || 'none'
+  return `You trade the paper account on your own to learn (rule-based: backtested strategies, ${DEFAULT_AUTO_RULES.riskPct}% risk per trade, at most ${DEFAULT_AUTO_RULES.maxOpen} positions, never the user's own positions). Your open auto-trades: ${open}. ${learningReport(state)}`
 }
 
 export function startSleepMode(getWindow: () => BrowserWindow | null, createWindow: () => void): void {
@@ -58,6 +73,41 @@ export function startSleepMode(getWindow: () => BrowserWindow | null, createWind
   routine.start()
   guardian = new GuardianService({ dir: userData, enabled: () => settings().guardianEnabled, onAlert: alert => tellUser(alert, getWindow, createWindow), log })
   guardian.start()
+  // Only the Alpaca paper account (it has real stop orders); no keys means nothing to watch or trade.
+  const alpacaAccount = async () => alpacaKeys()
+    ? (await paperTrading().accounts()).find(v => v.name.startsWith('Alpaca')) ?? null
+    : null
+  tradeWatcher = new TradeWatcher({
+    dir: userData,
+    account: alpacaAccount,
+    rules: () => ({ ...DEFAULT_WATCH_RULES, dailyLossPct: tradingLimits().dailyLossPct }),
+    enabled: () => settings().tradeWatchEnabled ?? true,
+    onAlert: alert => tellUser(alert, getWindow, createWindow),
+    log,
+  })
+  tradeWatcher.start()
+  autoTrader = new AutoTrader({
+    dir: userData,
+    enabled: () => settings().autoTradeEnabled ?? false,
+    rules: () => ({ ...DEFAULT_AUTO_RULES, maxPositionPct: tradingLimits().maxPositionPct, dailyLossPct: tradingLimits().dailyLossPct }),
+    account: alpacaAccount,
+    bars: async (symbol, tf) => (await marketData().bars(symbol, tf)).bars,
+    stockOpen: () => paperTrading().stockMarketOpen(),
+    order: req => paperTrading().order(req),
+    close: (symbol, reason) => paperTrading().closePosition(symbol, reason),
+    onTrade: alert => tellUser(alert, getWindow, createWindow),
+    log,
+  })
+  autoTrader.start()
+
+  // What Goga couldn't do, written down; once a week he says what he'd build next.
+  const gaps = initGapJournal(path.join(userData, 'capability-gaps.json'))
+  gaps.weeklyReport()   // starts the weekly clock on the first run
+  gapTimer = setInterval(() => {
+    const report = gaps.weeklyReport()
+    if (report) tellUser({ severity: 'summary', title: "What I couldn't do this week", detail: `${report}\nAsk me "what tools do you need" any time for the full list.` }, getWindow, createWindow)
+  }, 60 * 60_000)
+  gapTimer.unref?.()
 
   if (startedAsleep()) fallAsleep()
 }
@@ -88,6 +138,9 @@ export function applySleepSettings(): void {
 
 export function stopSleepMode(): void {
   guardian?.stop()
+  tradeWatcher?.stop()
+  autoTrader?.stop()
+  clearInterval(gapTimer)
   routine?.stop()
   tray?.destroy()
   tray = null
@@ -102,8 +155,11 @@ function fallAsleep(): void {
 function wake(getWindow: () => BrowserWindow | null, createWindow: () => void): void {
   let win = getWindow()
   if (!win) { createWindow(); win = getWindow() }
-  // With the window open the mic button is used; the always-on loop is for sleep.
-  VoiceOrchestrator.getInstance().stopWakeLoop()
+  // Keep the "hey goga" wake listener running with the window open too, so the
+  // user can talk hands-free while using Goga (it stays on unless disabled in
+  // Settings). It is only torn down when voice or wake word is turned off.
+  const s = settings()
+  if (!(s.voiceEnabled && s.wakeWordEnabled)) VoiceOrchestrator.getInstance().stopWakeLoop()
   if (win?.isMinimized()) win.restore()
   win?.show()
   win?.focus()
@@ -112,7 +168,7 @@ function wake(getWindow: () => BrowserWindow | null, createWindow: () => void): 
 
 function refreshTrayMenu(getWindow: () => BrowserWindow | null, createWindow: () => void): void {
   const s = settings()
-  const toggle = (key: 'guardianEnabled' | 'routineLearning') => () => {
+  const toggle = (key: 'guardianEnabled' | 'routineLearning' | 'tradeWatchEnabled' | 'autoTradeEnabled') => () => {
     SettingsService.getInstance().set({ [key]: !settings()[key] })
     refreshTrayMenu(getWindow, createWindow)
   }
@@ -121,6 +177,8 @@ function refreshTrayMenu(getWindow: () => BrowserWindow | null, createWindow: ()
     { type: 'separator' },
     { label: 'Watch and protect the PC', type: 'checkbox', checked: s.guardianEnabled, click: toggle('guardianEnabled') },
     { label: 'Learn my routine', type: 'checkbox', checked: s.routineLearning, click: toggle('routineLearning') },
+    { label: 'Watch my paper trades', type: 'checkbox', checked: s.tradeWatchEnabled ?? true, click: toggle('tradeWatchEnabled') },
+    { label: 'Let Goga trade on paper to learn', type: 'checkbox', checked: s.autoTradeEnabled ?? false, click: toggle('autoTradeEnabled') },
     { type: 'separator' },
     { label: 'Quit Goga', click: () => { quitting = true; app.quit() } },
   ]))
@@ -133,10 +191,12 @@ function notify(title: string, body: string, onClick?: () => void): void {
   n.show()
 }
 
-/** An alert pops up by the clock, joins the chat so it can be talked through, and danger is said aloud. */
-function tellUser(alert: GuardianAlert, getWindow: () => BrowserWindow | null, createWindow: () => void): void {
-  notify(`Goga: ${alert.title}`, alert.detail, () => wake(getWindow, createWindow))
-  const message = { id: nanoid(), role: 'assistant' as const, content: `Heads up — ${alert.title.toLowerCase()}. ${alert.detail}`, timestamp: Date.now() }
+/** An alert pops up by the clock, joins the chat so it can be talked through, and danger is said aloud.
+ *  A daily summary only joins the chat — no pop-up. */
+function tellUser(alert: GuardianAlert | WatchAlert, getWindow: () => BrowserWindow | null, createWindow: () => void): void {
+  if (alert.severity !== 'summary') notify(`Goga: ${alert.title}`, alert.detail, () => wake(getWindow, createWindow))
+  const content = alert.severity === 'summary' ? `**${alert.title}.** ${alert.detail}` : `Heads up — ${alert.title.toLowerCase()}. ${alert.detail}`
+  const message = { id: nanoid(), role: 'assistant' as const, content, timestamp: Date.now() }
   BrainService.getInstance().addMessage(message)
   getWindow()?.webContents.send('chat:message', message)
   if (alert.severity === 'danger' && settings().voiceEnabled) {

@@ -113,11 +113,21 @@ const FLUX_RARELY_NEEDED = /^flux\.(send_feedback|review_knowledge|list_organiza
 
 export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bitcoin|btc|eth|ethereum|solana|forex|currency pair|portfolio|backtest\w*|rsi|macd|candlesticks?|paper (account|trad\w+)|practice (account|trad\w+)|eur\/?usd|gbp\/?usd|usd\/?jpy|[a-z]{2,5}\/usd)\b/i
 
+/** Tasks about Goga himself — his code, his tools, what he couldn't do. */
+export const SELF_TASK = /\b(your|goga'?s) (own )?(code|source|codebase|tools|gaps?|failures)\b|\byour ?self\b|\bwhat (tools?|abilities) (do )?you need\b/i
+
 /**
  * The tools the planner sees for a task. Hardware and trading tasks get a focused set (their
  * own tools plus web, memory and notes); other tasks get everything but those.
  */
 export function plannerOffers(task: string): (name: string) => boolean {
+  const offers = baseOffers(task)
+  // The self-reading tools only take room in the prompt when the task is about Goga himself.
+  const self = SELF_TASK.test(task)
+  return name => name.startsWith('self.') ? self : offers(name)
+}
+
+function baseOffers(task: string): (name: string) => boolean {
   const hardware = HARDWARE_TASK.test(task), trading = TRADING_TASK.test(task)
   if (!hardware && !trading) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.')
   const flux = FLUX_TASK.test(task)

@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
-import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, splitIntoParts, takeNotes } from '../longText'
+import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, splitIntoParts, takeNotes, rewriteRequest, rewriteInParts } from '../longText'
 import { looksLikeAgentTask, planNeedsComputer, startsWithAgreement } from '../agentRouting'
 
 const paragraph = (i: number) => `Section ${i}. ` + 'The ring measures bioimpedance at several frequencies. '.repeat(20)
@@ -76,5 +76,52 @@ describe('routing a discussed plan', () => {
     expect(planNeedsComputer('I can draft the executive summary and the technical approach section first, pulling directly from your notes. Want me to go ahead?')).toBe(false)
     expect(planNeedsComputer("I'll open hackerone.com, wait while you log in, then list the programs. Want me to go ahead?")).toBe(true)
     expect(planNeedsComputer('I can save it to a file on your desktop. Shall I?')).toBe(true)
+  })
+})
+
+describe('rewriting a long pasted text (rephrase / make it sound human)', () => {
+  const body = 'My scope and success target\n\nV1 scope and success target. Include in V1 four-contact BioZ measurement: Drive 1, Sense 1, Sense 2, Drive 2. '
+    + 'Budget estimate for the year: Windows laptop $350–900; general tools $150–400; ISFET supplies $700–2,500+. '.repeat(110)
+    + '\n\nMain technical gates: BioZ bench gate, BioZ wear gate, ISFET bench gate, cartridge gate, comfort gate.'
+
+  it("splits Ace's instruction from the pasted text", () => {
+    const r = rewriteRequest(`rephrase it to sound humane ${body}`)
+    expect(r?.instruction).toBe('rephrase it to sound humane')
+    expect(r?.text.startsWith('My scope and success target')).toBe(true)
+  })
+
+  it('also finds the instruction at the end, and ignores short or non-rewrite messages', () => {
+    const r = rewriteRequest(`${body}\nPlease make it sound more professional.`)
+    expect(r?.instruction).toBe('Please make it sound more professional.')
+    expect(r?.text.endsWith('comfort gate.')).toBe(true)
+    expect(rewriteRequest('rephrase this: hello there')).toBeNull()          // short — normal chat handles it
+    expect(rewriteRequest(`what does this say? ${body}`)).toBeNull()          // understanding, not rewriting
+  })
+
+  it('rewrites EVERY part (no summary) and streams each part', async () => {
+    const seenParts: string[] = []
+    const streamed: string[] = []
+    const chat = async (msgs: { role: string; content: string }[], onTok: (t: string) => void) => {
+      const part = msgs[1].content.split('"""')[1]
+      seenParts.push(part)
+      const out = `[rewritten ${part.length} chars]`
+      onTok(out)
+      return out
+    }
+    const text = rewriteRequest(`rephrase it to sound humane ${body}`)!.text
+    const result = await rewriteInParts(text, 'rephrase it to sound humane', 'Ace', chat, t => streamed.push(t))
+    expect(seenParts.length).toBeGreaterThan(1)
+    expect(seenParts.join('').replace(/\s/g, '').length).toBe(text.replace(/\s/g, '').length)   // all text sent, none dropped
+    expect(result.split('\n\n')).toHaveLength(seenParts.length)
+    expect(streamed.join('')).toBe(result)
+  })
+})
+
+describe('short rewrite requests take the rewrite path too', () => {
+  it("parses Ace's short 'sound like me' request", () => {
+    const msg = 'rephrase it to sound like me Can multi-frequency bioimpedance measured at the finger produce sufficiently repeatable, longitudinal measurements to distinguish fluid-related physiological change from the variability caused by electrode contact, motion, temperature, perfusion, anatomy, placement, and mixed-signal electronic interference in a wearable'
+    const r = rewriteRequest(msg)
+    expect(r?.instruction).toBe('rephrase it to sound like me')
+    expect(r?.text.startsWith('Can multi-frequency bioimpedance')).toBe(true)
   })
 })

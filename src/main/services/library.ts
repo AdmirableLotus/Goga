@@ -44,6 +44,13 @@ export class LibraryService {
     return meta
   }
 
+  /** The plain text of a supported document (pdf, docx, txt, md, csv, epub). */
+  async readText(filePath: string): Promise<string> {
+    const ext = path.extname(filePath).toLowerCase().slice(1) as BookMeta['format']
+    if (!['pdf', 'txt', 'epub', 'docx', 'md', 'csv'].includes(ext)) throw new Error(`Unsupported format: ${ext}`)
+    return this.extractText(filePath, ext)
+  }
+
   private async extractText(filePath: string, format: BookMeta['format']): Promise<string> {
     if (format === 'txt' || format === 'md' || format === 'csv') {
       return fs.readFileSync(filePath, 'utf-8')

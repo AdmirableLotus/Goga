@@ -89,3 +89,39 @@ describe('remembering conversations', () => {
     expect(await reopened.promptBlock('what did we do yesterday?')).toContain('Viora NSF pitch')
   })
 })
+
+describe('catching up on unwritten conversations', () => {
+  it('starts writing a saved backlog at launch, without waiting for a new message', async () => {
+    vi.useFakeTimers()
+    try {
+      const file = tempFile()
+      const pending = [
+        msg('user', 'Help me with the Alma budget', tuesday), msg('assistant', 'Here it is', tuesday + 1000),
+        msg('user', 'Good morning', tuesday + CONVERSATION_GAP_MS * 3),
+      ].map(({ role, content, timestamp }) => ({ role, content, timestamp }))
+      fs.writeFileSync(file, JSON.stringify({ pending, notes: [], embeddings: {} }))
+      const { chat } = memory(undefined, file)
+      expect(chat).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(chat).toHaveBeenCalledTimes(1)
+      expect(chat.mock.calls[0][0][1].content).toContain('Alma budget')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('retries later when the brain was busy, instead of waiting for the next message', async () => {
+    vi.useFakeTimers()
+    try {
+      const chat = vi.fn().mockRejectedValueOnce(new Error('brain busy')).mockResolvedValue('- Planned the Alma budget.')
+      const { mem } = memory(chat)
+      mem.record(msg('user', 'Plan the Alma budget', tuesday))
+      mem.record(msg('assistant', 'Done', tuesday + 1000))
+      mem.record(msg('user', 'Next day', tuesday + CONVERSATION_GAP_MS * 3))
+      mem.record(msg('assistant', 'Hi', tuesday + CONVERSATION_GAP_MS * 3 + 1000))
+      await vi.advanceTimersByTimeAsync(60_000)        // first try: busy
+      expect(chat).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(60_000 * 15)   // retry later
+      expect(chat).toHaveBeenCalledTimes(2)
+      expect(mem.getNotes()[0]?.text).toContain('Alma budget')
+    } finally { vi.useRealTimers() }
+  })
+})

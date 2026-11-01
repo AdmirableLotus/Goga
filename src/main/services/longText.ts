@@ -77,6 +77,75 @@ export async function takeNotes(text: string, userName: string, chat: Chat,
   return notes.join('\n\n').slice(0, MAX_NOTES_CHARS + 1000)
 }
 
+// ── Rewriting a long text (rephrase, polish, translate…) ─────────────────────
+// Notes are right for understanding a document but wrong for transforming it: a rewrite
+// made from notes silently drops details. These requests rewrite the full text part by part.
+
+const REWRITE_VERB = /\b(re-?phrase|re-?write|re-?word|paraphrase|proof-?read|polish|copy-?edit|clean (it |this )?up|fix (the |my )?(grammar|spelling|wording|tone)|translate|simplify|make (it|this|the text|my text) (sound|more|less|clearer|simpler|shorter|better|human|professional|friendlier|formal|casual)|sound (more )?(human|humane|natural|professional|friendly|formal|casual|warm))\b/i
+
+/** For a message that asks to transform its own pasted text: the instruction and the text. */
+export function rewriteRequest(message: string): { instruction: string; text: string } | null {
+  if (message.length < 120) return null
+  const head = message.slice(0, 300)
+  const m = REWRITE_VERB.exec(head)
+  if (m) {
+    // The instruction runs to the end of its clause: a line break, '.', ':' or the first
+    // capitalised word that starts the pasted text ("…sound humane My scope…").
+    const after = message.slice(m.index)
+    const words = after.split(/(\s+)/)
+    let end = m.index, count = 0
+    for (let i = 0; i < words.length && count < 30; i++) {
+      const w = words[i]
+      if (/\n/.test(w)) break
+      if (!/^\s+$/.test(w)) {
+        count++
+        if (count > 1 && /^[A-Z]/.test(w)) break
+        end += w.length
+        if (/[.:]$/.test(w)) break
+        continue
+      }
+      end += w.length
+    }
+    const instruction = message.slice(0, end).trim()
+    return { instruction, text: message.slice(end).trim() }
+  }
+  const tail = message.slice(-300)
+  const t = REWRITE_VERB.exec(tail)
+  if (t) {
+    // Instruction at the end: "…<text>… Please rephrase this to sound human."
+    const start = message.length - 300 + t.index
+    const sentenceStart = Math.max(message.lastIndexOf('\n', start), message.lastIndexOf('. ', start) + 1, 0)
+    return { instruction: message.slice(sentenceStart).trim(), text: message.slice(0, sentenceStart).trim() }
+  }
+  return null
+}
+
+type StreamChat = (messages: { role: 'system' | 'user'; content: string }[], onToken: (t: string) => void, signal?: AbortSignal) => Promise<string>
+
+const REWRITER = 'You rewrite text exactly as asked. Keep EVERY fact, number, dollar amount, name, part, heading, ' +
+  'list item and step — do not summarise, merge away, skip or add anything, and do not comment on the text. ' +
+  'If asked to make it sound human or humane, write it the way a real person would: warm, natural, first person ' +
+  'where it fits, plain words and varied sentences, never stiff or robotic. Output only the rewritten text.'
+
+/** Rewrite a long text in parts, streaming each part as it is written. */
+export async function rewriteInParts(text: string, instruction: string, userName: string, chat: StreamChat,
+  onToken?: (t: string) => void, onProgress?: (done: number, total: number) => void, signal?: AbortSignal): Promise<string> {
+  const parts = splitIntoParts(text, 4500)
+  const out: string[] = []
+  for (let i = 0; i < parts.length; i++) {
+    signal?.throwIfAborted()
+    onProgress?.(i, parts.length)
+    if (i > 0) onToken?.('\n\n')
+    const piece = await chat([
+      { role: 'system', content: REWRITER },
+      { role: 'user', content: `${userName}'s instruction: "${instruction}"\nThis is part ${i + 1} of ${parts.length} of their text. Rewrite this part in full:\n"""\n${parts[i]}\n"""` },
+    ], tok => onToken?.(tok), signal)
+    out.push(piece.trim())
+  }
+  onProgress?.(parts.length, parts.length)
+  return out.join('\n\n')
+}
+
 /** Notes for documents already read, keyed by a hash of the document. */
 export class NotesStore {
   private notes = new Map<string, string>()

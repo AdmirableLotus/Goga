@@ -23,28 +23,44 @@ if ($result -and $result.Text) { Write-Output $result.Text } else { Write-Output
 $r.Dispose()
 `
 
-// Continuous script: writes each recognized utterance as a line to stdout.
-// Writes "__READY__" when engine is initialized.
-// Runs until process is killed.
+// Continuous script. Prints one line per event to stdout:
+//   __READY__     engine initialized
+//   __SPEECH__    the user started speaking (a phrase is in progress)
+//   __REJECTED__  sound was heard but nothing was recognized
+//   <text>        a finished phrase
+// Runs until the process is killed.
+//
+// Events are queued with Register-ObjectEvent (no -Action) and drained with
+// Wait-Event on the MAIN thread, so every write reaches stdout. (Writing from an
+// -Action block runs on another thread and the output is often lost.)
+// RecognizeAsync(Multiple) listens without gaps between phrases, and __SPEECH__
+// lets the orchestrator know the user is still mid-sentence and must not be cut off.
 const CONTINUOUS_SCRIPT = `
 Add-Type -AssemblyName System.Speech
 $r = New-Object System.Speech.Recognition.SpeechRecognitionEngine
 $r.SetInputToDefaultAudioDevice()
 $r.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
-$r.BabbleTimeout = [TimeSpan]::FromSeconds(1)
-$r.InitialSilenceTimeout = [TimeSpan]::FromSeconds(30)
-$r.EndSilenceTimeout = [TimeSpan]::FromSeconds(0.8)
-$r.EndSilenceTimeoutAmbiguous = [TimeSpan]::FromSeconds(0.5)
-Register-ObjectEvent -InputObject $r -EventName SpeechRecognized -Action {
-  $text = $Event.SourceEventArgs.Result.Text
-  if ($text) { [Console]::WriteLine($text) }
-} | Out-Null
-Register-ObjectEvent -InputObject $r -EventName RecognizeCompleted -Action {
-  [Console]::WriteLine("__COMPLETED__")
-} | Out-Null
+$r.EndSilenceTimeout = [TimeSpan]::FromSeconds(0.9)
+$r.EndSilenceTimeoutAmbiguous = [TimeSpan]::FromSeconds(0.9)
+Register-ObjectEvent -InputObject $r -EventName SpeechDetected -SourceIdentifier gsd | Out-Null
+Register-ObjectEvent -InputObject $r -EventName SpeechRecognized -SourceIdentifier gsr | Out-Null
+Register-ObjectEvent -InputObject $r -EventName SpeechRecognitionRejected -SourceIdentifier grj | Out-Null
+Register-ObjectEvent -InputObject $r -EventName RecognizeCompleted -SourceIdentifier grc | Out-Null
 $r.RecognizeAsync([System.Speech.Recognition.RecognizeMode]::Multiple)
-[Console]::WriteLine("__READY__")
-while ($true) { Start-Sleep -Milliseconds 200 }
+[Console]::Out.WriteLine("__READY__")
+[Console]::Out.Flush()
+while ($true) {
+  $e = Wait-Event -Timeout 1
+  if (-not $e) { continue }
+  switch ($e.SourceIdentifier) {
+    'gsd' { [Console]::Out.WriteLine("__SPEECH__") }
+    'gsr' { $res = $e.SourceEventArgs.Result; if ($res.Text) { [Console]::Out.WriteLine('__TEXT__' + $res.Confidence.ToString('F2', [Globalization.CultureInfo]::InvariantCulture) + '|' + $res.Text) } }
+    'grj' { [Console]::Out.WriteLine("__REJECTED__") }
+    'grc' { try { $r.RecognizeAsync([System.Speech.Recognition.RecognizeMode]::Multiple) } catch { } }
+  }
+  Remove-Event -EventIdentifier $e.EventIdentifier
+  [Console]::Out.Flush()
+}
 `
 
 export class WindowsSttProvider implements ISttProvider {
@@ -85,6 +101,11 @@ export class WindowsSttProvider implements ISttProvider {
       for (const line of lines) {
         const text = line.trim()
         if (!text || text === '__READY__' || text === '__COMPLETED__') continue
+        if (text === '__SPEECH__') { this.contCallback?.({ transcript: '', event: 'speech-start' }); continue }
+        if (text === '__REJECTED__') { this.contCallback?.({ transcript: '', event: 'speech-rejected' }); continue }
+        // "__TEXT__0.83|what the user said" — the recognizer's confidence travels with the words.
+        const scored = /^__TEXT__([\d.]+)\|(.*)$/.exec(text)
+        if (scored) { this.contCallback?.({ transcript: scored[2].trim(), confidence: Number(scored[1]) }); continue }
         this.contCallback?.({ transcript: text })
       }
     })

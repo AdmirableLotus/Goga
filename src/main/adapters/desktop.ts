@@ -397,11 +397,14 @@ export class DesktopAdapter implements ToolAdapter {
         [System.Windows.Automation.Condition]::TrueCondition
       ) | ForEach-Object {
         $b = $_.Current.BoundingRectangle
+        # Minimized windows report infinite bounds; [int] of infinity throws and the
+        # window silently vanished from the list. Report them as 0 so they stay listed.
+        $num = { param($v) if ([double]::IsInfinity($v) -or [double]::IsNaN($v)) { 0 } else { [int]$v } }
         [PSCustomObject]@{
           title = $_.Current.Name
           pid   = $_.Current.ProcessId
-          x     = [int]$b.X; y = [int]$b.Y
-          w     = [int]$b.Width; h = [int]$b.Height
+          x     = & $num $b.X; y = & $num $b.Y
+          w     = & $num $b.Width; h = & $num $b.Height
         }
       } | ConvertTo-Json -Compress
     `

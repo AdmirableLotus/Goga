@@ -97,6 +97,28 @@ export class PaperTrading {
     return `Cancelled order ${orderId}`
   }
 
+  /** Whether the US stock market is open now (crypto never closes). */
+  async stockMarketOpen(): Promise<boolean> {
+    return Boolean((await this.alpaca('/clock')).is_open)
+  }
+
+  /** Sell all of a paper position: its stop and target orders are cancelled first so they can't sell twice. */
+  async closePosition(symbol: string, reason: string): Promise<string> {
+    const sym = instrument(symbol).symbol
+    const bare = sym.replace('/', '')
+    const held = (await this.alpaca('/positions') as { symbol: string; qty: string; current_price: string }[])
+      .find(p => p.symbol.replace('/', '') === bare)
+    if (!held) throw new Error(`no ${sym} position is held`)
+    const open = await this.alpaca('/orders?status=open&limit=100&nested=false') as { id: string; symbol: string }[]
+    const mine = open.filter(o => o.symbol.replace('/', '') === bare)
+    for (const o of mine) await this.alpaca(`/orders/${o.id}`, 'DELETE')
+    // Cancels settle a moment later; until then the shares are still reserved by them.
+    if (mine.length) await new Promise(r => setTimeout(r, 1500))
+    const placed = await this.alpaca(`/positions/${encodeURIComponent(bare)}`, 'DELETE')
+    this.writeJournal({ time: new Date().toISOString(), symbol: sym, side: 'sell', qty: Number(held.qty), price: Number(held.current_price), reason, orderId: placed.id, status: placed.status ?? 'submitted' })
+    return `Paper position closed: sold ${held.qty} ${sym} (about ${held.current_price}).`
+  }
+
   journal(limit = 20): JournalEntry[] {
     return this.readJournal().slice(-limit)
   }

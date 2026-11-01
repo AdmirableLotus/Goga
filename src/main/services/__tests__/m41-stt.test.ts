@@ -124,7 +124,7 @@ vi.mock('../speech/WindowsSpeechProvider', async (orig) => {
 
 // ─── Production imports (after mocks) ─────────────────────────────────────────
 import { ElevenLabsSttProvider } from '../speech/ElevenLabsSttProvider'
-import { VoiceOrchestrator } from '../voiceOrchestrator'
+import { VoiceOrchestrator, afterWakeWord } from '../voiceOrchestrator'
 import { looksLikeAgentTask, isVagueOpenWebsite } from '../agentRouting'
 
 function setEnv(present: boolean) {
@@ -795,8 +795,9 @@ describe('M4.1 — self-echo prevention', () => {
     ;(orch as any).echoGuardUntil = 0
     ;(orch as any).conversationActive = true
 
-    // Different content — must pass through
+    // Different content — must pass through (once the user's turn ends)
     ;(orch as any).onContinuousResult('open notepad for me')
+    ;(orch as any).flushSpeech()
     expect(transcripts).toContain('open notepad for me')
   })
 
@@ -887,5 +888,115 @@ describe('M4.1 — vague open-website routing', () => {
     expect(isVagueOpenWebsite('open notepad')).toBe(false)
     expect(isVagueOpenWebsite('I want to go back')).toBe(false)
     expect(isVagueOpenWebsite('fill and submit the form')).toBe(false)
+  })
+})
+
+describe('hands-free turn-taking (say everything, then Goga answers)', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  function freshOrch() {
+    ;(VoiceOrchestrator as any).instance = undefined
+    const orch = VoiceOrchestrator.getInstance()
+    const transcripts: string[] = []
+    orch.on('transcript', (t: string) => transcripts.push(t))
+    ;(orch as any).echoGuardUntil = 0
+    return { orch, transcripts }
+  }
+
+  it('joins phrases split by short pauses into ONE request, sent after the user stops', () => {
+    const { orch, transcripts } = freshOrch()
+    ;(orch as any).onContinuousResult('hey goga please check my trading account')
+    vi.advanceTimersByTime(600)
+    ;(orch as any).onContinuousResult({ transcript: '', event: 'speech-start' })
+    ;(orch as any).onContinuousResult('and then tell me how the ring budget looks')
+    expect(transcripts).toEqual([])            // not cut off mid-thought
+    vi.advanceTimersByTime(1400)               // user is quiet now
+    expect(transcripts).toEqual(['please check my trading account and then tell me how the ring budget looks'])
+  })
+
+  it('does not answer while a phrase is still being spoken', () => {
+    const { orch, transcripts } = freshOrch()
+    ;(orch as any).onContinuousResult('hey goga open my budget file')
+    ;(orch as any).onContinuousResult({ transcript: '', event: 'speech-start' })  // still talking
+    vi.advanceTimersByTime(5000)
+    expect(transcripts).toEqual([])
+    ;(orch as any).onContinuousResult('and read the totals to me')
+    vi.advanceTimersByTime(1400)
+    expect(transcripts).toEqual(['open my budget file and read the totals to me'])
+  })
+
+  it('a lone wake word waits for the request that follows', () => {
+    const { orch, transcripts } = freshOrch()
+    ;(orch as any).onContinuousResult('hey goga')
+    vi.advanceTimersByTime(3000)
+    expect(transcripts).toEqual([])
+    ;(orch as any).onContinuousResult('what is on my screen')
+    vi.advanceTimersByTime(1400)
+    expect(transcripts).toEqual(['what is on my screen'])
+  })
+
+  it('ignores speech without the wake word outside a conversation', () => {
+    const { orch, transcripts } = freshOrch()
+    ;(orch as any).onContinuousResult('I was just talking to my son')
+    vi.advanceTimersByTime(3000)
+    expect(transcripts).toEqual([])
+  })
+})
+
+describe('afterWakeWord — forgiving of how Windows mishears "Goga"', () => {
+  it('accepts the exact phrase and common mishearings', () => {
+    expect(afterWakeWord('Hey Goga, open notepad')).toBe('open notepad')
+    expect(afterWakeWord('A. Golda please check what trading account')).toBe('please check what trading account')
+    expect(afterWakeWord('hey gogo what time is it')).toBe('what time is it')
+    expect(afterWakeWord('okay gaga play music')).toBe('play music')
+    expect(afterWakeWord('Goga')).toBe('')
+  })
+  it('does not fire on ordinary sentences', () => {
+    expect(afterWakeWord('I went to yoga class today')).toBeNull()
+    expect(afterWakeWord('open notepad')).toBeNull()
+    expect(afterWakeWord('the toga party was fun')).toBeNull()
+  })
+})
+
+describe('follow-up speech confidence filter (room talk is not a request)', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  function convo() {
+    ;(VoiceOrchestrator as any).instance = undefined
+    const orch = VoiceOrchestrator.getInstance()
+    const transcripts: string[] = []
+    orch.on('transcript', (t: string) => transcripts.push(t))
+    ;(orch as any).echoGuardUntil = 0
+    ;(orch as any).conversationActive = true
+    return { orch, transcripts }
+  }
+
+  it('drops a low-confidence fragment heard in the follow-up window', () => {
+    const { orch, transcripts } = convo()
+    ;(orch as any).onContinuousResult({ transcript: 'The August that', confidence: 0.18 })
+    vi.advanceTimersByTime(2000)
+    expect(transcripts).toEqual([])
+  })
+
+  it('keeps a confident follow-up, and a low-confidence one that carries the wake word', () => {
+    const { orch, transcripts } = convo()
+    ;(orch as any).onContinuousResult({ transcript: 'what is my trading account', confidence: 0.82 })
+    vi.advanceTimersByTime(2000)
+    ;(orch as any).onContinuousResult({ transcript: 'hey goga open notepad', confidence: 0.2 })
+    vi.advanceTimersByTime(2000)
+    expect(transcripts).toEqual(['what is my trading account', 'open notepad'])
+  })
+
+  it('never filters the wake word itself outside a conversation', () => {
+    ;(VoiceOrchestrator as any).instance = undefined
+    const orch = VoiceOrchestrator.getInstance()
+    const transcripts: string[] = []
+    orch.on('transcript', (t: string) => transcripts.push(t))
+    ;(orch as any).echoGuardUntil = 0
+    ;(orch as any).onContinuousResult({ transcript: 'A. Golda check my account', confidence: 0.25 })
+    vi.advanceTimersByTime(2000)
+    expect(transcripts).toEqual(['check my account'])
   })
 })

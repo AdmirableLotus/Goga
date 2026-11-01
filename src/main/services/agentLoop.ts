@@ -19,6 +19,7 @@ import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDedupli
 import { nanoid } from '../utils/nanoid'
 import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import { VerificationEngine } from './verificationEngine'
+import { gapFromAgentEnd, gapJournal } from './gapJournal'
 import { gogaIdentity } from './persona'
 import { READ_ONLY_TOOLS, checkSpecFor, describeStepForPlanner, honestyNote, unresolvedFailures } from './stepVerification'
 import type { ObservationOutcome, ObservationProgress } from './screenObservation'
@@ -488,6 +489,8 @@ export class AgentLoop {
       this.setState({ status: 'error', error: 'task_timeout' })
     }
     if (this.state.status === 'running') this.setState({ status: 'done' })
+    // Write down what couldn't be done, so Goga learns which abilities he is missing.
+    gapJournal()?.record(gapFromAgentEnd(task, this.state.status, this.state.error, finalReply))
     return finalReply
   }
 
@@ -629,7 +632,9 @@ What is the next single action to take?`
         if (this.llama.isReady()) {
           retryRaw = await this.llama.chat(retryMessages as { role: 'system' | 'user' | 'assistant'; content: string }[], undefined, signal)
         } else {
-          retryRaw = await this.ollama.chat(retryMessages, undefined, signal)
+          // JSON mode: Ollama constrains the output to valid JSON, so the 14B can't answer in prose
+          // a second time ("Based on the…", "The next step…" — the most common planner failure).
+          retryRaw = await this.ollama.chatJson(retryMessages, signal)
         }
 
         if (signal.aborted) return { thought: 'aborted', tool: '', params: {}, done: true, reply: 'Stopped.' }

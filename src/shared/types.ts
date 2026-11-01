@@ -240,6 +240,12 @@ export interface AppSettings {
   startWithWindows: boolean
   guardianEnabled: boolean
   routineLearning: boolean
+  // Watch the paper trading account in the background and alert on changes and rule breaks
+  tradeWatchEnabled: boolean
+  // Goga trades the paper account on his own (rule-based, small risk) to learn
+  autoTradeEnabled: boolean
+  // Local coding model for the self-improvement workshop
+  coderModelName: string
   // Practice trading risk rules, enforced in code on every order
   tradingMaxPositionPct: number
   tradingRequireStop: boolean
@@ -378,6 +384,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   startWithWindows: true,
   guardianEnabled: true,
   routineLearning: true,
+  tradeWatchEnabled: true,
+  autoTradeEnabled: false,
+  coderModelName: 'qwen2.5-coder:14b',
   tradingMaxPositionPct: 10,
   tradingRequireStop: true,
   tradingDailyLossPct: 3

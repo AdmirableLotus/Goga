@@ -5,7 +5,7 @@ import { OllamaClient } from './ollamaClient'
 import { SettingsService } from './settings'
 import { keywordScore, recallFacts, type StoredEmbedding } from './semanticRecall'
 import { ConversationMemory } from './conversationMemory'
-import { LocalLlamaService } from './localLlama'
+import { backgroundChat } from './backgroundChat'
 import { app } from 'electron'
 import path from 'path'
 
@@ -47,10 +47,9 @@ export class BrainService {
   private createMemory(): ConversationMemory {
     let file: string | undefined
     try { file = path.join(app.getPath('userData'), 'conversation-memory.json') } catch { /* tests: memory only */ }
-    const llama = LocalLlamaService.getInstance()
     const memory = new ConversationMemory({
-      // Background work: skipped when the brain is busy rather than delaying a reply.
-      chat: messages => llama.isReady() ? llama.chat(messages, undefined, undefined, { ifIdle: true }) : Promise.reject(new Error('local brain not ready')),
+      // Background work on whichever brain is running; skipped when it is busy rather than delaying a reply.
+      chat: messages => backgroundChat(messages),
       userName: () => SettingsService.getInstance().get().userName,
       embed: {
         model: () => SettingsService.getInstance().get().embeddingModelName,

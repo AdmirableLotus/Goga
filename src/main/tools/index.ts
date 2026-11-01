@@ -15,5 +15,6 @@ import './trading'
 import './python'
 import './folderReview'
 import './library'
+import './self'
 
 export { ToolRegistry } from './registry'

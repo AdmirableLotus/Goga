@@ -24,7 +24,7 @@ import type { WhisperModel, WhisperDevice } from './speech/WhisperSttProvider'
 import { ElevenLabsTtsProvider } from './speech/ElevenLabsTtsProvider'
 import { ElevenLabsSttProvider } from './speech/ElevenLabsSttProvider'
 import { KokoroTtsProvider, KokoroModelMissingError } from './speech/KokoroTtsProvider'
-import type { ISttProvider, ITtsProvider, SpeechStream } from './speech/ISpeechProvider'
+import type { ISttProvider, ITtsProvider, SpeechStream, SpeechRecognitionResult } from './speech/ISpeechProvider'
 import { SentenceBuffer } from './speech/sentenceBuffer'
 import { isConfirmation } from './agentRouting'
 import { SettingsService } from './settings'
@@ -56,6 +56,37 @@ export interface ReplySpeech {
 // How long a TTS phrase stays in the suppression window after speaking ends (ms)
 const TTS_SUPPRESS_GRACE_MS = 1500
 
+// Hands-free turn-taking: the recognizer splits speech at short pauses, so pieces
+// are collected and only sent once the user has really stopped talking.
+const END_OF_TURN_MS = 1300          // quiet time after the last phrase before Goga answers
+const MAX_PHRASE_WAIT_MS = 15_000    // never wait longer than this on a phrase in progress
+// In the follow-up window (no wake word said), the recognizer also hears room talk and turns it
+// into fragments like "The August that". Below this confidence such a phrase is dropped.
+// Wake-word phrases are never filtered — the wake word is already a strong signal.
+export const MIN_FOLLOWUP_CONFIDENCE = 0.3
+
+// Windows dictation doesn't know the word "Goga" and hears it as "Golda", "Gogo",
+// "Gaga"... Accept close mishearings so the wake word actually fires.
+const GOGA_LIKE = /^(goga|gogo|goga's|gaga|goda|golda|gorga|koga|kogo|gogga|gauga|googa|yoga|toga|giga|gogh)$/
+const WAKE_LEAD = /^(hey|hi|hay|a|ok|okay|eh|yo|hello)$/
+
+/** If the phrase opens with the wake word, the words after it ('' if none); otherwise null. */
+export function afterWakeWord(text: string, wakePhrase = 'hey goga'): string | null {
+  const words = text.toLowerCase().replace(/[^\w\s']/g, ' ').split(/\s+/).filter(Boolean)
+  const phrase = wakePhrase.toLowerCase().split(/\s+/).filter(Boolean)
+  if (phrase.length && words.slice(0, phrase.length).join(' ') === phrase.join(' ')) {
+    return words.slice(phrase.length).join(' ')
+  }
+  // "goga …" or "hey/ok/a goga …", within the first three words
+  for (let i = 0; i < Math.min(3, words.length); i++) {
+    if (!GOGA_LIKE.test(words[i])) continue
+    const exact = words[i] === 'goga' || words[i] === "goga's"
+    const led = i > 0 && WAKE_LEAD.test(words[i - 1])
+    if (exact || led) return words.slice(i + 1).join(' ')
+  }
+  return null
+}
+
 export class VoiceOrchestrator extends EventEmitter {
   private static instance: VoiceOrchestrator
 
@@ -75,6 +106,12 @@ export class VoiceOrchestrator extends EventEmitter {
   // directly without requiring another wake word.
   private conversationActive = false
   private conversationTimer: ReturnType<typeof setTimeout> | null = null
+
+  // ── Hands-free turn collection ────────────────────────────────────────────
+  private pendingSpeech = ''
+  private submitTimer: ReturnType<typeof setTimeout> | null = null
+  private userSpeaking = false
+  private speakingSince = 0
 
   // ── Self-TTS suppression ──────────────────────────────────────────────────
   // Track what Goga is currently saying so we can reject it if STT picks it up.
@@ -338,7 +375,7 @@ export class VoiceOrchestrator extends EventEmitter {
 
     // Use continuous recognition — no repeated PS startup cost
     this.stt.startContinuous(
-      (result) => { if (!this.abortWake) this.onContinuousResult(result.transcript) },
+      (result) => { if (!this.abortWake) this.onContinuousResult(result) },
       () => {
         // Engine died — restart after brief pause if still active
         if (this.wakeLoopActive && !this.abortWake) {
@@ -356,11 +393,32 @@ export class VoiceOrchestrator extends EventEmitter {
     if (this.status === 'wake_listening') this.setStatus('idle')
     if (this.conversationTimer) { clearTimeout(this.conversationTimer); this.conversationTimer = null }
     this.conversationActive = false
+    this.clearSubmitTimer()
+    this.pendingSpeech = ''
+    this.userSpeaking = false
     this.log.info('VoiceOrchestrator: wake loop stopped')
   }
 
-  private onContinuousResult(text: string) {
+  private onContinuousResult(result: SpeechRecognitionResult | string) {
+    const r = typeof result === 'string' ? { transcript: result } as SpeechRecognitionResult : result
+
+    // The user started a new phrase: hold any collected words until they finish.
+    if (r.event === 'speech-start') {
+      this.userSpeaking = true
+      this.speakingSince = Date.now()
+      if (this.pendingSpeech) this.armSubmitTimer(END_OF_TURN_MS)
+      if (this.conversationActive) this.resetConversationTimer()
+      return
+    }
+    if (r.event === 'speech-rejected') {
+      this.userSpeaking = false
+      if (this.pendingSpeech) this.armSubmitTimer(END_OF_TURN_MS)
+      return
+    }
+
+    const text = r.transcript?.trim() ?? ''
     if (!text) return
+    this.userSpeaking = false
     if (this.inEchoGuard()) {
       this.log.info('VoiceOrchestrator: suppressed transcript during echo-tail guard')
       return
@@ -370,35 +428,72 @@ export class VoiceOrchestrator extends EventEmitter {
       return
     }
 
-    const settings = SettingsService.getInstance().get()
-    const wakePhrase = (settings.wakePhrase ?? 'hey goga').toLowerCase()
-    const lower = text.toLowerCase().trim()
+    if (r.confidence !== undefined) this.log.info(`VoiceOrchestrator: heard (${r.confidence.toFixed(2)}): "${text.slice(0, 60)}"`)
 
     if (this.conversationActive) {
-      // Already in conversation — route directly
-      this.handleTranscript(text)
+      // Already in conversation — collect until the user pauses, but drop low-confidence
+      // fragments (room talk, TV, half-heard words) unless they carry the wake word.
+      const rest = afterWakeWord(text, SettingsService.getInstance().get().wakePhrase ?? 'hey goga')
+      if (r.confidence !== undefined && r.confidence < MIN_FOLLOWUP_CONFIDENCE && rest === null) {
+        this.log.info(`VoiceOrchestrator: dropped low-confidence follow-up (${r.confidence.toFixed(2)}): "${text.slice(0, 60)}"`)
+        if (this.pendingSpeech) this.armSubmitTimer(END_OF_TURN_MS)
+        return
+      }
+      // "Hey Goga, …" said again mid-conversation: send what follows the wake word.
+      if (rest !== null && rest.length <= 2) return
+      this.queueSpeech(rest ?? text)
       return
     }
 
-    // Check for wake word
-    if (lower.includes(wakePhrase) || lower.startsWith('hey goga') || lower.startsWith('goga')) {
+    const settings = SettingsService.getInstance().get()
+    const afterWake = afterWakeWord(text, settings.wakePhrase ?? 'hey goga')
+    if (afterWake !== null) {
       this.log.info(`VoiceOrchestrator: wake word: "${text}"`)
       this.emit('status', 'listening')  // quick visual pulse
       this.activateConversation()
-
-      const afterWake = text
-        .replace(/hey\s+goga[,.]?\s*/i, '')
-        .replace(/^goga[,.]?\s*/i, '')
-        .trim()
-
       if (afterWake.length > 2) {
-        this.handleTranscript(afterWake)
+        this.queueSpeech(afterWake)
       } else {
-        // Just the wake word — emit wake event for triangle pulse, wait for next utterance
+        // Just the wake word — pulse and wait for what comes next
         this.emit('wake:detected')
       }
     }
     // Outside conversation window and no wake word — ignore
+  }
+
+  /** Add a finished phrase to the user's turn; it is sent once they stop talking. */
+  private queueSpeech(text: string) {
+    this.pendingSpeech = this.pendingSpeech ? `${this.pendingSpeech} ${text}` : text
+    this.emit('partial', this.pendingSpeech)
+    this.setStatus('listening')
+    this.resetConversationTimer()
+    this.armSubmitTimer(END_OF_TURN_MS)
+  }
+
+  private armSubmitTimer(ms: number) {
+    this.clearSubmitTimer()
+    this.submitTimer = setTimeout(() => {
+      this.submitTimer = null
+      // Still mid-phrase: keep waiting, but never forever.
+      if (this.userSpeaking && Date.now() - this.speakingSince < MAX_PHRASE_WAIT_MS) {
+        this.armSubmitTimer(END_OF_TURN_MS)
+        return
+      }
+      this.flushSpeech()
+    }, ms)
+  }
+
+  private clearSubmitTimer() {
+    if (this.submitTimer) { clearTimeout(this.submitTimer); this.submitTimer = null }
+  }
+
+  /** Send the collected turn to the conversation now. */
+  private flushSpeech() {
+    this.clearSubmitTimer()
+    const turn = this.pendingSpeech.trim()
+    this.pendingSpeech = ''
+    this.userSpeaking = false
+    if (turn) void this.handleTranscript(turn)
   }
 
   // ── Active listening (mic button) ─────────────────────────────────────────

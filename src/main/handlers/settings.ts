@@ -30,6 +30,13 @@ export function registerSettingsHandlers(ipcMain: IpcMain) {
       // Fire-and-forget; renderer can call voice:reload-tts explicitly for the result.
       VoiceOrchestrator.getInstance().reloadTtsProvider()
     }
+    // Start/stop the "hey goga" wake listener the moment the toggle (or voice
+    // enable) changes, so it works without an app restart.
+    if (previous.voiceEnabled !== updated.voiceEnabled || previous.wakeWordEnabled !== updated.wakeWordEnabled) {
+      const voice = VoiceOrchestrator.getInstance()
+      if (updated.voiceEnabled && updated.wakeWordEnabled) voice.startWakeLoop()
+      else voice.stopWakeLoop()
+    }
     return updated
   })
 

@@ -136,10 +136,9 @@ export interface BacktestResult {
   exposure: number
 }
 
-/** Long-only, all in or out, filled at the close of the signal bar, with fees per side. */
-export function backtest(bars: Bar[], strategy: Strategy, opts: { fast?: number; slow?: number; feePct?: number } = {}): BacktestResult {
+/** For each bar, whether the strategy wants to be holding (long-only). Shared by the backtest and the auto-trader. */
+export function inMarketSeries(bars: Bar[], strategy: Strategy, opts: { fast?: number; slow?: number } = {}): boolean[] {
   const closes = bars.map(b => b.c)
-  const fee = (opts.feePct ?? 0.1) / 100
   const fast = sma(closes, opts.fast ?? 20), slow = sma(closes, opts.slow ?? 50)
   const r = rsi(closes)
   const wantIn = (i: number, inMarket: boolean): boolean => {
@@ -154,12 +153,22 @@ export function backtest(bars: Bar[], strategy: Strategy, opts: { fast?: number;
       }
     }
   }
+  const series: boolean[] = []
+  for (let i = 0; i < bars.length; i++) series.push(wantIn(i, series[i - 1] ?? false))
+  return series
+}
+
+/** Long-only, all in or out, filled at the close of the signal bar, with fees per side. */
+export function backtest(bars: Bar[], strategy: Strategy, opts: { fast?: number; slow?: number; feePct?: number } = {}): BacktestResult {
+  const closes = bars.map(b => b.c)
+  const fee = (opts.feePct ?? 0.1) / 100
+  const series = inMarketSeries(bars, strategy, opts)
   let cash = 1, units = 0, entry = 0, barsIn = 0
   const tradeReturns: number[] = []
   const equity: number[] = []
   for (let i = 0; i < bars.length; i++) {
     const inMarket = units > 0
-    const want = wantIn(i, inMarket)
+    const want = series[i]
     if (want && !inMarket) { units = cash * (1 - fee) / closes[i]; entry = cash; cash = 0 }
     else if (!want && inMarket) { cash = units * closes[i] * (1 - fee); tradeReturns.push(cash / entry - 1); units = 0 }
     if (units > 0) barsIn++

@@ -107,7 +107,12 @@ export class ConversationMemory {
     } catch (err) {
       deps.log.warn(`Conversation memory unreadable, starting fresh: ${err instanceof Error ? err.message : String(err)}`)
     }
+    // Catch up on conversations left unwritten (e.g. the brain wasn't available) without
+    // waiting for the next message.
+    if (this.dueBatch().length > 0) this.scheduleNote()
   }
+
+  private failedTries = 0
 
   getNotes(): MemoryNote[] { return [...this.data.notes] }
   isEmpty(): boolean { return this.data.notes.length === 0 && this.data.pending.length === 0 }
@@ -125,13 +130,19 @@ export class ConversationMemory {
     this.scheduleNote()
   }
 
-  private scheduleNote(): void {
+  private scheduleNote(delay = this.deps.delayMs ?? NOTE_DELAY_MS): void {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => {
       // Several finished conversations (say, after a first run) are written one after another.
       const before = this.data.pending.length
-      void this.writeNote().then(() => { if (this.data.pending.length < before && this.dueBatch().length > 0) this.scheduleNote() })
-    }, this.deps.delayMs ?? NOTE_DELAY_MS)
+      void this.writeNote().then(() => {
+        if (this.dueBatch().length === 0) return
+        if (this.data.pending.length < before) { this.failedTries = 0; this.scheduleNote(); return }
+        // The brain was busy or unavailable: try again later, a few times, instead of
+        // leaving the backlog until the next message.
+        if (++this.failedTries <= 6) this.scheduleNote((this.deps.delayMs ?? NOTE_DELAY_MS) * 15)
+      })
+    }, delay)
     this.timer.unref?.()
   }
 

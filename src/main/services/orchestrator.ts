@@ -2,6 +2,9 @@ import { MarketsService } from './markets'
 import { parseTradingCommand } from './trading/command'
 import { alpacaKeys } from './trading/desk'
 import { parseFolderReview } from './fileCommand'
+import { parseOpenObserve, gatherOpenWindow, findDocument, findRecentDocument, focusWindowExact, type OpenObserveCommand } from './openWindowObserve'
+import { queryVision } from '../tools/vision'
+import { backgroundChat } from './backgroundChat'
 import type { ChatMessage, Action, AgentState } from '../../shared/types'
 import { ActionStore } from './actionStore'
 import { LogService } from './logs'
@@ -19,7 +22,7 @@ import { getMainWindow } from '../index'
 
 import { chatHonestyNote, parseRoute, routeQuestion } from './replyHonesty'
 import { looksLikeAgentTask, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer } from './agentRouting'
-import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes } from './longText'
+import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes, rewriteRequest, rewriteInParts } from './longText'
 import { app } from 'electron'
 import path from 'path'
 import { plannerDiagnostic } from './plannerDiagnostics'
@@ -27,7 +30,12 @@ import { observeScreen, type ObservationMessages } from './screenObservation'
 import { gogaIdentity } from './persona'
 import { FactLearner } from './factLearning'
 import { ROUTINE_QUESTION } from './routine'
-import { routineSummary } from '../sleepMode'
+import { autoTradingSummary, routineSummary } from '../sleepMode'
+import { GAP_QUESTION, gapFromChat, gapJournal } from './gapJournal'
+import { SELF_CODE_QUESTION, codeContext } from './selfCode'
+import { sourceRoot } from '../tools/self'
+import { Workshop, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY, RESTART_REPLY, gapNumber, diffForChat, isWorkshopCommand } from './selfImprove'
+import { groupGaps } from './gapJournal'
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -41,12 +49,13 @@ export class OrchestratorService {
   private registry = ToolRegistry.getInstance()
   // The last trade plan shown, so "place it" submits exactly that (never a hallucinated order).
   private pendingPlan: { symbol: string; side: 'buy' | 'sell'; stop: number; target: number; qty: number } | null = null
+  private workshopInstance: Workshop | null = null
   // Notes on long documents the user pasted, so they fit the brain's context (see longText.ts).
   private notes = new NotesStore((() => { try { return path.join(app.getPath('userData'), 'document-notes.json') } catch { return undefined } })())
   // Learns lasting facts about the user from what they say, after each reply (never blocks it).
   private factLearner = new FactLearner({
     // Background work: skipped when the brain is busy rather than delaying a reply.
-    chat: messages => this.llama.isReady() ? this.llama.chat(messages, undefined, undefined, { ifIdle: true }) : Promise.reject(new Error('local brain not ready')),
+    chat: messages => backgroundChat(messages),
     knownFacts: message => this.brain.findRelevantFacts(message, 8),
     addFact: (content, category) => this.brain.addFact(content, category),
     userName: () => SettingsService.getInstance().get().userName,
@@ -97,6 +106,48 @@ export class OrchestratorService {
     }
 
     const content = userMessage.content.trim()
+
+    // "Look at the paper I opened" / "go to my browser and look at the video": find that
+    // window (never Goga's own), read the real document or look at the page, then answer.
+    // The old observation path below only saw the foreground window — which is Goga itself.
+    const openTarget = this.agent.getState().status !== 'running' ? parseOpenObserve(content) : null
+    if (openTarget) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'open-window-observe', agentTask: false })
+      return this.observeOpenWindow(content, openTarget, onToken, signal)
+    }
+
+    // "Rephrase this…" on pasted text: rewrite it in full (in parts when long). The long-document
+    // notes path would rewrite from a summary and drop details, and the action router could
+    // mistake it for a PC task — a rewrite is always just writing.
+    const rewrite = this.agent.getState().status !== 'running' ? rewriteRequest(content) : null
+    if (rewrite && rewrite.text.length >= 60) {
+      plannerDiagnostic('routing.decision', { task: rewrite.instruction, route: 'rewrite-in-parts', agentTask: false })
+      return this.rewriteLongText(rewrite.instruction, rewrite.text, onToken, signal)
+    }
+
+    // Self-improvement: "improve yourself" / "work on gap 2", then "merge it" or "discard it".
+    // Checked without awaiting, so ordinary messages keep their synchronous start.
+    if (isWorkshopCommand(content)) {
+      const selfImprove = await this.selfImproveCommand(content)
+      if (selfImprove) return selfImprove
+    }
+
+    // "What tools do you need?" — answered from the real record of failures, not imagined.
+    if (GAP_QUESTION.test(content) && content.length < 300) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'gap-report', agentTask: false })
+      const report = gapJournal()?.report() ?? 'My gap journal is not running yet.'
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `${report}\n\nEach of these can become a new tool or a fix. Tell me which one to work on first.`, timestamp: Date.now() }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+
+    // "How does your trade watcher work?" / "analyze your code" — answer from the real
+    // source files, so Goga describes himself as he is built, not as he imagines it.
+    if (SELF_CODE_QUESTION.test(content) && this.agent.getState().status !== 'running') {
+      plannerDiagnostic('routing.decision', { task: content, route: 'self-code', agentTask: false })
+      return this.answerAboutOwnCode(content, onToken, signal)
+    }
+
     if (isReadOnlyObservationRequest(content)) {
       plannerDiagnostic('routing.decision', { task: content, route: 'observation', agentTask: false })
       const result = await this.agent.runObservation(content, (abort, progress) =>
@@ -209,7 +260,7 @@ export class OrchestratorService {
     if (useOllama) {
       const ollamaAvailable = await this.ollama.isAvailable()
       if (ollamaAvailable) {
-        const reply = this.grounded(await this.thinkWithOllama(content, onToken, signal))
+        const reply = this.grounded(await this.thinkWithOllama(content, onToken, signal), content)
         this.brain.addMessage(reply)
         void this.factLearner.learnFrom(content.slice(0, 2000))
         return reply
@@ -219,7 +270,7 @@ export class OrchestratorService {
 
     // ── PRIMARY: node-llama-cpp local model ───────────────────────────────────
     if (this.llama.isReady()) {
-      const reply = this.grounded(await this.thinkWithLocalLlama(content, onToken, signal))
+      const reply = this.grounded(await this.thinkWithLocalLlama(content, onToken, signal), content)
       this.brain.addMessage(reply)
       void this.factLearner.learnFrom(content.slice(0, 2000))
       return reply
@@ -231,7 +282,7 @@ export class OrchestratorService {
       this.log.info(`LocalLlama still loading — waiting up to ${BRAIN_LOAD_WAIT_MS / 1000}s…`)
       const ready = await this.llama.waitWhileLoading(BRAIN_LOAD_WAIT_MS, signal)
       if (ready) {
-        const reply = this.grounded(await this.thinkWithLocalLlama(content, onToken, signal))
+        const reply = this.grounded(await this.thinkWithLocalLlama(content, onToken, signal), content)
         this.brain.addMessage(reply)
         void this.factLearner.learnFrom(content.slice(0, 2000))
         return reply
@@ -244,7 +295,7 @@ export class OrchestratorService {
 
     if (ollamaAvailable) {
       this.log.warn('LocalLlama unavailable — falling back to Ollama')
-      const reply = this.grounded(await this.thinkWithOllama(content, onToken, signal))
+      const reply = this.grounded(await this.thinkWithOllama(content, onToken, signal), content)
       this.brain.addMessage(reply)
       void this.factLearner.learnFrom(content.slice(0, 2000))
       return reply
@@ -330,6 +381,145 @@ export class OrchestratorService {
     }
   }
 
+  /** Rewrite a long text in parts as asked, streaming it, keeping every detail. */
+  private async rewriteLongText(instruction: string, text: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
+    const settings = SettingsService.getInstance().get()
+    const status = (content: string) => getMainWindow()?.webContents.send('chat:message', { id: nanoid(), role: 'system', content, timestamp: Date.now() })
+    const chat = async (messages: { role: 'system' | 'user'; content: string }[], tok: (t: string) => void, s?: AbortSignal) => {
+      if (settings.primaryModel === 'ollama' && await this.ollama.isAvailable()) return this.ollama.chat(messages, tok, s)
+      if (!this.llama.isReady()) await this.llama.waitWhileLoading(BRAIN_LOAD_WAIT_MS, s)
+      return this.llama.chat(messages, tok, s)
+    }
+    this.log.info(`Rewriting a long text in parts (${text.length} chars): ${instruction.slice(0, 80)}`)
+    let content: string
+    try {
+      content = await rewriteInParts(text, instruction, settings.userName, chat, onToken,
+        (done, total) => { if (done === 0 && total > 1) status(`Rewriting your text in ${total} parts — each part appears as it's written, nothing is summarised away.`) },
+        signal)
+    } catch (err) {
+      content = signal?.aborted ? 'Stopped.' : `I couldn't finish the rewrite: ${err instanceof Error ? err.message : String(err)}`
+    }
+    const reply: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
+    this.brain.addMessage(reply)
+    return reply
+  }
+
+  private workshop(): Workshop {
+    return this.workshopInstance ??= new Workshop({
+      projectRoot: app.getAppPath(),
+      workDir: path.join(app.getPath('userData'), 'workshop'),
+      ask: (messages, signal) => this.ollama.chatJson(messages, signal, SettingsService.getInstance().get().coderModelName || 'qwen2.5-coder:14b', { num_ctx: 16384, num_predict: 4096, temperature: 0.2 }),
+      status: text => getMainWindow()?.webContents.send('chat:message', { id: nanoid(), role: 'system', content: text, timestamp: Date.now() }),
+      log: this.log,
+    })
+  }
+
+  /** Say something in chat outside a reply (the workshop finishing in the background). */
+  private post(content: string): void {
+    const message: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
+    this.brain.addMessage(message)
+    getMainWindow()?.webContents.send('chat:message', message)
+  }
+
+  /** The workshop's chat commands (null when the message isn't one). */
+  private async selfImproveCommand(content: string): Promise<ChatMessage | null> {
+    const say = (text: string): ChatMessage => { const m: ChatMessage = { id: nanoid(), role: 'assistant', content: text, timestamp: Date.now() }; this.brain.addMessage(m); return m }
+    const shop = this.workshop()
+    const waiting = shop.pending()
+
+    if (RESTART_REPLY.test(content)) {
+      setTimeout(() => { app.relaunch(); app.exit(0) }, 1500)
+      return say("Restarting now — I'll be back in a few seconds.")
+    }
+    if (waiting && DISCARD_REPLY.test(content)) {
+      shop.discard()
+      return say(`Discarded the change ("${waiting.summary}"). Nothing in my real code was touched.`)
+    }
+    if (waiting && MERGE_REPLY.test(content)) {
+      this.post('Merging the change into my real code and rebuilding (a minute or two)…')
+      try {
+        const saved = await shop.merge(path.join(app.getPath('userData'), 'self-changes'))
+        return say(`Done — the change is in my code and the app is rebuilt. Say **"restart"** to load it.\nTo undo it later, run \`git apply -R "${saved}"\` in the project folder, then rebuild.`)
+      } catch (err) {
+        return say(`I couldn't merge it: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (!IMPROVE_REQUEST.test(content) || content.length > 600) return null
+
+    if (shop.isBusy()) return say("I'm already working on a change — I'll post it here when it's ready.")
+    if (waiting) return say(`A change is already waiting for you: "${waiting.summary}". Say "merge it" or "discard it" first.`)
+    let goal = content
+    const n = gapNumber(content)
+    if (n) {
+      const group = groupGaps(gapJournal()?.all() ?? [], new Date(Date.now() - 30 * 86_400_000))[n - 1]
+      if (!group) return say(`There is no gap number ${n} in my report. Ask "what tools do you need" to see the list.`)
+      goal = `Close this gap from Goga's own failure record: ${group.kind} on "${group.key}", ${group.count} time(s). The user asked: "${group.examples.join('"; "')}".`
+    }
+    plannerDiagnostic('routing.decision', { task: content, route: 'self-improve', agentTask: false })
+    void shop.improve(goal).then(p => this.post([
+      `**I wrote a change to myself and it passed the typecheck and all my tests** (${p.attempts} attempt${p.attempts === 1 ? '' : 's'}).`,
+      `What it does: ${p.summary}`,
+      `Files: ${p.files.join(', ')}`,
+      '```diff', diffForChat(p.diff), '```',
+      'Please look it over. Say **"merge it"** to put it in my real code, or **"discard it"** to throw it away. Nothing has changed in my real code yet.',
+    ].join('\n'))).catch(err => this.post(`I couldn't finish that change: ${err instanceof Error ? err.message : String(err)}\nMy real code was not touched.`))
+    return say(`Starting my workshop on: ${goal.slice(0, 300)}\nI work on a private copy of my code, so nothing real changes. I'll write the change and a test with my coding model, then run the typecheck and all my tests. This takes a few minutes; I'll post the result here.`)
+  }
+
+  /** Answer a question about Goga himself with the matching parts of his source code in front of him. */
+  private async answerAboutOwnCode(question: string, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
+    let ctx: { files: string[]; text: string }
+    // 5000 keeps the prompt under LONG_TEXT_CHARS, so it is answered at once, not read "in parts".
+    try { ctx = codeContext(sourceRoot(), question, 5000) } catch { ctx = { files: [], text: '' } }
+    const userName = SettingsService.getInstance().get().userName
+    const prompt = ctx.text
+      ? `${userName} asked about your own code: "${question}"\n\nThese are the most relevant files of your real source code (TypeScript, an Electron app):\n${ctx.text}\n\nAnswer from this code only, in plain words for ${userName}: what it does, how, and anything that looks weak or missing. Name the files you mean. If the answer is not in these excerpts, say which part you could not see instead of guessing.`
+      : `${userName} asked about your own code: "${question}". You found no matching source files for it. Say so honestly, and suggest asking with the feature's name (for example "how does your trade watcher work").`
+    const answer = await this.answerInChat(prompt, onToken, signal)
+    const content = ctx.files.length ? `${answer.content}\n\n_Read from: ${ctx.files.join(', ')}_` : answer.content
+    const reply: ChatMessage = { ...answer, content }
+    this.brain.addMessage(reply)
+    return reply
+  }
+
+  /** Look at what the user already has open and answer their request from the real content. */
+  private async observeOpenWindow(request: string, cmd: OpenObserveCommand, onToken?: (token: string) => void, signal?: AbortSignal): Promise<ChatMessage> {
+    const status = (text: string) => getMainWindow()?.webContents.send('chat:message', { id: nanoid(), role: 'system', content: text, timestamp: Date.now() })
+    status(cmd.kind === 'document' ? 'Finding the document you have open…' : `Switching to your ${cmd.kind === 'browser' ? 'browser' : 'window'} to look…`)
+    let evidence
+    try {
+      evidence = await gatherOpenWindow(request, cmd, {
+        listWindows: () => this.desktop.windowList(),
+        focus: (pid, title) => focusWindowExact(pid, title),
+        pressKey: key => this.desktop.pressKey(key),
+        readWindowText: async () => {
+          const id = await this.desktop.observeWindowIdentity(signal)
+          const seen = await this.desktop.observeWindowText(id.title, id.pid, id.hwnd, signal)
+          return { pid: id.pid, texts: seen.texts }
+        },
+        screenshotBase64: async () => (await this.desktop.screenshot()).base64,
+        describeImage: (b64, prompt) => queryVision(b64, prompt),
+        readDocument: file => this.library.readText(file),
+        findDocument: async name => (await findRecentDocument(name)) ?? findDocument(name),
+        wait: ms => new Promise(r => setTimeout(r, ms)),
+        selfPid: process.pid,
+      })
+    } catch (err) {
+      evidence = { ok: false, prompt: `I couldn't look at your open windows: ${err instanceof Error ? err.message : String(err)}` }
+    }
+    this.log.info(`Open-window observe (${cmd.kind}${cmd.play ? ', play' : ''}): ${evidence.ok ? `looked at "${evidence.target}"` : 'no target'}`)
+    if (!evidence.ok) {
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: evidence.prompt, timestamp: Date.now(), fromTools: true }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+    status(`Looking at "${evidence.target}"…`)
+    const answer = await this.answerInChat(evidence.prompt, onToken, signal)
+    const reply: ChatMessage = { ...answer, fromTools: true }
+    this.brain.addMessage(reply)
+    return reply
+  }
+
   /** Run a parsed trading command directly and format the result as a chat reply. */
   private async runTradingCommand(cmd: { tool: string; params: Record<string, unknown> }, signal?: AbortSignal): Promise<ChatMessage> {
     const result = await this.registry.execute(cmd.tool, cmd.params, { abortSignal: signal ?? new AbortController().signal })
@@ -350,7 +540,8 @@ export class OrchestratorService {
   }
 
   /** A chat answer, with a warning when it claims an action no tool performed. */
-  private grounded(reply: ChatMessage): ChatMessage {
+  private grounded(reply: ChatMessage, asked?: string): ChatMessage {
+    if (asked) gapJournal()?.record(gapFromChat(asked, reply.content))
     return { ...reply, content: reply.content + chatHonestyNote(reply.content) }
   }
 
@@ -403,7 +594,7 @@ ${bookChunks.length > 0 ? `Relevant book passages:\n${bookChunks.map(c => c.text
 
 You can also operate this PC: browser, files, apps, desktop. You can design electronics too: look up real parts and build circuits (netlist, parts list, rule check) with KiCad on this PC, and work in ${settings.userName}'s Flux (flux.ai) circuit-board projects when Flux is connected in Settings. Like Schematik, you can make Arduino, ESP32 and Raspberry Pi Pico projects (code, parts to buy, wiring, build steps), compile them and upload them to a plugged-in board, and read ${settings.userName}'s Schematik (schematik.io) projects. You are also ${settings.userName}'s trading coach: with real prices and history (US stocks, ETFs, crypto, forex) you read charts, test strategies on history, and place practice trades with fake money in a paper account, within ${settings.userName}'s risk rules. You do not know current prices from memory: never state one without fetching it. Teach the why (trend, risk per trade, stops, position size, keeping a journal), be honest that no one can predict markets, and never promise profit. ${settings.userName}'s practice goal is to protect capital (risk 1% or less per trade), be consistent over many trades, and beat buy-and-hold — NOT to hit a fixed monthly dollar amount. If ${settings.userName} names an unrealistic target (for example "$3000/month", which on this account is ~3%/month — better than almost every professional fund), gently reset it: steady ~1%/month with no big drawdowns is already excellent, and chasing a dollar figure causes overtrading and losses. Income follows the skill, not the other way around. For electronics, plan the blocks, parts and power first, and point out anything that needs an engineer's review (safety, medical use, mains power).When ${settings.userName} wants something done, talk it through like a partner: say in a few plain sentences what you would do, mention anything risky or irreversible and anything ${settings.userName} must do personally (such as typing a password or a two-factor code), then end by asking "Want me to go ahead?". When ${settings.userName} agrees, you will carry out that plan. Do not refuse reasonable requests or tell ${settings.userName} to rephrase; if you have a concern, explain it and let ${settings.userName} decide. In this reply itself you have not acted yet: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer.
 
-Trading account: ${alpacaKeys() ? `${settings.userName}'s Alpaca PAPER account is already connected (keys stored encrypted from earlier setup)` : 'no Alpaca keys are saved yet'}. NEVER ask ${settings.userName} to paste, share or type API keys, secrets or passwords in chat — keys are entered in Settings and stored encrypted. To show the account or trades, ${settings.userName} just asks "my account" or "my journal".
+Trading account: ${alpacaKeys() ? `${settings.userName}'s Alpaca PAPER account is already connected (keys stored encrypted from earlier setup)` : 'no Alpaca keys are saved yet'}. NEVER ask ${settings.userName} to paste, share or type API keys, secrets or passwords in chat — keys are entered in Settings and stored encrypted. To show the account or trades, ${settings.userName} just asks "my account" or "my journal".${autoTradingSummary() ? ` ${autoTradingSummary()} Report only these facts about your trading; never invent trades or results.` : ''}
 
 You have the full conversation history. Read it before replying and don't ignore earlier context.`
   }
@@ -424,9 +615,10 @@ You have the full conversation history. Read it before replying and don't ignore
     const history = this.brain.getHistory().slice(-20).filter(m => m.role !== 'system').slice(-14)
     // The current message is usually already the last history entry; it is sent separately below.
     if (history[history.length - 1]?.role === 'user' && history[history.length - 1]?.content === userInput) history.pop()
-    for (const text of [...history.map(m => m.content), userInput]) {
-      if (text.length > LONG_TEXT_CHARS && !this.notes.get(text)) await this.readLongText(text, signal)
-    }
+    // Only the message being answered is read in parts. An older long message without notes
+    // (e.g. its reading was interrupted by a restart) is just shortened by fitHistory —
+    // re-reading it before EVERY reply made Goga look stuck on "Reading your document…".
+    if (userInput.length > LONG_TEXT_CHARS && !this.notes.get(userInput)) await this.readLongText(userInput, signal)
     const systemPrompt = await this.buildSystemPrompt(userInput.slice(0, 2000))
     const current = userInput.length > LONG_TEXT_CHARS ? asNotes(userInput, this.notes.get(userInput) ?? '') : userInput
     return [

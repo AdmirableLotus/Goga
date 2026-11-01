@@ -28,7 +28,13 @@ export interface OllamaTool {
   }
 }
 
+// Replies to the user in flight across all clients. Ollama serves one request at a time,
+// so background work (notes, fact learning) yields while this is above zero.
+let activeReplies = 0
+
 export class OllamaClient {
+  static isBusy(): boolean { return activeReplies > 0 }
+
   private get endpoint() { return SettingsService.getInstance().get().modelEndpoint }
   private get model() { return SettingsService.getInstance().get().modelName }
   private get visionModel() { return SettingsService.getInstance().get().visionModelName || 'llava:13b' }
@@ -120,13 +126,32 @@ export class OllamaClient {
   async chat(messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal): Promise<string> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model: this.model, messages, stream: !!onToken })
-    return this.postJson(url, '/api/chat', body, onToken, signal)
+    activeReplies++
+    try { return await this.postJson(url, '/api/chat', body, onToken, signal) } finally { activeReplies-- }
   }
 
   async chatWith(model: string, messages: OllamaMessage[], onToken?: (token: string) => void, signal?: AbortSignal, options?: { num_ctx?: number; num_predict?: number }): Promise<string> {
     const url = new URL(this.endpoint)
     const body = JSON.stringify({ model, messages, stream: !!onToken, ...(options ? { options } : {}) })
-    return this.postJson(url, '/api/chat', body, onToken, signal)
+    activeReplies++
+    try { return await this.postJson(url, '/api/chat', body, onToken, signal) } finally { activeReplies-- }
+  }
+
+  /** A reply constrained to valid JSON by Ollama's JSON mode — the model cannot answer in prose. */
+  async chatJson(messages: OllamaMessage[], signal?: AbortSignal, model = this.model, options?: { num_ctx?: number; num_predict?: number; temperature?: number }): Promise<string> {
+    const url = new URL(this.endpoint)
+    const body = JSON.stringify({ model, messages, stream: false, format: 'json', ...(options ? { options } : {}) })
+    activeReplies++
+    try { return await this.postJson(url, '/api/chat', body, undefined, signal) } finally { activeReplies-- }
+  }
+
+  /** Background work: runs only while no reply is in flight, and is capped in length so it
+   *  can never hold the brain for long. Rejects with "brain busy" instead of waiting. */
+  async chatIfIdle(messages: OllamaMessage[], signal?: AbortSignal): Promise<string> {
+    if (activeReplies > 0) throw new Error('brain busy')
+    const url = new URL(this.endpoint)
+    const body = JSON.stringify({ model: this.model, messages, stream: false, options: { num_predict: 700 } })
+    return this.postJson(url, '/api/chat', body, undefined, signal)
   }
 
   /** Send messages with native Ollama tool definitions. Returns either a text reply

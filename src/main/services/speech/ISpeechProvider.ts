@@ -7,6 +7,9 @@
 export interface SpeechRecognitionResult {
   transcript: string
   confidence?: number
+  /** Continuous mode only: a phrase began ('speech-start') or a sound was not recognized
+   *  ('speech-rejected'). These carry an empty transcript. */
+  event?: 'speech-start' | 'speech-rejected'
 }
 
 export interface ISttProvider {

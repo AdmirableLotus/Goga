@@ -18,6 +18,21 @@ const MAX_FILES = 60
 
 const mb = (n: number) => `${(n / 1e6).toFixed(1)} MB`
 
+// Per-file guard so one slow file (a big PDF, or the vision model loading on a small GPU)
+// can never hang the whole review. Resolves to a marker string instead of hanging forever.
+const INGEST_TIMEOUT_MS = 60_000
+const VISION_TIMEOUT_MS = 90_000
+function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let done = false
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(onTimeout()) } }, ms)
+    work.then(
+      (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v) } },
+      () => { if (!done) { done = true; clearTimeout(timer); resolve(onTimeout()) } },
+    )
+  })
+}
+
 reg.register({
   name: 'files.reviewFolder',
   description: 'Go through a folder and check everything: read each document (pdf, docx, txt, md, csv) into the Library, look at each image with the vision model and describe it, and list videos, 3D models and other files. Returns a summary of the whole folder. Use when asked to review or go through a folder.',
@@ -45,12 +60,15 @@ reg.register({
       const size = fs.statSync(full).size
       try {
         if (DOC.test(e.name)) {
-          const meta = await library.ingest(full)
-          docs.push(`${e.name} → read into Library (${meta.chunkCount} sections)`)
+          const meta = await withTimeout(library.ingest(full), INGEST_TIMEOUT_MS, () => null)
+          if (meta) docs.push(`${e.name} → read into Library (${meta.chunkCount} sections)`)
+          else other.push(`${e.name} (${mb(size)}) — skipped, too slow to read (timed out)`)
         } else if (IMG.test(e.name)) {
           if (size > MAX_IMAGE_BYTES) { images.push(`${e.name} (${mb(size)}) — too large to view`); continue }
           const b64 = fs.readFileSync(full).toString('base64')
-          const desc = await queryVision(b64, prompt).catch(err => `(could not view: ${err instanceof Error ? err.message : String(err)})`)
+          const desc = await withTimeout(
+            queryVision(b64, prompt).catch(err => `(could not view: ${err instanceof Error ? err.message : String(err)})`),
+            VISION_TIMEOUT_MS, () => '(skipped — vision model too slow to respond)')
           images.push(`${e.name}: ${desc.replace(/\s+/g, ' ').trim().slice(0, 400)}`)
         } else if (VIDEO.test(e.name)) {
           other.push(`${e.name} (video, ${mb(size)}) — Goga can't watch video yet`)

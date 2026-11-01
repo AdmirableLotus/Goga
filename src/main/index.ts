@@ -122,6 +122,14 @@ app.whenReady().then(() => {
   registerTradingHandlers(ipcMain)
   createWindow()
   startSleepMode(getMainWindow, createWindow)
+
+  // Hands-free "hey goga": start the always-on wake listener at launch when
+  // enabled, so it works with the window open — not only when asleep in the tray.
+  {
+    const s = SettingsService.getInstance().get()
+    if (s.voiceEnabled && s.wakeWordEnabled) void VoiceOrchestrator.getInstance().startWakeLoop()
+  }
+
   void applyRemoteSettings()
   resumeFluxLink()
 
