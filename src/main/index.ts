@@ -24,6 +24,7 @@ import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
 import { SettingsService } from './services/settings'
+import { LibraryService } from './services/library'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
 import { TelegramService } from './services/telegram'
 import { OrchestratorService } from './services/orchestrator'
@@ -111,6 +112,7 @@ app.whenReady().then(() => {
   registerLogHandlers(ipcMain)
   registerSettingsHandlers(ipcMain)
   registerDesktopHandlers(ipcMain)
+  LibraryService.getInstance().open(path.join(app.getPath('userData'), 'library-index.json'))
   registerLibraryHandlers(ipcMain)
   registerBrainHandlers(ipcMain)
   registerAgentHandlers(ipcMain)

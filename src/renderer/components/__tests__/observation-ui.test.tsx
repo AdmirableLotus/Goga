@@ -9,7 +9,7 @@ const boundary = vi.hoisted(() => ({ send: vi.fn(), chat: vi.fn(), active: vi.fn
 vi.mock('../../../main/services/logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
 vi.mock('../../../main/services/settings', () => ({ SettingsService: { getInstance: () => ({ get: () => ({ primaryModel: 'local' }) }) } }))
 vi.mock('../../../main/services/brain', () => ({ BrainService: { getInstance: () => ({ addMessage: vi.fn() }) } }))
-vi.mock('../../../main/services/library', () => ({ LibraryService: { getInstance: () => ({}) } }))
+vi.mock('../../../main/services/library', () => ({ LibraryService: { getInstance: () => ({}) }, BOOK_STUDY_REQUEST: /(?!)/, studyReport: () => '' }))
 vi.mock('../../../main/services/actionStore', () => ({ ActionStore: { getInstance: () => ({ stopAll: vi.fn() }) } }))
 vi.mock('../../../main/services/localLlama', () => ({ LocalLlamaService: { getInstance: () => ({ isReady: () => true, chat: boundary.chat }) } }))
 vi.mock('../../../main/services/ollamaClient', () => ({ OllamaClient: vi.fn(() => ({})) }))

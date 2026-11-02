@@ -3,7 +3,7 @@ const boundary = vi.hoisted(() => ({ chat: vi.fn(), getHistory: vi.fn(), addMess
 vi.mock('../logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
 vi.mock('../settings', () => ({ SettingsService: { getInstance: () => ({ get: () => ({ primaryModel: 'local', userName: 'Fixture' }) }) } }))
 vi.mock('../brain', () => ({ BrainService: { getInstance: () => ({ getHistory: boundary.getHistory, addMessage: boundary.addMessage }) } }))
-vi.mock('../library', () => ({ LibraryService: { getInstance: () => ({}) } }))
+vi.mock('../library', () => ({ LibraryService: { getInstance: () => ({}) }, BOOK_STUDY_REQUEST: /(?!)/, studyReport: () => '' }))
 vi.mock('../actionStore', () => ({ ActionStore: { getInstance: () => ({}) } }))
 vi.mock('../localLlama', () => ({ LocalLlamaService: { getInstance: () => ({ isReady: () => true, chat: boundary.chat }) } }))
 vi.mock('../ollamaClient', () => ({ OllamaClient: vi.fn(() => ({ chat: boundary.ollama, chatWith: boundary.vision, isAvailable: boundary.available })) }))

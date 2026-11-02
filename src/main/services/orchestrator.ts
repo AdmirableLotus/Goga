@@ -9,7 +9,7 @@ import type { ChatMessage, Action, AgentState } from '../../shared/types'
 import { ActionStore } from './actionStore'
 import { LogService } from './logs'
 import { BrainService } from './brain'
-import { LibraryService } from './library'
+import { BOOK_STUDY_REQUEST, LibraryService, studyReport } from './library'
 import { OllamaClient } from './ollamaClient'
 import { BRAIN_LOAD_WAIT_MS, LocalLlamaService } from './localLlama'
 import { SettingsService } from './settings'
@@ -137,6 +137,14 @@ export class OrchestratorService {
       plannerDiagnostic('routing.decision', { task: content, route: 'gap-report', agentTask: false })
       const report = gapJournal()?.report() ?? 'My gap journal is not running yet.'
       const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `${report}\n\nEach of these can become a new tool or a fix. Tell me which one to work on first.`, timestamp: Date.now() }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+
+    // "Learn from the book I gave you" — the book is already read; say so and how it is used.
+    if (BOOK_STUDY_REQUEST.test(content) && content.length < 300) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'book-study', agentTask: false })
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: studyReport(this.library.list()), timestamp: Date.now() }
       this.brain.addMessage(reply); onToken?.(reply.content)
       return reply
     }

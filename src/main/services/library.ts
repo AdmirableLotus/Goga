@@ -7,15 +7,52 @@ import { LogService } from './logs'
 const CHUNK_SIZE = 800   // characters per chunk
 const CHUNK_OVERLAP = 100
 
+/** "Learn from the book I gave you" — about books already in the Library, not finding new ones. */
+export const BOOK_STUDY_REQUEST = /^(?!.*\b(search|find|download|look for|get me|buy)\b).*(\b(learn|study|read|absorb)\b.{0,60}\b(book|books|pdf|guide|document)\b|\b(book|books|pdf|guide|document)\b.{0,60}\b(learn|study|absorb)\b)/i
+
+/** An honest answer: what is in the Library and how Goga actually uses it. */
+export function studyReport(books: BookMeta[]): string {
+  if (books.length === 0) return 'My Library is empty right now, so there is no book for me to learn from. Add one on the Library page (PDF, EPUB, Word, text, Markdown or CSV) and I\'ll read it straight away.'
+  const list = books.map(b => `- "${b.title}" (${b.chunkCount.toLocaleString('en-US')} passages)`).join('\n')
+  return `I've already read ${books.length === 1 ? 'the book' : 'these books'} in my Library:\n${list}\n\nTo be straight about how I learn: reading a book doesn't retrain my brain. I keep every passage and look up the right ones whenever you ask about the topic, so my answers quote the book instead of guessing. Ask me anything from ${books.length === 1 ? 'it' : 'them'}, for example "what does ${books[0].title} say about …?"`
+}
+
 export class LibraryService {
   private static instance: LibraryService
   private books: Map<string, BookMeta> = new Map()
   private chunks: BookChunk[] = []
   private log = LogService.getInstance()
+  private indexFile?: string
 
   static getInstance() {
     if (!LibraryService.instance) LibraryService.instance = new LibraryService()
     return LibraryService.instance
+  }
+
+  /** Keep books across restarts: load the saved index now and save it after every change. */
+  open(indexFile: string) {
+    this.indexFile = indexFile
+    try {
+      const saved = JSON.parse(fs.readFileSync(indexFile, 'utf-8')) as { books?: BookMeta[]; chunks?: BookChunk[] }
+      const books = Array.isArray(saved.books) ? saved.books : []
+      const known = new Set(books.map(b => b.id))
+      for (const b of books) this.books.set(b.id, b)
+      this.chunks.push(...(Array.isArray(saved.chunks) ? saved.chunks : []).filter(c => known.has(c.bookId)))
+      this.log.info(`Library: ${books.length} book(s) loaded`)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.log.warn(`Library index unreadable: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  private save() {
+    if (!this.indexFile) return
+    try {
+      const tmp = `${this.indexFile}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify({ version: 1, books: this.list(), chunks: this.chunks }))
+      fs.renameSync(tmp, this.indexFile)
+    } catch (err) {
+      this.log.warn(`Library index not saved: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   async ingest(filePath: string): Promise<BookMeta> {
@@ -39,6 +76,7 @@ export class LibraryService {
     const meta: BookMeta = { id: bookId, title, filename, format: ext, chunkCount: newChunks.length, ingestedAt: Date.now(), sizeBytes }
     this.books.set(bookId, meta)
     this.chunks.push(...newChunks)
+    this.save()
 
     this.log.info(`Ingested "${title}" — ${newChunks.length} chunks`)
     return meta
@@ -140,6 +178,7 @@ export class LibraryService {
   delete(bookId: string) {
     this.books.delete(bookId)
     this.chunks = this.chunks.filter(c => c.bookId !== bookId)
+    this.save()
   }
 
   getBookTitle(bookId: string) { return this.books.get(bookId)?.title ?? bookId }
