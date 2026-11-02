@@ -16,6 +16,8 @@ describe('"https://d2l.ai/ read and learn"', () => {
     expect(isLearnFromLink('https://d2l.ai/ read and learn')).toBe(true)
     expect(isLearnFromLink('add this book to your library https://example.org/guide.pdf')).toBe(true)
     expect(isLearnFromLink('open this website and read everything on it and use it to work in trading https://zerodha.com/varsity/modules/')).toBe(true)
+    expect(isLearnFromLink('go over all modules https://zerodha.com/varsity/modules/')).toBe(true)
+    expect(isLearnFromLink('every day go through every point on this link and learn https://archive.org/details/texts')).toBe(true)
     expect(isLearnFromLink('open https://youtube.com and read the comments')).toBe(false)
   })
 

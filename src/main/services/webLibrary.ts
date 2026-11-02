@@ -21,7 +21,9 @@ export function isLearnFromLink(text: string): boolean {
   return /https:\/\/\S+/.test(text)
     && (/\b(learn|study)\b/i.test(text)
       || /\b(read|import|add)\b[\s\S]*\b(book|library|pdf|epub|textbook)\b/i.test(text)
-      || /\bread\b[\s\S]{0,40}\b(everything|all of it|it all|the whole|the entire)\b/i.test(text))
+      || /\bread\b[\s\S]{0,40}\b(everything|all of it|it all|the whole|the entire)\b/i.test(text)
+      // "go over all modules https://…", "go through every point on this link and learn"
+      || /\b(go (?:over|through)|read|study|learn|cover)\b[\s\S]{0,60}\b(every|all|each)\b[\s\S]{0,20}\b(module|chapter|section|page|point|article|lesson|part|topic)s?\b/i.test(text))
 }
 
 /**
@@ -50,7 +52,7 @@ export async function findDocumentLink(url: string, signal?: AbortSignal): Promi
   if (/pdf|epub/i.test(res.headers.get('content-type') ?? '')) return parsed.href
   const html = (await res.text()).slice(0, 3_000_000)
   const doc = pickDocumentLink(res.url || parsed.href, html)
-  if (!doc) throw new Error('That page has no PDF or EPUB edition I can download. Send me a direct link to the book file instead.')
+  if (!doc) throw new Error("that link is a web page, not a single book file. I can't crawl a whole website or read it page by page — I study one document at a time. Send me a direct link to the file (ending in .pdf or .epub), or upload the file to me here, and I'll read it properly. Many course sites have a “Download PDF” button; that link is what I need.")
   return doc
 }
 
