@@ -183,3 +183,8 @@ export function isVagueOpenWebsite(message: string): boolean {
   const hasNamedSite = /\b(google|youtube|gmail|amazon|facebook|twitter|x\.com|reddit|github|hackerone|bugcrowd|wikipedia|stackoverflow|linkedin|instagram|netflix|spotify|chatgpt|bing|yahoo)\b/.test(m)
   return !hasUrl && !hasNamedSite
 }
+
+// "go to sleep", "sleep mode", "good night" — short, so "the good night routine for my kid" is not one.
+export const SLEEP_REQUEST = /^\s*(?:(?:ok(?:ay)?|goga|hey goga|alright)[,\s]+)*(?:please\s+)?(?:go to sleep(?: mode)?|sleep mode|sleep now|go sleep|good ?night)(?:[,\s]+(?:goga|go to sleep(?: mode)?|good ?night|sleep well|ace))*\s*[.!]*\s*$/i
+/** Several questions in one message ("why…? second did you…, third how…"). */
+export const isCompoundQuestion = (text: string): boolean => (text.match(/\?/g) ?? []).length > 1 || /\b(second(ly)?|third(ly)?|also|and (how|what|why|did|are|is))\b/i.test(text)

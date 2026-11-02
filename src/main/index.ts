@@ -26,10 +26,12 @@ import { LocalLlamaService } from './services/localLlama'
 import { SettingsService } from './services/settings'
 import { LibraryService } from './services/library'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
-import { TelegramService } from './services/telegram'
+import { TelegramService, messageOwnerOnPhone, setPhoneMessagesEnabled } from './services/telegram'
 import { OrchestratorService, SCHEDULED_ID_PREFIX, msSinceUserMessage } from './services/orchestrator'
 import { describeSchedule, initScheduler, scheduler, type ScheduledTask } from './services/scheduler'
 import { BrainService } from './services/brain'
+import { bookStudy, initBookStudy } from './services/bookStudy'
+import { backgroundChat } from './services/backgroundChat'
 import type { ChatMessage } from '../shared/types'
 import { nanoid } from './utils/nanoid'
 import { registerDeveloperHandlers, stopDeveloperTask } from './handlers/developer'
@@ -106,18 +108,35 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => wakeGoga())
 }
 
+/** Something Goga says on his own: in chat, and with `alert`, also on Telegram and as a pop-up. */
+function tellOwner(content: string, alert: boolean): void {
+  const message: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
+  BrainService.getInstance().addMessage(message)
+  getMainWindow()?.webContents.send('chat:message', message)
+  if (alert) messageOwnerOnPhone(content)
+  if (alert && Notification.isSupported()) new Notification({ title: 'Goga', body: content.replace(/[*_`]/g, '').slice(0, 180) }).show()
+}
+
+/** Goga studies the books in his Library while nobody is chatting (see bookStudy.ts). */
+function startBookStudy(): void {
+  const library = LibraryService.getInstance()
+  initBookStudy(path.join(app.getPath('userData'), 'book-study.json'), {
+    // JSON mode: without it the 14B's notes were often broken JSON.
+    chat: messages => backgroundChat(messages, { json: true, numPredict: 1200 }),
+    idle: () => !['running', 'waiting-approval'].includes(AgentLoop.getInstance().getState().status) && msSinceUserMessage() > 5 * 60_000,
+    books: () => library.list().sort((a, b) => a.ingestedAt - b.ingestedAt).map(b => ({ id: b.id, title: b.title })),
+    chunks: id => library.chunksOf(id),
+    report: text => tellOwner(text, true),
+  }).start()
+}
+
 /**
  * Goga's own recurring tasks. Each run is sent through its own orchestrator as a chat
  * message, so it gets the same routing, approvals and safety checks as anything typed.
  */
 function startScheduledTasks(): void {
   const orchestrator = new OrchestratorService()
-  const report = (content: string, alert: boolean) => {
-    const message: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
-    BrainService.getInstance().addMessage(message)
-    getMainWindow()?.webContents.send('chat:message', message)
-    if (alert && Notification.isSupported()) new Notification({ title: 'Goga', body: content.replace(/[*_`]/g, '').slice(0, 180) }).show()
-  }
+  const report = tellOwner
   const busy = () => {
     const status = AgentLoop.getInstance().getState().status
     return status === 'running' || status === 'waiting-approval' || msSinceUserMessage() < 90_000
@@ -128,11 +147,15 @@ function startScheduledTasks(): void {
     const limit = setTimeout(() => finish(false, 'it took longer than 20 minutes'), 20 * 60_000)
     report(`⏰ Scheduled task ${task.id} (${describeSchedule(task)}): ${task.request}`, false)
     orchestrator.process({ id: `${SCHEDULED_ID_PREFIX}${nanoid()}`, role: 'user', content: task.request, timestamp: Date.now() },
-      undefined, result => finish(result.status === 'success', result.reply))
+      undefined, result => {
+        messageOwnerOnPhone(`⏰ ${task.request} (${describeSchedule(task)}):\n\n${result.reply}`)
+        finish(result.status === 'success', result.reply)
+      })
       .then(reply => {
         // A multi-step task posts its own result when it finishes (see onTaskComplete above).
         if (AgentLoop.getInstance().getState().status === 'running') return
         getMainWindow()?.webContents.send('chat:message', reply)
+        messageOwnerOnPhone(`⏰ ${task.request} (${describeSchedule(task)}):\n\n${reply.content}`)
         finish(!/^(Couldn't do that|Model error|Agent error)/.test(reply.content), reply.content)
       }, err => finish(false, err instanceof Error ? err.message : String(err)))
   })
@@ -169,6 +192,7 @@ app.whenReady().then(() => {
   }
 
   startScheduledTasks()
+  startBookStudy()
   void applyRemoteSettings()
   resumeFluxLink()
 
@@ -182,7 +206,14 @@ app.whenReady().then(() => {
             undefined, result => completed(result.reply))
           return reply.content
         },
-        () => emergencyStop('Telegram /stop'))
+        () => emergencyStop('Telegram /stop'),
+        async file => {
+          const meta = await LibraryService.getInstance().ingest(file)
+          tellOwner(`📚 "${meta.title}" arrived from Telegram and is in my Library (${meta.chunkCount.toLocaleString('en-US')} passages).`, false)
+          return `📚 "${meta.title}" is in my Library (${meta.chunkCount.toLocaleString('en-US')} passages). I'll study it section by section while you're not chatting with me, and message you here as I go. Ask "how is your studying going" any time.`
+        })
+      telegram.makeActive()
+      setPhoneMessagesEnabled(() => SettingsService.getInstance().get().telegramNotify ?? true)
       telegram.start().catch(() => console.warn('[Telegram] Could not connect. Check TELEGRAM_BOT_TOKEN and network access.'))
     } catch {
       console.warn('[Telegram] Could not initialize. Check the local Telegram owner configuration.')
@@ -213,6 +244,7 @@ app.on('will-quit', async (event) => {
   globalShortcut.unregisterAll()
   stopSleepMode()
   scheduler()?.stop()
+  bookStudy()?.stop()
   telegram?.stop()
   stopRemoteLink()
   stopFluxLink()

@@ -17,10 +17,11 @@ export function parseFolderReview(task: string): { path: string } | null {
   if (!/\b(review|go through|check|look through|read|scan|explore|open)\b/i.test(t)) return null
   const hasFolderWord = /\b(folder|directory|everything|all (the )?(files|docs|documents|materials|photos|images|stuff)|materials)\b/i.test(t)
   // A quoted path, or a Windows drive path, or a POSIX-looking absolute path.
-  const quoted = t.match(/["'“”]([A-Za-z]:[\\/][^"'“”]+|\/[^"'“”]+)["'“”]/)
+  // A drive letter never follows another letter: "https://" is a link, not "s:/".
+  const quoted = t.match(/["'“”]((?<![A-Za-z])[A-Za-z]:[\\/][^"'“”]+|\/[^"'“”]+)["'“”]/)
   let p = quoted?.[1]
   if (!p) {
-    const bare = t.match(/([A-Za-z]:[\\/].+)$/)
+    const bare = t.match(/((?<![A-Za-z])[A-Za-z]:[\\/].+)$/)
     if (bare) p = bare[1].replace(/\s+(and|then)\s+(check|review|go|read|look|scan|see|tell|show).*$/i, '').trim()
   }
   if (!p) return null

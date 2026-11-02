@@ -11,6 +11,7 @@ import { DesktopAdapter } from './adapters/desktop'
 import { TradeWatcher, DEFAULT_WATCH_RULES, type WatchAlert } from './services/trading/tradeWatcher'
 import { AutoTrader, DEFAULT_AUTO_RULES, learningReport } from './services/trading/autoTrader'
 import { initGapJournal } from './services/gapJournal'
+import { messageOwnerOnPhone } from './services/telegram'
 import { alpacaKeys, marketData, paperTrading, tradingLimits } from './services/trading/desk'
 
 /**
@@ -31,6 +32,7 @@ let tradeWatcher: TradeWatcher | undefined
 let autoTrader: AutoTrader | undefined
 let gapTimer: ReturnType<typeof setInterval> | undefined
 let wakeUp: () => void = () => {}
+let sleepUp: () => void = () => {}
 const log = LogService.getInstance()
 const settings = () => SettingsService.getInstance().get()
 
@@ -38,6 +40,8 @@ export function startedAsleep(): boolean { return process.argv.includes(SLEEP_AR
 export function isQuitting(): boolean { return quitting }
 /** Open the window and stop listening for the wake word (tray click, a second start). */
 export function wakeGoga(): void { wakeUp() }
+/** "Go to sleep": hide the window and sleep by the clock, as closing the window does. */
+export function sleepNow(): void { sleepUp() }
 
 /** Recent apps and windows, for questions about the user's day ('' when nothing is known). */
 export function routineSummary(userName: string): string {
@@ -55,6 +59,7 @@ export function autoTradingSummary(): string {
 export function startSleepMode(getWindow: () => BrowserWindow | null, createWindow: () => void): void {
   app.on('before-quit', () => { quitting = true })
   wakeUp = () => wake(getWindow, createWindow)
+  sleepUp = () => { getWindow()?.hide(); fallAsleep() }
   applySleepSettings()
 
   tray = new Tray(ICON)
@@ -168,7 +173,7 @@ function wake(getWindow: () => BrowserWindow | null, createWindow: () => void): 
 
 function refreshTrayMenu(getWindow: () => BrowserWindow | null, createWindow: () => void): void {
   const s = settings()
-  const toggle = (key: 'guardianEnabled' | 'routineLearning' | 'tradeWatchEnabled' | 'autoTradeEnabled') => () => {
+  const toggle = (key: 'guardianEnabled' | 'routineLearning' | 'tradeWatchEnabled' | 'autoTradeEnabled' | 'telegramNotify') => () => {
     SettingsService.getInstance().set({ [key]: !settings()[key] })
     refreshTrayMenu(getWindow, createWindow)
   }
@@ -179,6 +184,7 @@ function refreshTrayMenu(getWindow: () => BrowserWindow | null, createWindow: ()
     { label: 'Learn my routine', type: 'checkbox', checked: s.routineLearning, click: toggle('routineLearning') },
     { label: 'Watch my paper trades', type: 'checkbox', checked: s.tradeWatchEnabled ?? true, click: toggle('tradeWatchEnabled') },
     { label: 'Let Goga trade on paper to learn', type: 'checkbox', checked: s.autoTradeEnabled ?? false, click: toggle('autoTradeEnabled') },
+    { label: 'Message me on Telegram', type: 'checkbox', checked: s.telegramNotify ?? true, click: toggle('telegramNotify') },
     { type: 'separator' },
     { label: 'Quit Goga', click: () => { quitting = true; app.quit() } },
   ]))
@@ -199,6 +205,7 @@ function tellUser(alert: GuardianAlert | WatchAlert, getWindow: () => BrowserWin
   const message = { id: nanoid(), role: 'assistant' as const, content, timestamp: Date.now() }
   BrainService.getInstance().addMessage(message)
   getWindow()?.webContents.send('chat:message', message)
+  messageOwnerOnPhone(content)
   if (alert.severity === 'danger' && settings().voiceEnabled) {
     void VoiceOrchestrator.getInstance().narrate(`${settings().userName}, heads up. ${alert.title}.`).catch(() => {})
   }

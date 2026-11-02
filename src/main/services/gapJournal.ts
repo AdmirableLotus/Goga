@@ -88,7 +88,7 @@ export function gapReport(gaps: Gap[], now = new Date(), days = 30): string {
 }
 
 /** Questions about Goga's own gaps: "what tools do you need", "what couldn't you do", "how can you improve". */
-export const GAP_QUESTION = /\b(what (tools?|abilities|skills|features) (do |would )?you (need|want|lack|miss)|what (did|do|have) you (fail|struggle)|what (couldn'?t|can'?t) you do|what have you failed|your (gaps?|failures|weaknesses|limitations)|gap (journal|report)|how (can|could|should) (you|i) (improve|upgrade|evolve) (you|yourself)|what should (you|we|i) (build|add|fix) (next )?(for you|in you|to you)?)\b/i
+export const GAP_QUESTION = /\b(what (tools?|abilities|skills|features) (do |would )?you (need|want|lack|miss)|what (did|do|have) you (fail|struggle)|what (couldn'?t|can'?t) you do|what have you failed|your (gaps?|failures|weaknesses|limitations)|gap (journal|report)|how (can|could|should) (you|i) (improve|upgrade|evolve) (you|yourself)|what should (you|we|i) (build|add|fix|improve|change|work on|upgrade) (first |next )?(for you|in you|to you|in your code)?|what (code )?improvements? (should|could|do) (we|you|i)|what (should|do) (we|you|i) (improve|fix|work on) (first|next))\b/i
 
 export class GapJournal {
   constructor(private file: string, private now: () => Date = () => new Date()) {}

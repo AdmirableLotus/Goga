@@ -147,10 +147,10 @@ export class OllamaClient {
 
   /** Background work: runs only while no reply is in flight, and is capped in length so it
    *  can never hold the brain for long. Rejects with "brain busy" instead of waiting. */
-  async chatIfIdle(messages: OllamaMessage[], signal?: AbortSignal): Promise<string> {
+  async chatIfIdle(messages: OllamaMessage[], signal?: AbortSignal, opts?: { json?: boolean; numPredict?: number }): Promise<string> {
     if (activeReplies > 0) throw new Error('brain busy')
     const url = new URL(this.endpoint)
-    const body = JSON.stringify({ model: this.model, messages, stream: false, options: { num_predict: 700 } })
+    const body = JSON.stringify({ model: this.model, messages, stream: false, ...(opts?.json ? { format: 'json' } : {}), options: { num_predict: opts?.numPredict ?? 700 } })
     return this.postJson(url, '/api/chat', body, undefined, signal)
   }
 

@@ -11,6 +11,45 @@ const DOC_EXT = /\.(pdf|epub|txt)$/i
 
 export interface RepoDoc { name: string; path: string; sizeBytes: number; downloadUrl: string }
 
+/**
+ * "https://d2l.ai/ read and learn", "learn from https://…/book.pdf", "add this book https://…".
+ * "open https://… and read the article" is not a book: it needs learn/study, or a book word.
+ */
+export function isLearnFromLink(text: string): boolean {
+  return /https:\/\/\S+/.test(text)
+    && (/\b(learn|study)\b/i.test(text) || /\b(read|import|add)\b[\s\S]*\b(book|library|pdf|epub|textbook)\b/i.test(text))
+}
+
+/**
+ * The book behind a web page: "https://d2l.ai/" links its PDF edition from the home page.
+ * Prefers a document on the same site, then the plainest name (d2l-en.pdf over
+ * d2l-en-mxnet.pdf). A direct document link is returned as it is.
+ */
+export function pickDocumentLink(pageUrl: string, html: string): string | null {
+  const base = new URL(pageUrl)
+  const links = [...html.matchAll(/href\s*=\s*["']([^"'#]+?\.(?:pdf|epub))(?:[?#][^"']*)?["']/gi)]
+    .map(m => { try { return new URL(m[1], base) } catch { return null } })
+    .filter((u): u is URL => !!u && u.protocol === 'https:')
+  if (links.length === 0) return null
+  const name = (u: URL) => u.pathname.split('/').pop() ?? ''
+  links.sort((a, b) => Number(b.host === base.host) - Number(a.host === base.host) || name(a).length - name(b).length)
+  return links[0].href
+}
+
+export async function findDocumentLink(url: string, signal?: AbortSignal): Promise<string> {
+  let parsed: URL
+  try { parsed = new URL(url) } catch { throw new Error('That is not a valid URL.') }
+  if (parsed.protocol !== 'https:') throw new Error('Only https links are allowed.')
+  if (DOC_EXT.test(parsed.pathname) || /\.epub$/i.test(parsed.pathname)) return parsed.href
+  const res = await fetch(parsed, { redirect: 'follow', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000), headers: { 'User-Agent': 'Goga-Library' } })
+  if (!res.ok) throw new Error(`The link returned HTTP ${res.status}.`)
+  if (/pdf|epub/i.test(res.headers.get('content-type') ?? '')) return parsed.href
+  const html = (await res.text()).slice(0, 3_000_000)
+  const doc = pickDocumentLink(res.url || parsed.href, html)
+  if (!doc) throw new Error('That page has no PDF or EPUB edition I can download. Send me a direct link to the book file instead.')
+  return doc
+}
+
 /** owner/repo from a github.com URL (or "owner/repo"), else null. */
 export function githubRepoRef(input: string): { owner: string; repo: string } | null {
   const m = String(input ?? '').trim().match(/^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/)?([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git|\/.*)?$/i)
@@ -76,9 +115,12 @@ export async function downloadDocument(url: string, signal?: AbortSignal): Promi
       if (!first) first = chunk
       size += chunk.length
       if (size > MAX_BYTES) { out.destroy(); throw new Error('That document is larger than the 80 MB limit.') }
-      out.write(chunk)
+      if (!out.write(chunk)) await new Promise<void>(resolve => out.once('drain', () => resolve()))
     }
-  } finally { out.end(); reader.releaseLock() }
+  } finally { reader.releaseLock() }
+  // Wait until every byte is on disk: reading the file before this gave big books a cut-off
+  // end ("Invalid PDF structure" on the 45 MB d2l.ai book; small files happened to finish in time).
+  if (!out.destroyed) await new Promise<void>((resolve, reject) => { out.once('error', reject); out.end(() => resolve()) })
   // Reject an HTML error page saved under a .pdf name — the usual cause of "Invalid PDF structure".
   const head = (first ?? Buffer.alloc(0)).subarray(0, 64)
   const looksHtml = /^\s*(<!doctype|<html|<\?xml)/i.test(head.toString('utf8'))

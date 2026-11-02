@@ -181,5 +181,10 @@ export class LibraryService {
     this.save()
   }
 
+  /** A book's passages in reading order. */
+  chunksOf(bookId: string): string[] {
+    return this.chunks.filter(c => c.bookId === bookId).sort((a, b) => a.chunkIndex - b.chunkIndex).map(c => c.text)
+  }
+
   getBookTitle(bookId: string) { return this.books.get(bookId)?.title ?? bookId }
 }

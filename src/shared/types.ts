@@ -244,6 +244,8 @@ export interface AppSettings {
   tradeWatchEnabled: boolean
   // Goga trades the paper account on his own (rule-based, small risk) to learn
   autoTradeEnabled: boolean
+  // Goga messages the owner on Telegram: alerts, reminders, scheduled results
+  telegramNotify: boolean
   // Local coding model for the self-improvement workshop
   coderModelName: string
   // Practice trading risk rules, enforced in code on every order
@@ -386,6 +388,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   routineLearning: true,
   tradeWatchEnabled: true,
   autoTradeEnabled: false,
+  telegramNotify: true,
   coderModelName: 'qwen2.5-coder:14b',
   tradingMaxPositionPct: 10,
   tradingRequireStop: true,

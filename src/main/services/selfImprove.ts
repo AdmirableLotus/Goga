@@ -488,6 +488,14 @@ export class Workshop {
 
 /** "improve yourself", "work on gap 2", "fix your browser.open looping". */
 export const IMPROVE_REQUEST = /\b(improve|upgrade|evolve|reprogram|fix|update) (yourself|your ?self|your (own )?code)\b|\b(work on|fix|close|solve) (gap|problem|item|number) #?\d+\b|\bstart (the )?workshop\b/i
+const FILLER = new Set(['please', 'like', 'want', 'work', 'okay', 'thanks', 'thank', 'just', 'some', 'more', 'make', 'better', 'able', 'start', 'yourself', 'your', 'code', 'goga', 'there', 'that', 'this', 'with', 'from', 'what', 'need', 'needs', 'should', 'would', 'could', 'really', 'everything', 'anything', 'something', 'stronger', 'smarter', 'faster', 'good', 'great', 'best', 'improve', 'upgrade', 'evolve', 'reprogram', 'update', 'fix', 'have', 'will', 'stuff', 'things'])
+
+/** A request to change himself that names no actual change ("please work and update your code"). */
+export function isVagueImproveRequest(text: string): boolean {
+  const words = (text.toLowerCase().match(/[a-z][a-z0-9.-]{3,}/g) ?? []).filter(w => !FILLER.has(w))
+  return words.length < 4
+}
+
 export const MERGE_REPLY = /^\s*(yes,? )?(merge|apply|accept|keep|install) (it|that|the change|this change|your change)\s*[.!]?\s*$/i
 export const DISCARD_REPLY = /^\s*(discard|reject|drop|throw away|delete|cancel) (it|that|the change|this change|your change)\s*[.!]?\s*$/i
 export const RESTART_REPLY = /^\s*restart( yourself| goga)?\s*[.!]?\s*$/i

@@ -21,7 +21,7 @@ import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
 import { chatHonestyNote, parseRoute, routeQuestion } from './replyHonesty'
-import { looksLikeAgentTask, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer } from './agentRouting'
+import { looksLikeAgentTask, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer, SLEEP_REQUEST, isCompoundQuestion } from './agentRouting'
 import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes, rewriteRequest, rewriteInParts } from './longText'
 import { app } from 'electron'
 import path from 'path'
@@ -30,12 +30,17 @@ import { observeScreen, type ObservationMessages } from './screenObservation'
 import { gogaIdentity } from './persona'
 import { FactLearner } from './factLearning'
 import { ROUTINE_QUESTION } from './routine'
-import { autoTradingSummary, routineSummary } from '../sleepMode'
+import { autoTradingSummary, routineSummary, sleepNow } from '../sleepMode'
 import { GAP_QUESTION, gapFromChat, gapJournal } from './gapJournal'
 import { SELF_CODE_QUESTION, codeContext } from './selfCode'
 import { sourceRoot } from '../tools/self'
-import { Workshop, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY, RESTART_REPLY, gapNumber, diffForChat, isWorkshopCommand } from './selfImprove'
+import { Workshop, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY, RESTART_REPLY, gapNumber, diffForChat, isWorkshopCommand, isVagueImproveRequest } from './selfImprove'
 import { groupGaps } from './gapJournal'
+import { messageOwnerOnPhone } from './telegram'
+import { deviceAlertReply } from './deviceReplies'
+import { STUDY_QUESTION, bookStudy, matchSkills, skillsForPrompt } from './bookStudy'
+import { downloadDocument, findDocumentLink, isLearnFromLink } from './webLibrary'
+import fs from 'fs'
 import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
 
 // A scheduled task's run is sent as a chat message whose id starts with this.
@@ -151,11 +156,46 @@ export class OrchestratorService {
       return reply
     }
 
-    // "Learn from the book I gave you" — the book is already read; say so and how it is used.
-    if (BOOK_STUDY_REQUEST.test(content) && content.length < 300) {
-      plannerDiagnostic('routing.decision', { task: content, route: 'book-study', agentTask: false })
-      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: studyReport(this.library.list()), timestamp: Date.now() }
+    // "https://d2l.ai/ read and learn" — download the book, add it to the Library, study it.
+    const link = isLearnFromLink(content) ? content.match(/https:\/\/[^\s"'<>]+/)?.[0] : undefined
+    if (link && content.length < 400) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'learn-from-link', agentTask: false })
+      void this.importBook(link.replace(/[.,;:!?)]+$/, ''))
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `Getting the book from ${link} now. A big book can take a few minutes to download and read in; I'll tell you here when it's in my Library, then I'll study it while you're not chatting.`, timestamp: Date.now() }
       this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+
+    // "Learn from the book I gave you" / "what skills have you learned" — real study progress.
+    // Only when that's the whole question: "why couldn't you…, second did you read…, third how is
+    // your day" needs every part answered, so it goes to the brain with the study report in view.
+    if ((BOOK_STUDY_REQUEST.test(content) || STUDY_QUESTION.test(content)) && content.length < 300 && !isCompoundQuestion(content)) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'book-study', agentTask: false })
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: bookStudy()?.report() ?? studyReport(this.library.list()), timestamp: Date.now() }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+
+    // "This is my new phone" / "is the device a smartphone?" after a new-device alert: say what
+    // is really known, and remember the owner's answer, instead of inventing "authorized" lists.
+    if (!isScheduledMessage(userMessage)) {
+      const cutoff = Date.now() - 6 * 3_600_000
+      const recent = () => this.brain.getHistory().filter(m => m.role === 'assistant' && m.timestamp > cutoff).slice(-6).reverse().map(m => m.content)
+      const device = deviceAlertReply(content, recent, SettingsService.getInstance().get().userName)
+      if (device) {
+        if (device.fact) this.brain.addFact(device.fact, 'about_user')
+        const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: device.reply, timestamp: Date.now() }
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
+    }
+
+    // "Go to sleep mode, good night": actually go to sleep by the clock (no agent task).
+    if (SLEEP_REQUEST.test(content)) {
+      const name = SettingsService.getInstance().get().userName
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `Good night, ${name}. I'm going to sleep by the clock — still watching your PC and paper trades, and I'll study my books while it's quiet. Message me on Telegram or say "Hey Goga" to wake me.`, timestamp: Date.now() }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      setTimeout(() => { try { sleepNow() } catch { /* no window to hide */ } }, 1500)
       return reply
     }
 
@@ -499,10 +539,26 @@ export class OrchestratorService {
     }
   }
 
+  /** Download a book from a link into the Library, and say how it went. Studying starts on its own. */
+  private async importBook(url: string): Promise<void> {
+    let file: string | null = null
+    try {
+      const doc = await findDocumentLink(url)
+      file = await downloadDocument(doc)
+      const meta = await this.library.ingest(file)
+      this.post(`📚 "${meta.title}" is in my Library (${meta.chunkCount.toLocaleString('en-US')} passages, from ${doc}). I'll study it section by section while you're not chatting, and tell you when I'm done. Ask "how is your studying going" any time.`)
+    } catch (err) {
+      this.post(`I couldn't get that book: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      if (file) try { fs.rmSync(path.dirname(file), { recursive: true, force: true }) } catch { /* temp file */ }
+    }
+  }
+
   private post(content: string): void {
     const message: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
     this.brain.addMessage(message)
     getMainWindow()?.webContents.send('chat:message', message)
+    messageOwnerOnPhone(content)
   }
 
   /** The workshop's chat commands (null when the message isn't one). */
@@ -534,6 +590,11 @@ export class OrchestratorService {
     if (waiting) return say(`A change is already waiting for you: "${waiting.summary}". Say "merge it" or "discard it" first.`)
     let goal = content
     const n = gapNumber(content)
+    // "please work and update your code" gives the coder nothing to do: offer real problems instead.
+    if (!n && isVagueImproveRequest(content)) {
+      const report = gapJournal()?.report()
+      return say(`I'd like to, but I need a specific goal — my coding model fails on a general "update your code".${report ? `\n\nHere's what has actually gone wrong for me lately:\n${report}\n\nSay "work on gap 1" (or another number)` : '\n\nTell me'} or describe one exact change, for example "improve yourself: when a book download fails, try once more".`)
+    }
     if (n) {
       const group = groupGaps(gapJournal()?.all() ?? [], new Date(Date.now() - 30 * 86_400_000))[n - 1]
       if (!group) return say(`There is no gap number ${n} in my report. Ask "what tools do you need" to see the list.`)
@@ -675,6 +736,8 @@ Books you have read:
 ${books.length > 0 ? books.map(b => `- "${b.title}"`).join('\n') : '- None yet.'}
 
 ${bookChunks.length > 0 ? `Relevant book passages:\n${bookChunks.map(c => c.text).join('\n---\n').slice(0, 1200)}` : ''}
+${skillsForPrompt(matchSkills(bookStudy()?.skills() ?? [], userInput)).slice(0, 1500)}
+${(STUDY_QUESTION.test(userInput) || BOOK_STUDY_REQUEST.test(userInput)) && bookStudy() ? `\nYour real study progress (report only this, never invent it):\n${bookStudy()!.report().slice(0, 1500)}\n` : ''}
 
 You can also operate this PC: browser, files, apps, desktop. You can design electronics too: look up real parts and build circuits (netlist, parts list, rule check) with KiCad on this PC, and work in ${settings.userName}'s Flux (flux.ai) circuit-board projects when Flux is connected in Settings. Like Schematik, you can make Arduino, ESP32 and Raspberry Pi Pico projects (code, parts to buy, wiring, build steps), compile them and upload them to a plugged-in board, and read ${settings.userName}'s Schematik (schematik.io) projects. You are also ${settings.userName}'s trading coach: with real prices and history (US stocks, ETFs, crypto, forex) you read charts, test strategies on history, and place practice trades with fake money in a paper account, within ${settings.userName}'s risk rules. You do not know current prices from memory: never state one without fetching it. Teach the why (trend, risk per trade, stops, position size, keeping a journal), be honest that no one can predict markets, and never promise profit. ${settings.userName}'s practice goal is to protect capital (risk 1% or less per trade), be consistent over many trades, and beat buy-and-hold — NOT to hit a fixed monthly dollar amount. If ${settings.userName} names an unrealistic target (for example "$3000/month", which on this account is ~3%/month — better than almost every professional fund), gently reset it: steady ~1%/month with no big drawdowns is already excellent, and chasing a dollar figure causes overtrading and losses. Income follows the skill, not the other way around. For electronics, plan the blocks, parts and power first, and point out anything that needs an engineer's review (safety, medical use, mains power).When ${settings.userName} wants something done, talk it through like a partner: say in a few plain sentences what you would do, mention anything risky or irreversible and anything ${settings.userName} must do personally (such as typing a password or a two-factor code), then end by asking "Want me to go ahead?". When ${settings.userName} agrees, you will carry out that plan. Do not refuse reasonable requests or tell ${settings.userName} to rephrase; if you have a concern, explain it and let ${settings.userName} decide. In this reply itself you have not acted yet: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer.
 

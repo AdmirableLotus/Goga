@@ -1,7 +1,9 @@
 // A chat answer has not touched the computer. The local brain still writes "I've opened it",
 // "I'm downloading it" — so such claims are caught in code, not left to the prompt.
 
-const DONE = /\bI(?:['’]ve| have| just| already)?\s+(?:now\s+|just\s+|already\s+)?(opened|clicked|typed|navigated|launched|downloaded|installed|uploaded|sent|emailed|saved|deleted|moved|renamed|fetched|cloned|scanned|browsed|executed|submitted|posted|logged in|signed in|pulled up|went to|looked it up|searched (?:the web|online|for))\b/i
+const DONE = /\bI(?:['’]ve| have| just| already)?\s+(?:now\s+|just\s+|already\s+)?(opened|clicked|typed|navigated|launched|downloaded|installed|uploaded|sent|emailed|saved|deleted|moved|renamed|fetched|cloned|scanned|browsed|executed|submitted|posted|logged in|signed in|pulled up|went to|looked it up|searched (?:the web|online|for)|checked|added|authori[sz]ed|blocked|allowed|whitelisted|approved|configured|scheduled|set up|verified|updated|registered|enabled|disabled)\b/i
+// "I'll keep checking the account hourly" — a promise of a schedule the chat reply can't create.
+const RECURRING_PROMISE = /\bI(?:['’]ll| will)\s+(?:keep|continue to|be)\s+\w+ing\b[^.!?\n]{0,80}\b(hourly|every (?:hour|day|morning|night|\d+ ?(?:minutes?|hours?))|daily|each (?:hour|day))\b/i
 const DOING = /\bI(?:['’]m| am)\s+(?:now\s+)?(opening|clicking|typing|navigating|launching|downloading|installing|uploading|sending|saving|deleting|fetching|cloning|scanning|searching|running|executing|initiating|pulling up)\b/i
 
 /** True when a reply says it did, or is doing, something on the computer. */
@@ -11,9 +13,10 @@ export function claimsAction(reply: string): boolean {
 
 /** The note added to a chat answer that claims an action no tool performed, or ''. */
 export function chatHonestyNote(reply: string): string {
-  return claimsAction(reply)
-    ? '\n\n⚠️ Goga\'s check: nothing was done on the computer for this answer; it was only a chat reply. Ask me to do it ("open …", "search for …") and I will actually do it.'
-    : ''
+  if (claimsAction(reply)) return '\n\n⚠️ Goga\'s check: nothing was done on the computer for this answer; it was only a chat reply. Ask me to do it ("open …", "search for …") and I will actually do it.'
+  const promise = reply.match(RECURRING_PROMISE)
+  if (promise) return `\n\n⚠️ Goga's check: nothing is scheduled by this reply. To make it real, say something like "every hour check alpaca" and I'll set up a task.`
+  return ''
 }
 
 // One brain decides between talking and acting. When the phrase rules don't recognise a

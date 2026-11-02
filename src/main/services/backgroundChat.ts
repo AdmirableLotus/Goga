@@ -12,10 +12,10 @@ const ollama = new OllamaClient()
  * Ollama is the primary brain — so Goga silently stopped remembering and learning.
  * Never delays a reply: rejects ("brain busy") while the user is being answered.
  */
-export async function backgroundChat(messages: Messages): Promise<string> {
+export async function backgroundChat(messages: Messages, opts?: { json?: boolean; numPredict?: number }): Promise<string> {
   const llama = LocalLlamaService.getInstance()
   if (SettingsService.getInstance().get().primaryModel === 'ollama' && await ollama.isAvailable()) {
-    return ollama.chatIfIdle(messages)
+    return ollama.chatIfIdle(messages, undefined, opts)
   }
   if (llama.isReady()) return llama.chat(messages, undefined, undefined, { ifIdle: true })
   throw new Error('no brain is running')
