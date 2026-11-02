@@ -15,6 +15,7 @@ describe('"https://d2l.ai/ read and learn"', () => {
     expect(parseFolderReview('review C:/Users/me/Desktop/notes')).toEqual({ path: 'C:/Users/me/Desktop/notes' })
     expect(isLearnFromLink('https://d2l.ai/ read and learn')).toBe(true)
     expect(isLearnFromLink('add this book to your library https://example.org/guide.pdf')).toBe(true)
+    expect(isLearnFromLink('open this website and read everything on it and use it to work in trading https://zerodha.com/varsity/modules/')).toBe(true)
     expect(isLearnFromLink('open https://youtube.com and read the comments')).toBe(false)
   })
 

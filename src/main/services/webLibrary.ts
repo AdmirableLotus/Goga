@@ -12,12 +12,16 @@ const DOC_EXT = /\.(pdf|epub|txt)$/i
 export interface RepoDoc { name: string; path: string; sizeBytes: number; downloadUrl: string }
 
 /**
- * "https://d2l.ai/ read and learn", "learn from https://…/book.pdf", "add this book https://…".
- * "open https://… and read the article" is not a book: it needs learn/study, or a book word.
+ * "https://d2l.ai/ read and learn", "learn from https://…/book.pdf", "add this book https://…",
+ * "read everything on this site and use it to work in trading".
+ * "open https://… and read the article/comments" is not a book: it needs learn/study, a book
+ * word, or an ask to read the whole thing (everything / all of it / the whole site).
  */
 export function isLearnFromLink(text: string): boolean {
   return /https:\/\/\S+/.test(text)
-    && (/\b(learn|study)\b/i.test(text) || /\b(read|import|add)\b[\s\S]*\b(book|library|pdf|epub|textbook)\b/i.test(text))
+    && (/\b(learn|study)\b/i.test(text)
+      || /\b(read|import|add)\b[\s\S]*\b(book|library|pdf|epub|textbook)\b/i.test(text)
+      || /\bread\b[\s\S]{0,40}\b(everything|all of it|it all|the whole|the entire)\b/i.test(text))
 }
 
 /**
