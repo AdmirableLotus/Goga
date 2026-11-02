@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { Workshop, applyEdits, registerNewTools, withoutRedeclarations, exposeImported, freshTestName, parsePlan, safetyProblems, failureSummary, runCommand, gapNumber, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY } from '../selfImprove'
+import { Workshop, applyEdits, registerNewTools, withoutRedeclarations, exposeImported, freshTestName, parsePlan, safetyProblems, safetyFilesTouched, failureSummary, runCommand, gapNumber, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY } from '../selfImprove'
 
 const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`))
 
@@ -14,11 +14,15 @@ describe('workshop rules', () => {
     expect(() => parsePlan('{"summary":"x","edits":[]}')).toThrow(/edits/)
   })
 
-  it('keeps the safety files and real-money paths off-limits', () => {
+  it('lets him change any of his files, flags the safety files, and keeps real-money paths off-limits', () => {
     const p = (file: string, replace = 'x', find = 'y') => safetyProblems({ summary: '', edits: [{ file, find, replace }] })
-    expect(p('src/main/services/trading/paperTrading.ts')).toHaveLength(1)
-    expect(p('src/main/services/selfImprove.ts')[0]).toMatch(/protected/)
-    expect(p('src/main/services/authorization.ts')[0]).toMatch(/protected/)
+    expect(p('src/main/services/trading/paperTrading.ts')).toEqual([])
+    expect(p('src/main/services/selfImprove.ts')).toEqual([])
+    expect(safetyFilesTouched(['src/main/services/authorization.ts', 'src/main/tools/web.ts', 'src\\main\\services\\trading\\paperTrading.ts'])).toEqual([
+      { file: 'src/main/services/authorization.ts', guards: 'which actions need your approval' },
+      { file: 'src/main/services/trading/paperTrading.ts', guards: 'paper-only trading and the encrypted trading keys' },
+    ])
+    expect(p('src/main/services/trading/paperTrading.ts', "const u = 'https://api.alpaca.markets/v2'")[0]).toMatch(/real-money/)
     expect(p('package.json')[0]).toMatch(/only .ts/)
     expect(p('src/main/services/x.ts', "const u = 'https://api.alpaca.markets/v2'")[0]).toMatch(/real-money/)
     expect(p('src/main/services/x.ts', 'safeStorage.decryptString(x)')[0]).toMatch(/key storage/)

@@ -34,7 +34,7 @@ import { autoTradingSummary, routineSummary, sleepNow } from '../sleepMode'
 import { GAP_QUESTION, gapFromChat, gapJournal } from './gapJournal'
 import { SELF_CODE_QUESTION, codeContext } from './selfCode'
 import { sourceRoot } from '../tools/self'
-import { Workshop, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY, RESTART_REPLY, gapNumber, diffForChat, isWorkshopCommand, isVagueImproveRequest } from './selfImprove'
+import { Workshop, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY, RESTART_REPLY, gapNumber, diffForChat, isWorkshopCommand, isVagueImproveRequest, safetyFilesTouched } from './selfImprove'
 import { groupGaps } from './gapJournal'
 import { messageOwnerOnPhone } from './telegram'
 import { deviceAlertReply } from './deviceReplies'
@@ -605,6 +605,7 @@ export class OrchestratorService {
       `**I wrote a change to myself and it passed the typecheck and all my tests** (${p.attempts} attempt${p.attempts === 1 ? '' : 's'}).`,
       `What it does: ${p.summary}`,
       `Files: ${p.files.join(', ')}`,
+      ...safetyFilesTouched(p.files).map(s => `⚠️ **Safety file:** ${s.file} guards ${s.guards}. Please read this part of the change closely before merging — my tests can miss mistakes here.`),
       '```diff', diffForChat(p.diff), '```',
       'Please look it over. Say **"merge it"** to put it in my real code, or **"discard it"** to throw it away. Nothing has changed in my real code yet.',
     ].join('\n'))).catch(err => this.post(`I couldn't finish that change: ${err instanceof Error ? err.message : String(err)}\nMy real code was not touched.`))
@@ -738,6 +739,8 @@ ${books.length > 0 ? books.map(b => `- "${b.title}"`).join('\n') : '- None yet.'
 ${bookChunks.length > 0 ? `Relevant book passages:\n${bookChunks.map(c => c.text).join('\n---\n').slice(0, 1200)}` : ''}
 ${skillsForPrompt(matchSkills(bookStudy()?.skills() ?? [], userInput)).slice(0, 1500)}
 ${(STUDY_QUESTION.test(userInput) || BOOK_STUDY_REQUEST.test(userInput)) && bookStudy() ? `\nYour real study progress (report only this, never invent it):\n${bookStudy()!.report().slice(0, 1500)}\n` : ''}
+
+You can read all of your own source code and change any of it. When asked to improve yourself with a specific goal (or "work on gap N"), your workshop writes the change on a private copy with your coding model and keeps it only if the typecheck and every test pass; ${settings.userName} reviews it and says "merge it" to put it in your real code (changes to your safety files are flagged for a close look). A real-money trading address and code that reads stored keys are always refused. A vague "update your code" is not enough for your coding model; ask what to change or offer your gap list.
 
 You can also operate this PC: browser, files, apps, desktop. You can design electronics too: look up real parts and build circuits (netlist, parts list, rule check) with KiCad on this PC, and work in ${settings.userName}'s Flux (flux.ai) circuit-board projects when Flux is connected in Settings. Like Schematik, you can make Arduino, ESP32 and Raspberry Pi Pico projects (code, parts to buy, wiring, build steps), compile them and upload them to a plugged-in board, and read ${settings.userName}'s Schematik (schematik.io) projects. You are also ${settings.userName}'s trading coach: with real prices and history (US stocks, ETFs, crypto, forex) you read charts, test strategies on history, and place practice trades with fake money in a paper account, within ${settings.userName}'s risk rules. You do not know current prices from memory: never state one without fetching it. Teach the why (trend, risk per trade, stops, position size, keeping a journal), be honest that no one can predict markets, and never promise profit. ${settings.userName}'s practice goal is to protect capital (risk 1% or less per trade), be consistent over many trades, and beat buy-and-hold — NOT to hit a fixed monthly dollar amount. If ${settings.userName} names an unrealistic target (for example "$3000/month", which on this account is ~3%/month — better than almost every professional fund), gently reset it: steady ~1%/month with no big drawdowns is already excellent, and chasing a dollar figure causes overtrading and losses. Income follows the skill, not the other way around. For electronics, plan the blocks, parts and power first, and point out anything that needs an engineer's review (safety, medical use, mains power).When ${settings.userName} wants something done, talk it through like a partner: say in a few plain sentences what you would do, mention anything risky or irreversible and anything ${settings.userName} must do personally (such as typing a password or a two-factor code), then end by asking "Want me to go ahead?". When ${settings.userName} agrees, you will carry out that plan. Do not refuse reasonable requests or tell ${settings.userName} to rephrase; if you have a concern, explain it and let ${settings.userName} decide. In this reply itself you have not acted yet: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer.
 

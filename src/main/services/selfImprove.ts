@@ -8,24 +8,32 @@ import { codeContext, sourceOverview } from './selfCode'
  * copy of his source (never the real project), writes the change plus a test with a local
  * coding model, and keeps it only if the typecheck and EVERY test pass. Then he shows the
  * user what changed; nothing reaches the real code until the user says "merge it", and each
- * merged change is saved as a patch so it can be undone. The files that keep him safe
- * (paper-only trading, key storage, approvals, this workshop) are off-limits to him.
+ * merged change is saved as a patch so it can be undone. He may change any of his files
+ * (the owner's choice, 2026-11-02); a change to the files that keep him safe (paper-only
+ * trading, key storage, approvals, this workshop) is flagged so the owner reviews it closely.
  */
 
 export interface Edit { file: string; find: string; replace: string }
 export interface ChangePlan { summary: string; edits: Edit[] }
 export interface Proposal { id: string; goal: string; summary: string; files: string[]; diff: string; attempts: number; createdAt: string }
 
-/** Files Goga may never change himself. */
-export const PROTECTED = [
-  /^src\/main\/services\/trading\/(paperTrading|desk)\.ts$/,   // paper-only address, encrypted keys
-  /^src\/main\/services\/(authorization|emergencyStop|promptInjectionGuard|settings)\.ts$/,
-  /^src\/main\/services\/(selfImprove|gapJournal|selfCode)\.ts$/, // the workshop and its record
-  /^src\/main\/tools\/(self|registry)\.ts$/,
-  /^src\/main\/handlers\/settings\.ts$/,
-  /^src\/shared\/types\.ts$/,
-  /__tests__\/self-improve/,
+/** Files that keep Goga safe. He may change them, but such a change is flagged for a close look. */
+export const SAFETY_FILES: { file: RegExp; guards: string }[] = [
+  { file: /^src\/main\/services\/trading\/(paperTrading|desk)\.ts$/, guards: 'paper-only trading and the encrypted trading keys' },
+  { file: /^src\/main\/services\/authorization\.ts$/, guards: 'which actions need your approval' },
+  { file: /^src\/main\/services\/emergencyStop\.ts$/, guards: 'the emergency stop' },
+  { file: /^src\/main\/services\/promptInjectionGuard\.ts$/, guards: 'protection against instructions hidden in web pages and files' },
+  { file: /^src\/main\/(services|handlers)\/settings\.ts$/, guards: 'settings and stored keys' },
+  { file: /^src\/main\/services\/(selfImprove|gapJournal|selfCode)\.ts$/, guards: 'this workshop and its safety checks' },
+  { file: /^src\/main\/tools\/(self|registry)\.ts$/, guards: 'how tools are registered and run' },
+  { file: /^src\/shared\/types\.ts$/, guards: 'shared settings and defaults' },
+  { file: /__tests__\/self-(improve|workshop)/, guards: 'the tests of this workshop' },
 ]
+
+/** The safety files a change touches, with what each one guards. */
+export function safetyFilesTouched(files: string[]): { file: string; guards: string }[] {
+  return files.flatMap(f => { const s = SAFETY_FILES.find(x => x.file.test(norm(f))); return s ? [{ file: norm(f), guards: s.guards }] : [] })
+}
 
 const MAX_ATTEMPTS = 3
 const TEST_TRIES = 2
@@ -52,7 +60,6 @@ export function safetyProblems(plan: ChangePlan): string[] {
   const problems: string[] = []
   for (const e of plan.edits) {
     if (!/^src\/.+\.(ts|tsx)$/.test(e.file) || e.file.includes('..')) problems.push(`${e.file}: only .ts/.tsx files inside src/ may be changed`)
-    if (PROTECTED.some(p => p.test(e.file))) problems.push(`${e.file} is protected — it keeps Goga safe and he may not change it`)
     if (/api\.alpaca\.markets/.test(e.replace) && !/paper-api\.alpaca\.markets/.test(e.replace)) problems.push(`${e.file}: adds a live (real-money) trading address`)
     if (/safeStorage|\.env\b/.test(e.replace) && !/safeStorage|\.env\b/.test(e.find)) problems.push(`${e.file}: touches key storage`)
   }
