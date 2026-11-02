@@ -83,12 +83,30 @@ export function rawGithubUrl(url: string): string {
   return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}` : String(url)
 }
 
+/**
+ * A download error that retrying cannot fix: a bad URL, a file over the size limit, or a file
+ * whose contents are the wrong type. These are thrown as-is; anything else (a dropped
+ * connection, an HTTP 5xx, a cut-off stream) is treated as transient and retried once.
+ */
+class PermanentDownloadError extends Error {}
+
 /** Download a PDF/EPUB/TXT from an https URL to a temp file; returns its path. */
 export async function downloadDocument(url: string, signal?: AbortSignal): Promise<string> {
+  try {
+    return await downloadOnce(url, signal)
+  } catch (err) {
+    if (err instanceof PermanentDownloadError || signal?.aborted) throw err
+    // A transient hiccup (network reset, 5xx, cut-off stream): wait a moment and try once more.
+    await new Promise<void>(resolve => setTimeout(resolve, 1500))
+    return downloadOnce(url, signal)
+  }
+}
+
+async function downloadOnce(url: string, signal?: AbortSignal): Promise<string> {
   let parsed: URL
   // A GitHub page link points at HTML; turn it into the raw file link first.
-  try { parsed = new URL(rawGithubUrl(String(url))) } catch { throw new Error('That is not a valid URL.') }
-  if (parsed.protocol !== 'https:') throw new Error('Only https links are allowed.')
+  try { parsed = new URL(rawGithubUrl(String(url))) } catch { throw new PermanentDownloadError('That is not a valid URL.') }
+  if (parsed.protocol !== 'https:') throw new PermanentDownloadError('Only https links are allowed.')
   const res = await fetch(parsed, { redirect: 'follow', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000), headers: { 'User-Agent': 'Goga-Library' } })
   if (!res.ok || !res.body) throw new Error(`The link returned HTTP ${res.status}.`)
   const type = (res.headers.get('content-type') || '').toLowerCase()
@@ -98,7 +116,7 @@ export async function downloadDocument(url: string, signal?: AbortSignal): Promi
     if (type.includes('pdf')) ext = 'pdf'
     else if (type.includes('epub')) ext = 'epub'
     else if (type.includes('text/plain')) ext = 'txt'
-    else throw new Error('That link is not a PDF, EPUB or TXT document.')
+    else throw new PermanentDownloadError('That link is not a PDF, EPUB or TXT document.')
   }
   const safeBase = (nameFromUrl.replace(DOC_EXT, '') || 'document').replace(/[^A-Za-z0-9 ._-]/g, '_').slice(0, 120) || 'document'
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-weblib-'))
@@ -114,7 +132,7 @@ export async function downloadDocument(url: string, signal?: AbortSignal): Promi
       const chunk = Buffer.from(value)
       if (!first) first = chunk
       size += chunk.length
-      if (size > MAX_BYTES) { out.destroy(); throw new Error('That document is larger than the 80 MB limit.') }
+      if (size > MAX_BYTES) { out.destroy(); throw new PermanentDownloadError('That document is larger than the 80 MB limit.') }
       if (!out.write(chunk)) await new Promise<void>(resolve => out.once('drain', () => resolve()))
     }
   } finally { reader.releaseLock() }
@@ -126,11 +144,11 @@ export async function downloadDocument(url: string, signal?: AbortSignal): Promi
   const looksHtml = /^\s*(<!doctype|<html|<\?xml)/i.test(head.toString('utf8'))
   if (ext === 'pdf' && head.subarray(0, 4).toString() !== '%PDF') {
     fs.rmSync(path.dirname(file), { recursive: true, force: true })
-    throw new Error(looksHtml ? 'That link returned a web page, not a PDF. Use the direct raw file link (library.listRepo gives the right links).' : 'That file is not a valid PDF.')
+    throw new PermanentDownloadError(looksHtml ? 'That link returned a web page, not a PDF. Use the direct raw file link (library.listRepo gives the right links).' : 'That file is not a valid PDF.')
   }
   if (ext === 'epub' && head.subarray(0, 2).toString() !== 'PK') {
     fs.rmSync(path.dirname(file), { recursive: true, force: true })
-    throw new Error('That file is not a valid EPUB.')
+    throw new PermanentDownloadError('That file is not a valid EPUB.')
   }
   return file
 }
