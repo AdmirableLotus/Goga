@@ -1,6 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { isTradingScheduleRequest, parseTradingCommand, tradingScheduleReply } from '../trading/command'
+import { isTradingScheduleRequest, parseTradingCommand, proposalSymbol, tradingScheduleReply } from '../trading/command'
+import { describeOrder, orderWarnings } from '../trading/paperTrading'
 import { isConfirmation } from '../agentRouting'
+
+describe('the leftover AAPL stops from a real account', () => {
+  const held = [{ symbol: 'AAPL', qty: 51, price: 344.88 }]
+  const stop = (id: string, qty: string, price: string) => ({ id, side: 'sell', qty, symbol: 'AAPL', type: 'stop', stop_price: price, status: 'new' })
+  const orders = [stop('7d2f460f-1', '10', '140'), stop('a4f0eb0b-2', '10', '140'), stop('256c9b1a-3', '20', '145'), stop('d5518cae-4', '10', '150')]
+
+  it('reads plainly, without "stop stop"', () => {
+    expect(describeOrder(orders[0])).toBe('7d2f460f-1: sell 10 AAPL, stop at 140 (new)')
+  })
+
+  it('points out stacked and far-away stops', () => {
+    const w = orderWarnings(held, orders)
+    expect(w[0]).toMatch(/4 separate stop orders on AAPL cover 50 of 51 shares/)
+    expect(w.some(x => /150\) is 57% below the price/.test(x))).toBe(true)
+  })
+
+  it('says nothing about one sensible stop', () => {
+    expect(orderWarnings(held, [stop('x', '51', '320')])).toEqual([])
+  })
+
+  it('flags stops on something no longer held', () => {
+    expect(orderWarnings([], [orders[0]])[0]).toMatch(/no AAPL is held/)
+  })
+
+  it('cancels by the start of an order id', () => {
+    expect(parseTradingCommand('cancel order 7d2f460f')).toEqual({ tool: 'trading.cancel', params: { orderId: '7d2f460f' } })
+  })
+})
+
+describe('agreeing to a trade proposal', () => {
+  it('finds the symbol Goga proposed, not an indicator name', () => {
+    const offer = 'I’ll check the 50-day and 200-day moving averages, RSI, and support/resistance levels for AAPL. Based on the analysis, I’ll place a new buy order for AAPL with a stop loss. Would you like me to proceed?'
+    expect(proposalSymbol(offer)).toBe('AAPL')
+    expect(proposalSymbol('Want me to analyze bitcoin on the daily chart?')).toBe('BTC/USD')
+  })
+})
 
 // From a real chat: "how is alpaca" got a promise instead of the account, "review it on your
 // own every hour" got a made-up schedule, and "you do that" sent three bare words to the planner.

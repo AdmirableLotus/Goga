@@ -114,6 +114,19 @@ export class FailureCycleTracker {
 }
 
 /** What a successful step did, in plain words ("opened https://…"). */
+/** Lookups the planner tends to repeat with slightly different inputs instead of moving on. */
+export const REPEAT_LIMIT = 4
+export function isRepeatableLookup(tool: string): boolean {
+  return /^(trading\.(analyze|quote|account|news|plan|journal|backtest)|web\.search|clock\.now|self\.(overview|search|gaps))$/.test(tool)
+}
+
+/** What a step returned, in words, for a reply that stops early. */
+export function stepOutput(data: unknown): string {
+  if (typeof data === 'string') return data.slice(0, 2500)
+  if (data && typeof data === 'object' && 'readable' in data) return String((data as { readable: unknown }).readable).slice(0, 2500)
+  return JSON.stringify(data ?? '').slice(0, 1200)
+}
+
 export function describeDone(step: { tool: string; params: Record<string, unknown> }): string {
   const p = step.params ?? {}
   const s = (k: string) => String(p[k] ?? '').slice(0, 200)

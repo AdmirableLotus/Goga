@@ -60,7 +60,40 @@ export function rewardToRisk(price: number, stop?: number, target?: number): num
 
 export interface JournalEntry { time: string; symbol: string; side: string; qty: number; price: number; stop?: number; target?: number; reason: string; orderId?: string; status: string }
 export interface Position { symbol: string; qty: number; avgPrice: number; price: number; pnl: number; pnlPct: number; stop?: number }
-export interface AccountView { name: string; equity: number; cash: number; dayPnlPct: number; positions: Position[]; openOrders: string[] }
+export interface AccountView { name: string; equity: number; cash: number; dayPnlPct: number; positions: Position[]; openOrders: string[]; warnings?: string[] }
+
+type RawOrder = Record<string, string>
+
+/** One open order in plain words, e.g. "sell 10 AAPL, stop at 140". */
+export function describeOrder(o: RawOrder): string {
+  const how = o.type === 'stop' ? `stop at ${o.stop_price}`
+    : o.type === 'stop_limit' ? `stop at ${o.stop_price} (limit ${o.limit_price})`
+    : o.type === 'limit' ? `limit ${o.limit_price}`
+    : o.type === 'trailing_stop' ? `trailing stop${o.trail_percent ? ` ${o.trail_percent}%` : ''}`
+    : String(o.type)
+  return `${o.id}: ${o.side} ${o.qty ?? `$${o.notional}`} ${o.symbol}, ${how} (${o.status})`
+}
+
+/**
+ * Stop orders that don't fit what is held: several stops on one holding (usually leftovers
+ * from earlier sessions), stops covering more than is owned, or stops so far away they
+ * barely protect anything. Goga says so instead of planning more trades on top.
+ */
+export function orderWarnings(positions: { symbol: string; qty: number; price: number }[], orders: RawOrder[]): string[] {
+  const warnings: string[] = []
+  const stops = orders.filter(o => o.side === 'sell' && /stop/.test(String(o.type)) && o.stop_price)
+  for (const symbol of [...new Set(stops.map(o => o.symbol))]) {
+    const mine = stops.filter(o => o.symbol === symbol)
+    const covered = mine.reduce((s, o) => s + Number(o.qty || 0), 0)
+    const held = positions.find(p => p.symbol.replace('/', '') === symbol.replace('/', ''))
+    const highest = Math.max(...mine.map(o => Number(o.stop_price)))
+    if (!held) { warnings.push(`${mine.length} stop order(s) on ${symbol}, but no ${symbol} is held — they look left over and could be cancelled.`); continue }
+    if (mine.length > 1) warnings.push(`${mine.length} separate stop orders on ${symbol} cover ${covered} of ${held.qty} shares. One stop for the whole position is usually enough; the others look left over from earlier.`)
+    if (covered > held.qty) warnings.push(`The ${symbol} stops would sell ${covered}, more than the ${held.qty} held.`)
+    if (held.price > 0 && highest < held.price * 0.8) warnings.push(`The highest ${symbol} stop (${highest}) is ${Math.round((1 - highest / held.price) * 100)}% below the price (${held.price}), so it barely protects the position.`)
+  }
+  return warnings
+}
 
 interface FxLedger { cash: number; startOfDay: { date: string; equity: number }; positions: Record<string, { units: number; avgPrice: number; stop?: number; target?: number }> }
 
@@ -93,8 +126,13 @@ export class PaperTrading {
 
   async cancel(orderId: string): Promise<string> {
     if (!/^[\w-]{8,64}$/.test(orderId)) throw new Error('not an order id')
-    await this.alpaca(`/orders/${orderId}`, 'DELETE')
-    return `Cancelled order ${orderId}`
+    // The start of an id is enough, as long as exactly one open order begins with it.
+    const open = await this.alpaca('/orders?status=open&limit=100') as RawOrder[]
+    const matches = open.filter(o => o.id === orderId || o.id.startsWith(orderId))
+    if (matches.length === 0) throw new Error(`no open order starts with ${orderId}`)
+    if (matches.length > 1) throw new Error(`${matches.length} open orders start with ${orderId}; give more of the id`)
+    await this.alpaca(`/orders/${matches[0].id}`, 'DELETE')
+    return `Cancelled order ${describeOrder(matches[0])}`
   }
 
   /** Whether the US stock market is open now (crypto never closes). */
@@ -128,16 +166,18 @@ export class PaperTrading {
   private async alpacaAccount(): Promise<AccountView> {
     const [account, positions, orders] = await Promise.all([this.alpaca('/account'), this.alpaca('/positions'), this.alpaca('/orders?status=open&limit=20')])
     const equity = Number(account.equity)
+    const held = (positions as Record<string, string>[]).map(p => ({
+      symbol: p.symbol, qty: Number(p.qty), avgPrice: Number(p.avg_entry_price), price: Number(p.current_price),
+      pnl: Number(p.unrealized_pl), pnlPct: Number(p.unrealized_plpc) * 100,
+    }))
     return {
       name: 'Alpaca paper account (stocks, ETFs, crypto — fake money)',
       equity,
       cash: Number(account.cash),
       dayPnlPct: Number(account.last_equity) ? (equity / Number(account.last_equity) - 1) * 100 : 0,
-      positions: (positions as Record<string, string>[]).map(p => ({
-        symbol: p.symbol, qty: Number(p.qty), avgPrice: Number(p.avg_entry_price), price: Number(p.current_price),
-        pnl: Number(p.unrealized_pl), pnlPct: Number(p.unrealized_plpc) * 100,
-      })),
-      openOrders: (orders as Record<string, string>[]).map(o => `${o.id}: ${o.side} ${o.qty ?? `$${o.notional}`} ${o.symbol} ${o.type}${o.limit_price ? ` @ ${o.limit_price}` : ''}${o.stop_price ? ` stop ${o.stop_price}` : ''} (${o.status})`),
+      positions: held,
+      openOrders: (orders as RawOrder[]).map(describeOrder),
+      warnings: orderWarnings(held, orders as RawOrder[]),
     }
   }
 

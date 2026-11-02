@@ -5,7 +5,7 @@ import type { ToolResult } from '../../../shared/types'
 // and asking for tools under invented names.
 
 const boundary = vi.hoisted(() => ({ execute: vi.fn(), verify: vi.fn() }))
-const KNOWN = new Set(['browser.open', 'shell.execute', 'filesystem.search'])
+const KNOWN = new Set(['browser.open', 'shell.execute', 'filesystem.search', 'trading.analyze'])
 vi.mock('../logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
 vi.mock('../settings', () => ({ SettingsService: { getInstance: () => ({ get: () => ({ agentMaxSteps: 20 }) }) } }))
 vi.mock('../brain', () => ({ BrainService: { getInstance: () => ({ getRelevantFacts: () => [], findRelevantFacts: async () => [] }) } }))
@@ -53,6 +53,20 @@ describe('repeating an action that already worked', () => {
     const reply = await agent.run('run x')
     expect(agent.getState().status).toBe('error')
     expect(reply).not.toMatch(/^Done/)
+  })
+})
+
+describe('the same lookup over and over', () => {
+  it('stops after a few runs and reports what it found', async () => {
+    boundary.execute.mockResolvedValue({ success: true, data: { readable: 'AAPL daily: trend up, RSI 48' } })
+    const agent = new AgentLoop()
+    let n = 0
+    vi.spyOn(agent as any, 'planNextStep').mockImplementation(async () =>
+      ({ tool: 'trading.analyze', thought: 'analyze', params: { symbol: 'AAPL', timeframe: ['1Day', '1Hour', '1Week'][n++ % 3], note: n }, done: false }))
+    const reply = await agent.run('analyze AAPL and plan a buy')
+    expect(boundary.execute).toHaveBeenCalledTimes(4)
+    expect(reply).toMatch(/kept running trading\.analyze \(4 times\)[\s\S]*trend up, RSI 48/)
+    expect(agent.getState().status).toBe('done')
   })
 })
 

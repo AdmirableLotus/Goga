@@ -63,6 +63,18 @@ function symbolAfter(text: string, verbs: string): string | null {
   return m ? tokenSymbol(m[1]) : null
 }
 
+const INDICATOR_WORDS = new Set(['RSI', 'SMA', 'EMA', 'ATR', 'MACD', 'VWAP', 'ETF', 'ETFS', 'USD', 'PNL', 'ROI', 'IPO', 'EPS', 'GTC'])
+
+/** The symbol in Goga's own trade proposal ("…analysis for AAPL and place a buy order?"). */
+export function proposalSymbol(text: string): string | null {
+  const near = symbolAfter(text, 'buy|sell|analy[sz]e|analysis (?:of|for|on)|for|on')
+  if (near && !INDICATOR_WORDS.has(near)) return near
+  const clear = symbolIn(text)
+  if (clear) return clear
+  const bare = (text.match(/\b[A-Z]{2,5}\b/g) ?? []).find(t => !NOT_SYMBOL.has(t) && !INDICATOR_WORDS.has(t))
+  return bare ?? null
+}
+
 const TIMEFRAME: Record<string, string> = { hour: '1Hour', hourly: '1Hour', day: '1Day', daily: '1Day', week: '1Week', weekly: '1Week', minute: '1Min' }
 function timeframeIn(text: string): string | undefined {
   const m = text.match(/\b(hourly|hour|daily|day|weekly|week|minute)\b/i)
@@ -105,6 +117,10 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
   const text = raw.trim()
   if (!text || text.length > 200) return null
   const lower = text.toLowerCase()
+
+  // "cancel order 7d2f460f" — an order id (or its first 8+ characters) from the account view.
+  const cancel = text.match(/\bcancel (?:the )?order\s+([0-9a-f]{8}(?:-[0-9a-f-]{1,28})?)\b/i)
+  if (cancel) return { tool: 'trading.cancel', params: { orderId: cancel[1].toLowerCase() } }
 
   // Account / journal / connection status need no symbol.
   if ((/\b(account|portfolio|positions|holdings|balance|buying power)\b/.test(lower) && /\b(my|practice|paper|account|portfolio|positions|holdings|balance|show|what)\b/.test(lower))

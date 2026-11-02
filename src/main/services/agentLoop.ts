@@ -15,7 +15,7 @@ import { OllamaClient } from './ollamaClient'
 import { BRAIN_LOAD_WAIT_MS, LocalLlamaService } from './localLlama'
 import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
-import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, canonicalizeParams, describeDone, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
+import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, canonicalizeParams, describeDone, isRepeatableLookup, REPEAT_LIMIT, stepOutput, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
 import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import { VerificationEngine } from './verificationEngine'
@@ -347,6 +347,17 @@ export class AgentLoop {
             finalReply = `I already performed ${toolCall.tool} with those arguments this turn and it did not work, so I stopped instead of repeating it.`
             this.setState({ status: 'error', error: `duplicate_action: ${toolCall.tool}` })
           }
+          break
+        }
+
+        // ── REPEAT GUARD ──────────────────────────────────────────────────────
+        // The same lookup with slightly different inputs, again and again (trading.analyze
+        // 12 times in one turn): stop and report what it found instead of spending every step.
+        const lookups = completedSteps.filter(s => s.tool === toolCall.tool && s.result.success)
+        if (isRepeatableLookup(toolCall.tool) && lookups.length >= REPEAT_LIMIT) {
+          this.log.warn(`Agent repeat guard: ${toolCall.tool} already ran ${lookups.length} times — stopping turn`)
+          finalReply = `I kept running ${toolCall.tool} (${lookups.length} times) without moving on, so I stopped. Here's what it found:\n\n${stepOutput(lookups[lookups.length - 1].result.data)}` + honestyNote(completedSteps)
+          this.setState({ status: 'done' })
           break
         }
 

@@ -145,7 +145,8 @@ reg.register({
       ...v.positions.map(p => `  ${p.symbol}: ${p.qty} @ ${p.avgPrice.toFixed(4)} → ${p.price.toFixed(4)}, ${p.pnl >= 0 ? '+' : ''}$${p.pnl.toFixed(2)} (${p.pnlPct.toFixed(1)}%)${p.stop ? `, stop ${p.stop}` : ''}`),
       ...v.openOrders.map(o => `  open order ${o}`),
       v.positions.length ? '' : '  nothing held',
-    ].filter(Boolean).join('\n')).join('\n') }
+      ...(v.warnings ?? []).map(w => `  ⚠ ${w}`),
+    ].filter(Boolean).join('\n')).join('\n') + (views.some(v => v.warnings?.length) ? '\n\nTo tidy up, say "cancel order" and the order id (the start of it is enough) for each one you don\'t want.' : '') }
   } catch (err) { return failure(err) }
 })
 
