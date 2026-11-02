@@ -43,7 +43,7 @@ export const AGENT_TRIGGERS: RegExp[] = [
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
 
 // Agreement in everyday words: "yes please", "ok, go ahead", "sure do it", "go for it".
-const AGREE_WORDS = /^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|absolutely|definitely|of course|please|go ahead|go for it|do it|do that|proceed|let's do it|let's go|sounds good|perfect|great|start|carry on|continue)$/i
+const AGREE_WORDS = /^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|absolutely|definitely|of course|please|go ahead|go for it|do it|do that|proceed|let's do it|let's go|sounds good|perfect|great|start|carry on|continue|go on|(you|you can|you should|you may) (do|check|handle) (it|that)|(do|check|handle) (it|that) (for me|yourself|on your own))$/i
 
 /** True for a short reply that agrees to what Goga proposed. Anything longer is a new request. */
 export function isConfirmation(message: string): boolean {

@@ -1,5 +1,5 @@
 import { MarketsService } from './markets'
-import { parseTradingCommand } from './trading/command'
+import { isTradingScheduleRequest, parseTradingCommand, tradingScheduleReply } from './trading/command'
 import { alpacaKeys } from './trading/desk'
 import { parseFolderReview } from './fileCommand'
 import { parseOpenObserve, gatherOpenWindow, findDocument, findRecentDocument, focusWindowExact, type OpenObserveCommand } from './openWindowObserve'
@@ -187,7 +187,19 @@ export class OrchestratorService {
         this.brain.addMessage(reply); onToken?.(reply.content)
         return reply
       }
-      const cmd = parseTradingCommand(content)
+      const recent = this.brain.getHistory().slice(-4).map(m => m.content)
+      if (isTradingScheduleRequest(content, recent)) {
+        const s = SettingsService.getInstance().get()
+        const account = await this.runTradingCommand({ tool: 'trading.account', params: {} }, signal)
+        const reply: ChatMessage = { ...account, content: `${tradingScheduleReply(s.tradeWatchEnabled ?? true, !!s.autoTradeEnabled)}\n\n${account.content}` }
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
+      // "Want me to check your Alpaca account?" → "you do that": show the account itself.
+      const lastSaid = [...this.brain.getHistory()].reverse().find(m => m.role === 'assistant')?.content
+      const agreedToAccountCheck = isActionProposal(lastSaid) && (isConfirmation(content) || startsWithAgreement(content))
+        && /\b(alpaca|paper (trading )?account|trading account|account balance)\b/i.test(lastSaid ?? '') && !/\b(buy|sell|order)\b/i.test(lastSaid ?? '')
+      const cmd = agreedToAccountCheck ? { tool: 'trading.account', params: {} } : parseTradingCommand(content)
       if (cmd) {
         const reply = await this.runTradingCommand(cmd, signal)
         this.brain.addMessage(reply); onToken?.(reply.content)
@@ -234,7 +246,7 @@ export class OrchestratorService {
     // Route to agent loop for multi-step tasks
     if (agentTask) {
       let task: string
-      if (CONFIRM_TRIGGERS.test(content.trim())) {
+      if (CONFIRM_TRIGGERS.test(content.trim()) || isConfirmation(content)) {
         // "Proceed" is only valid when there is an identifiable pending user task:
         // the last non-confirm user message must itself be agent-routable, AND
         // the agent must not already be running, done, or stopped from a prior run.

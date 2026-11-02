@@ -73,6 +73,34 @@ function riskIn(text: string): number | undefined {
   return m ? Number(m[1]) : undefined
 }
 
+const RECURRENCE = /\b(every (hour|day|morning|evening|night|\d+ ?(min|mins|minutes|hours?))|hourly|daily|on your own|by yourself|keep an eye|keep watching|monitor|watch (it|the account|my account|my trades))\b/
+function hasRecurrence(lower: string): boolean { return RECURRENCE.test(lower) }
+const TRADING_TOPIC = /\b(alpaca|paper (trading|account)|trading account|my account|portfolio|positions|my trades|balance)\b/i
+
+/**
+ * "Review it on your own every hour" about the trading account. Goga already does this in
+ * the background; say what really runs, instead of promising a schedule that doesn't exist.
+ * `context` is the earlier messages, so "it" can refer to Alpaca mentioned a moment ago.
+ */
+export function isTradingScheduleRequest(message: string, context: string[] = []): boolean {
+  const lower = message.toLowerCase()
+  if (message.length > 200 || !hasRecurrence(lower)) return false
+  return TRADING_TOPIC.test(message) || (/\b(it|that|this|them)\b/.test(lower) && context.some(c => TRADING_TOPIC.test(c)))
+}
+
+export function tradingScheduleReply(watching: boolean, autoTrading: boolean): string {
+  const lines = [
+    watching
+      ? '- Every 5 minutes I check the paper account and tell you right away about fills, stops or targets hit, and big moves.'
+      : '- My account watcher is off. Turn on "Watch my paper trades" in the tray menu and I\'ll check every 5 minutes.',
+    autoTrading
+      ? '- Every 15 minutes I review my own practice trades: look for fresh signals, manage open trades, and learn from closed ones.'
+      : '- My own practice trading is off ("Let Goga trade on paper to learn" in the tray menu).',
+    '- After 5 pm I post a daily summary of what I did.',
+  ]
+  return `I already review it on my own, more often than hourly:\n${lines.join('\n')}\n\nHere's how it looks right now:`
+}
+
 export function parseTradingCommand(raw: string): TradingCommand | null {
   const text = raw.trim()
   if (!text || text.length > 200) return null
@@ -80,7 +108,9 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
 
   // Account / journal / connection status need no symbol.
   if ((/\b(account|portfolio|positions|holdings|balance|buying power)\b/.test(lower) && /\b(my|practice|paper|account|portfolio|positions|holdings|balance|show|what)\b/.test(lower))
-    || /\b(my (trading|paper) (progress|status|results)|(are we|am i) connected to alpaca|alpaca (status|connected))\b/.test(lower))
+    || /\b(my (trading|paper) (progress|status|results)|(are we|am i) connected to alpaca|alpaca (status|connected))\b/.test(lower)
+    // "how is alpaca", "check alpaca" — but never key setup, which belongs in Settings.
+    || (/\balpaca\b/.test(lower) && !/\b(keys?|secret|api|password|sign ?up|log ?in)\b/.test(lower) && !hasRecurrence(lower)))
     return { tool: 'trading.account', params: {} }
   if (/\b(journal|trade history|my trades|past trades)\b/.test(lower))
     return { tool: 'trading.journal', params: {} }
