@@ -120,11 +120,14 @@ export const SELF_TASK = /\b(your|goga'?s) (own )?(code|source|codebase|tools|ga
  * The tools the planner sees for a task. Hardware and trading tasks get a focused set (their
  * own tools plus web, memory and notes); other tasks get everything but those.
  */
+const SCHEDULE_TASK = /\b(every (\d+ )?(minute|hour|day|week|morning|evening|night)s?|hourly|daily|weekly|schedul\w*|recurring|automat\w*|remind\w*|on your own)\b/i
+
 export function plannerOffers(task: string): (name: string) => boolean {
   const offers = baseOffers(task)
   // The self-reading tools only take room in the prompt when the task is about Goga himself.
   const self = SELF_TASK.test(task)
-  return name => name.startsWith('self.') ? self : offers(name)
+  const schedule = SCHEDULE_TASK.test(task)
+  return name => name.startsWith('self.') ? self : name.startsWith('schedule.') ? schedule : offers(name)
 }
 
 function baseOffers(task: string): (name: string) => boolean {

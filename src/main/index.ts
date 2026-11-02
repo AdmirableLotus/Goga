@@ -1,6 +1,6 @@
 import { registerMarketsHandlers } from './handlers/markets'
 import 'dotenv/config'
-import { app, BrowserWindow, ipcMain, globalShortcut } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, Notification } from 'electron'
 import path from 'path'
 import dotenv from 'dotenv'
 import { onWindowClose, startSleepMode, startedAsleep, stopSleepMode, wakeGoga } from './sleepMode'
@@ -27,7 +27,10 @@ import { SettingsService } from './services/settings'
 import { LibraryService } from './services/library'
 import { VoiceOrchestrator } from './services/voiceOrchestrator'
 import { TelegramService } from './services/telegram'
-import { OrchestratorService } from './services/orchestrator'
+import { OrchestratorService, SCHEDULED_ID_PREFIX, msSinceUserMessage } from './services/orchestrator'
+import { describeSchedule, initScheduler, scheduler, type ScheduledTask } from './services/scheduler'
+import { BrainService } from './services/brain'
+import type { ChatMessage } from '../shared/types'
 import { nanoid } from './utils/nanoid'
 import { registerDeveloperHandlers, stopDeveloperTask } from './handlers/developer'
 import { emergencyStop } from './services/emergencyStop'
@@ -103,6 +106,39 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => wakeGoga())
 }
 
+/**
+ * Goga's own recurring tasks. Each run is sent through its own orchestrator as a chat
+ * message, so it gets the same routing, approvals and safety checks as anything typed.
+ */
+function startScheduledTasks(): void {
+  const orchestrator = new OrchestratorService()
+  const report = (content: string, alert: boolean) => {
+    const message: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
+    BrainService.getInstance().addMessage(message)
+    getMainWindow()?.webContents.send('chat:message', message)
+    if (alert && Notification.isSupported()) new Notification({ title: 'Goga', body: content.replace(/[*_`]/g, '').slice(0, 180) }).show()
+  }
+  const busy = () => {
+    const status = AgentLoop.getInstance().getState().status
+    return status === 'running' || status === 'waiting-approval' || msSinceUserMessage() < 90_000
+  }
+  const run = (task: ScheduledTask) => new Promise<{ ok: boolean; text: string }>(resolve => {
+    let settled = false
+    const finish = (ok: boolean, text: string) => { if (!settled) { settled = true; clearTimeout(limit); resolve({ ok, text }) } }
+    const limit = setTimeout(() => finish(false, 'it took longer than 20 minutes'), 20 * 60_000)
+    report(`⏰ Scheduled task ${task.id} (${describeSchedule(task)}): ${task.request}`, false)
+    orchestrator.process({ id: `${SCHEDULED_ID_PREFIX}${nanoid()}`, role: 'user', content: task.request, timestamp: Date.now() },
+      undefined, result => finish(result.status === 'success', result.reply))
+      .then(reply => {
+        // A multi-step task posts its own result when it finishes (see onTaskComplete above).
+        if (AgentLoop.getInstance().getState().status === 'running') return
+        getMainWindow()?.webContents.send('chat:message', reply)
+        finish(!/^(Couldn't do that|Model error|Agent error)/.test(reply.content), reply.content)
+      }, err => finish(false, err instanceof Error ? err.message : String(err)))
+  })
+  initScheduler(path.join(app.getPath('userData'), 'scheduled-tasks.json'), { run, report, busy }).start()
+}
+
 app.whenReady().then(() => {
   registerChatHandlers(ipcMain)
   registerMarketsHandlers(ipcMain)
@@ -132,6 +168,7 @@ app.whenReady().then(() => {
     if (s.voiceEnabled && s.wakeWordEnabled) void VoiceOrchestrator.getInstance().startWakeLoop()
   }
 
+  startScheduledTasks()
   void applyRemoteSettings()
   resumeFluxLink()
 
@@ -175,6 +212,7 @@ app.on('will-quit', async (event) => {
   event.preventDefault()
   globalShortcut.unregisterAll()
   stopSleepMode()
+  scheduler()?.stop()
   telegram?.stop()
   stopRemoteLink()
   stopFluxLink()

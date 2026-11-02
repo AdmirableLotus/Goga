@@ -1,5 +1,5 @@
 import { MarketsService } from './markets'
-import { isTradingScheduleRequest, parseTradingCommand, tradingScheduleReply } from './trading/command'
+import { isTradingScheduleRequest, parseTradingCommand, proposalSymbol, tradingScheduleReply } from './trading/command'
 import { alpacaKeys } from './trading/desk'
 import { parseFolderReview } from './fileCommand'
 import { parseOpenObserve, gatherOpenWindow, findDocument, findRecentDocument, focusWindowExact, type OpenObserveCommand } from './openWindowObserve'
@@ -36,6 +36,15 @@ import { SELF_CODE_QUESTION, codeContext } from './selfCode'
 import { sourceRoot } from '../tools/self'
 import { Workshop, IMPROVE_REQUEST, MERGE_REPLY, DISCARD_REPLY, RESTART_REPLY, gapNumber, diffForChat, isWorkshopCommand } from './selfImprove'
 import { groupGaps } from './gapJournal'
+import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
+
+// A scheduled task's run is sent as a chat message whose id starts with this.
+export const SCHEDULED_ID_PREFIX = 'sched-'
+const isScheduledMessage = (m: ChatMessage) => m.id.startsWith(SCHEDULED_ID_PREFIX)
+const TRADING_SCHEDULE_TOPIC = /\b(alpaca|account|portfolio|positions|trades?|balance)\b/i
+let lastUserMessageAt = 0
+/** How long since the user last sent a message (scheduled runs wait while they're chatting). */
+export function msSinceUserMessage(): number { return Date.now() - lastUserMessageAt }
 
 export class OrchestratorService {
   private store    = ActionStore.getInstance()
@@ -64,6 +73,7 @@ export class OrchestratorService {
 
   async process(userMessage: ChatMessage, onToken?: (token: string) => void, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void, signal?: AbortSignal): Promise<ChatMessage> {
     this.log.info(`Processing: ${userMessage.content.slice(0, 80)}`)
+    if (!isScheduledMessage(userMessage)) lastUserMessageAt = Date.now()
     // Retain text context without persisting large media payloads in electron-store.
     this.brain.addMessage(userMessage.attachments?.length
       ? { ...userMessage, attachments: undefined, content: `${userMessage.content}\n[Attached media: ${userMessage.attachments.map(a => a.name).join(', ')}]` }
@@ -149,6 +159,17 @@ export class OrchestratorService {
       return reply
     }
 
+    // Goga's own recurring tasks: "every hour check alpaca", "my scheduled tasks", "stop task 2".
+    // A scheduled run never schedules again, so a task can't multiply itself.
+    if (!isScheduledMessage(userMessage)) {
+      const scheduleReply = this.scheduleCommand(content)
+      if (scheduleReply) {
+        const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: scheduleReply, timestamp: Date.now() }
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
+    }
+
     // "How does your trade watcher work?" / "analyze your code" — answer from the real
     // source files, so Goga describes himself as he is built, not as he imagines it.
     if (SELF_CODE_QUESTION.test(content) && this.agent.getState().status !== 'running') {
@@ -199,6 +220,19 @@ export class OrchestratorService {
       const lastSaid = [...this.brain.getHistory()].reverse().find(m => m.role === 'assistant')?.content
       const agreedToAccountCheck = isActionProposal(lastSaid) && (isConfirmation(content) || startsWithAgreement(content))
         && /\b(alpaca|paper (trading )?account|trading account|account balance)\b/i.test(lastSaid ?? '') && !/\b(buy|sell|order)\b/i.test(lastSaid ?? '')
+      // "…analyze AAPL and place a new buy order?" → "yes": analyze and plan it here. The 14B
+      // planner looped on trading.analyze for 20 steps; the order still waits for "place it".
+      const proposedSymbol = isActionProposal(lastSaid) && (isConfirmation(content) || startsWithAgreement(content))
+        && /\b(buy|sell|trade|order|analy[sz](e|is)|technical)\b/i.test(lastSaid ?? '') ? proposalSymbol(lastSaid ?? '') : null
+      if (proposedSymbol) {
+        const side = /\b(sell|short)\b/i.test(lastSaid ?? '') && !/\bbuy\b/i.test(lastSaid ?? '') ? 'sell' : 'buy'
+        const analysis = await this.runTradingCommand({ tool: 'trading.analyze', params: { symbol: proposedSymbol } }, signal)
+        const plan = await this.runTradingCommand({ tool: 'trading.plan', params: { symbol: proposedSymbol, side } }, signal)
+        const reply: ChatMessage = { ...plan, content: `${analysis.content}\n\n${plan.content}` }
+        plannerDiagnostic('routing.decision', { task: content, route: 'agreed-trade-proposal', agentTask: false })
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
       const cmd = agreedToAccountCheck ? { tool: 'trading.account', params: {} } : parseTradingCommand(content)
       if (cmd) {
         const reply = await this.runTradingCommand(cmd, signal)
@@ -435,6 +469,36 @@ export class OrchestratorService {
   }
 
   /** Say something in chat outside a reply (the workshop finishing in the background). */
+  /** Set up, list, pause or remove a recurring task from chat; null when it isn't about that. */
+  private scheduleCommand(content: string): string | null {
+    const s = scheduler()
+    if (SCHEDULE_LIST.test(content)) return s?.summary() ?? 'My scheduler is not running yet.'
+    if (SCHEDULE_STOP_ALL.test(content)) return s ? `Removed all ${s.removeAll()} scheduled task(s).` : 'My scheduler is not running yet.'
+    const one = content.match(SCHEDULE_TASK_COMMAND)
+    if (one) {
+      if (!s) return 'My scheduler is not running yet.'
+      const id = Number(one[2])
+      const verb = one[1].toLowerCase()
+      const task = verb === 'pause' ? s.setPaused(id, true) : /resume|unpause/.test(verb) ? s.setPaused(id, false) : s.remove(id)
+      if (!task) return `I don't have a scheduled task ${id}. ${s.list().length ? `Say "my scheduled tasks" to see them.` : ''}`.trim()
+      return verb === 'pause' ? `Paused task ${id} ("${task.request}").` : /resume|unpause/.test(verb) ? `Resumed task ${id}; next run at ${new Date(task.nextRun).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.` : `Removed task ${id} ("${task.request}").`
+    }
+    const previous = () => [...this.brain.getHistory()].reverse().slice(1).find(m => m.role === 'user' && !isConfirmation(m.content))?.content
+    const spec = parseSchedule(content, previous)
+    if (!spec) return null
+    if (!s) return 'My scheduler is not running yet, so I can\'t set that up right now.'
+    plannerDiagnostic('routing.decision', { task: content, route: 'schedule', agentTask: false })
+    try {
+      const task = s.add(spec, 'user')
+      const when = new Date(task.nextRun).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+      const what = task.kind === 'reminder' ? `remind you: ${task.request}` : `"${task.request}" and post the result here`
+      const watcherNote = TRADING_SCHEDULE_TOPIC.test(task.request) ? '\n\n(Separately, I already check the paper account every 5 minutes and alert you right away about fills, stops and big moves.)' : ''
+      return `Set up task ${task.id}: ${describeSchedule(task)} I'll ${what}. First run: ${when}.${watcherNote}\n\nSay "my scheduled tasks" to see them all, or "stop task ${task.id}" to remove it.`
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  }
+
   private post(content: string): void {
     const message: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }
     this.brain.addMessage(message)

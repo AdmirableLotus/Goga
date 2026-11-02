@@ -16,5 +16,6 @@ import './python'
 import './folderReview'
 import './library'
 import './self'
+import './schedule'
 
 export { ToolRegistry } from './registry'
