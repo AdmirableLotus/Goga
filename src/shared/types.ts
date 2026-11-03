@@ -234,6 +234,9 @@ export interface AppSettings {
   whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large-v2' | 'large-v3'
   whisperDevice: 'cuda' | 'cpu' | 'auto'
   whisperLanguage: string
+  // Faster model used to transcribe long videos/recordings (over ~40 min), where the
+  // accurate mic model would take hours. The mic keeps whisperModel.
+  mediaFastModel: 'tiny' | 'base' | 'small' | 'medium'
   ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
   // Sleep mode: closing the window keeps Goga in the tray, watching and listening
   sleepOnClose: boolean
@@ -381,6 +384,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   whisperModel: 'base',
   whisperDevice: 'cpu',
   whisperLanguage: '',
+  mediaFastModel: 'small',
   ttsProvider: 'sapi',
   sleepOnClose: true,
   startWithWindows: true,

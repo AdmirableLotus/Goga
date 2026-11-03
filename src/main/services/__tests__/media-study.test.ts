@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 
 // mediaStudy imports electron/settings transitively; the pure helpers tested here never call them.
 vi.mock('electron', () => ({ app: { getAppPath: () => '/app', getPath: () => '/fake/userData' } }))
 
-import { isLearnFromVideo, extractMediaPath, parseTranscribeLine, progressText } from '../mediaStudy'
+import { isLearnFromVideo, extractMediaPath, parseTranscribeLine, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia } from '../mediaStudy'
 
 describe('finding a media file in a message', () => {
   it('pulls a video/audio path, quoted or bare, but not other files or URLs', () => {
@@ -26,12 +29,39 @@ describe('is this a "learn from a recording" request', () => {
 })
 
 describe('reading transcriber status lines', () => {
-  it('parses PROGRESS / DONE / ERROR and ignores other lines', () => {
+  it('parses MODEL / PROGRESS / DONE / ERROR and ignores other lines', () => {
+    expect(parseTranscribeLine('MODEL small')).toEqual({ type: 'model', name: 'small' })
     expect(parseTranscribeLine('PROGRESS 120 3600')).toEqual({ type: 'progress', done: 120, total: 3600 })
     expect(parseTranscribeLine('DONE 4521')).toEqual({ type: 'done', chars: 4521 })
     expect(parseTranscribeLine('ERROR could not read that media file')).toEqual({ type: 'error', message: 'could not read that media file' })
     expect(parseTranscribeLine('loading model=large-v3')).toBeNull()
     expect(parseTranscribeLine('')).toBeNull()
+  })
+})
+
+describe('learning from a folder of recordings', () => {
+  it('detects a folder request and distinguishes it from a single file', () => {
+    expect(isLearnFromVideoFolder('learn from the videos in C:\\courses')).toBe(true)
+    expect(isLearnFromVideoFolder('go through all the lectures in "C:/Users/me/Trading Course" and take notes')).toBe(true)
+    expect(isLearnFromVideoFolder('watch this video and learn C:\\v\\a.mp4')).toBe(false) // a single file, not a folder
+    expect(isLearnFromVideoFolder('clean up C:\\courses')).toBe(false)                     // no learn/media intent
+    expect(extractFolderPath('learn from the videos in C:\\courses')).toBe('C:\\courses')
+    expect(extractFolderPath('watch C:\\v\\a.mp4')).toBeNull()
+  })
+
+  it('collects media files from a folder tree, skipping non-media', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-media-test-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'b.mp4'), '')
+      fs.writeFileSync(path.join(dir, 'a.mp3'), '')
+      fs.writeFileSync(path.join(dir, 'notes.txt'), '')
+      fs.mkdirSync(path.join(dir, 'module2'))
+      fs.writeFileSync(path.join(dir, 'module2', 'lesson.mkv'), '')
+      const found = collectMedia(dir).map(p => path.basename(p))
+      expect(found).toEqual(['a.mp3', 'b.mp4', 'lesson.mkv'])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

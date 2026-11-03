@@ -58,6 +58,24 @@ def main() -> int:
     device = os.environ.get("WHISPER_DEVICE", "cuda")
     compute = os.environ.get("WHISPER_COMPUTE", "int8_float16" if device != "cpu" else "int8")
     lang = os.environ.get("WHISPER_LANG") or None
+    fast_model = os.environ.get("MEDIA_FAST_MODEL", "small")
+    fast_over = float(os.environ.get("MEDIA_FAST_OVER_SECS", "2400"))  # 40 minutes
+
+    # Probe the duration cheaply (reads the container header, no decode). A long recording
+    # transcribes far faster with a smaller model, so switch for anything over the threshold —
+    # an accurate big model would otherwise take hours on a six-hour video.
+    duration = 0.0
+    try:
+        import av
+        with av.open(media) as _c:
+            if _c.duration:
+                duration = float(_c.duration) / 1_000_000.0
+    except Exception as e:
+        diag(f"duration probe failed: {e}")
+    if duration > fast_over and fast_model and fast_model != model_size:
+        diag(f"long media ({duration:.0f}s) -> faster model {fast_model} (was {model_size})")
+        model_size = fast_model
+    emit(f"MODEL {model_size}")
 
     if device != "cpu":
         register_cuda_dlls()

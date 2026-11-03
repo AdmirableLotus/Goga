@@ -35,6 +35,7 @@ export function extractMediaPath(text: string): string | null {
 }
 
 export type TranscribeEvent =
+  | { type: 'model'; name: string }
   | { type: 'progress'; done: number; total: number }
   | { type: 'done'; chars: number }
   | { type: 'error'; message: string }
@@ -43,10 +44,46 @@ export type TranscribeEvent =
 export function parseTranscribeLine(line: string): TranscribeEvent | null {
   const t = line.trim()
   let m
+  if ((m = t.match(/^MODEL\s+(\S+)/))) return { type: 'model', name: m[1] }
   if ((m = t.match(/^PROGRESS\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/))) return { type: 'progress', done: Number(m[1]), total: Number(m[2]) }
   if ((m = t.match(/^DONE\s+(\d+)/))) return { type: 'done', chars: Number(m[1]) }
   if ((m = t.match(/^ERROR\s+(.+)/))) return { type: 'error', message: m[1].trim() }
   return null
+}
+
+/** Media files directly inside a folder and its subfolders (shallow-first), capped. */
+export function collectMedia(dir: string, maxFiles = 50): string[] {
+  const found: string[] = []
+  const walk = (d: string, depth: number) => {
+    if (found.length >= maxFiles || depth > 3) return
+    let entries: fs.Dirent[]
+    try { entries = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+    for (const e of entries.filter(e => e.isFile()).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (MEDIA_EXT.test(e.name)) { found.push(path.join(d, e.name)); if (found.length >= maxFiles) return }
+    }
+    for (const e of entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) walk(path.join(d, e.name), depth + 1)
+  }
+  walk(dir, 0)
+  return found
+}
+
+/** A folder path in a "learn from the videos in <folder>" request, else null (not a media file). */
+export function extractFolderPath(text: string): string | null {
+  if (extractMediaPath(text)) return null   // a single file wins; this is only for folders
+  const t = text.trim()
+  const quoted = t.match(/["'“”]((?<![A-Za-z])[A-Za-z]:[\\/][^"'“”]+|\/[^"'“”]+)["'“”]/)
+  if (quoted) return quoted[1].trim()
+  const bare = t.match(/((?<![A-Za-z])[A-Za-z]:[\\/].+)$/)
+  if (bare) return bare[1].replace(/["'“”]+$/, '').replace(/\s+(and|then)\s+.*$/i, '').trim()
+  return null
+}
+
+/** "learn from the videos in C:\\courses", "go through all the lectures in that folder". */
+export function isLearnFromVideoFolder(text: string): boolean {
+  if (!extractFolderPath(text)) return false
+  const mediaWord = /\b(videos?|recordings?|lectures?|footage|clips?|audio|podcasts?|courses?)\b/i.test(text)
+  const learnWord = /\b(learn|study|watch|go through|take notes|notes|skills?|teach|absorb|review)\b/i.test(text)
+  return mediaWord && learnWord
 }
 
 /** A one-line "35% (2h 6m / 6h 0m)" style progress string from seconds done/total. */
@@ -70,10 +107,10 @@ function scriptPath(): string {
  */
 export function transcribeMedia(
   mediaPath: string,
-  opts: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal } = {},
+  opts: { onProgress?: (done: number, total: number) => void; onModel?: (name: string) => void; signal?: AbortSignal } = {},
 ): Promise<string> {
   const log = LogService.getInstance()
-  const s = SettingsService.getInstance().get() as { whisperModel?: string; whisperDevice?: string; whisperLanguage?: string }
+  const s = SettingsService.getInstance().get() as { whisperModel?: string; whisperDevice?: string; whisperLanguage?: string; mediaFastModel?: string }
   const device = s.whisperDevice ?? 'cuda'
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-media-'))
   const base = path.basename(mediaPath).replace(MEDIA_EXT, '').replace(/[^A-Za-z0-9 ._-]/g, '_').slice(0, 120) || 'recording'
@@ -87,6 +124,7 @@ export function transcribeMedia(
         WHISPER_MODEL: s.whisperModel ?? 'base',
         WHISPER_DEVICE: device,
         WHISPER_COMPUTE: device === 'cpu' ? 'int8' : 'int8_float16',
+        MEDIA_FAST_MODEL: s.mediaFastModel ?? 'small',
         ...(s.whisperLanguage ? { WHISPER_LANG: s.whisperLanguage } : {}),
       },
     })
@@ -101,7 +139,8 @@ export function transcribeMedia(
       buf = lines.pop() ?? ''
       for (const line of lines) {
         const ev = parseTranscribeLine(line)
-        if (ev?.type === 'progress') opts.onProgress?.(ev.done, ev.total)
+        if (ev?.type === 'model') opts.onModel?.(ev.name)
+        else if (ev?.type === 'progress') opts.onProgress?.(ev.done, ev.total)
         else if (ev?.type === 'error') failed = ev.message
       }
     })
