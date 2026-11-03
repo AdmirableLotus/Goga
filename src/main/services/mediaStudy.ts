@@ -124,7 +124,7 @@ export function transcribeMedia(
         WHISPER_MODEL: s.whisperModel ?? 'base',
         WHISPER_DEVICE: device,
         WHISPER_COMPUTE: device === 'cpu' ? 'int8' : 'int8_float16',
-        MEDIA_FAST_MODEL: s.mediaFastModel ?? 'small',
+        MEDIA_FAST_MODEL: s.mediaFastModel ?? 'medium',
         ...(s.whisperLanguage ? { WHISPER_LANG: s.whisperLanguage } : {}),
       },
     })

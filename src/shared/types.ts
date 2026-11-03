@@ -384,7 +384,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   whisperModel: 'base',
   whisperDevice: 'cpu',
   whisperLanguage: '',
-  mediaFastModel: 'small',
+  mediaFastModel: 'medium',
   ttsProvider: 'sapi',
   sleepOnClose: true,
   startWithWindows: true,

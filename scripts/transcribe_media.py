@@ -58,7 +58,7 @@ def main() -> int:
     device = os.environ.get("WHISPER_DEVICE", "cuda")
     compute = os.environ.get("WHISPER_COMPUTE", "int8_float16" if device != "cpu" else "int8")
     lang = os.environ.get("WHISPER_LANG") or None
-    fast_model = os.environ.get("MEDIA_FAST_MODEL", "small")
+    fast_model = os.environ.get("MEDIA_FAST_MODEL", "medium")
     fast_over = float(os.environ.get("MEDIA_FAST_OVER_SECS", "2400"))  # 40 minutes
 
     # Probe the duration cheaply (reads the container header, no decode). A long recording
