@@ -41,6 +41,7 @@ import { deviceAlertReply } from './deviceReplies'
 import { STUDY_QUESTION, bookStudy, matchSkills, skillsForPrompt } from './bookStudy'
 import { downloadDocument, findDocumentLink, isLearnFromLink } from './webLibrary'
 import { isLearnFromVideo, extractMediaPath, transcribeMedia, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia } from './mediaStudy'
+import { quiz, QUIZ_REQUEST, QUIZ_AGAIN, QUIZ_HISTORY, extractQuizTopic, formatExercise, formatReview, type Exercise } from './quiz'
 import fs from 'fs'
 import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
 
@@ -64,6 +65,8 @@ export class OrchestratorService {
   private registry = ToolRegistry.getInstance()
   // The last trade plan shown, so "place it" submits exactly that (never a hallucinated order).
   private pendingPlan: { symbol: string; side: 'buy' | 'sell'; stop: number; target: number; qty: number } | null = null
+  // The practice question just served, so the next message is graded as its answer (see quiz.ts).
+  private pendingExercise: Exercise | null = null
   private workshopInstance: Workshop | null = null
   // Notes on long documents the user pasted, so they fit the brain's context (see longText.ts).
   private notes = new NotesStore((() => { try { return path.join(app.getPath('userData'), 'document-notes.json') } catch { return undefined } })())
@@ -197,6 +200,34 @@ export class OrchestratorService {
       const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: bookStudy()?.report() ?? studyReport(this.library.list()), timestamp: Date.now() }
       this.brain.addMessage(reply); onToken?.(reply.content)
       return reply
+    }
+
+    // Self-testing on what he's studied: "quiz me [on X]", answering the served question,
+    // "another" for a follow-up, "how am I doing". All local — the 14B writes and grades.
+    const q = quiz()
+    if (q) {
+      const say = (content: string): ChatMessage => { const m: ChatMessage = { id: nanoid(), role: 'assistant', content, timestamp: Date.now() }; this.brain.addMessage(m); onToken?.(content); return m }
+      if (QUIZ_HISTORY.test(content) && content.length < 120) { plannerDiagnostic('routing.decision', { task: content, route: 'quiz-history', agentTask: false }); return say(q.summary()) }
+      if (QUIZ_REQUEST.test(content) && content.length < 200) {
+        plannerDiagnostic('routing.decision', { task: content, route: 'quiz-make', agentTask: false })
+        const notReady = q.notReady(); if (notReady) return say(notReady)
+        this.pendingExercise = null
+        try { const ex = await q.make(extractQuizTopic(content)); this.pendingExercise = ex; return say(formatExercise(ex)) }
+        catch { return say("I couldn't put a question together just now — try again in a moment.") }
+      }
+      if (QUIZ_AGAIN.test(content) && q.hasSession()) {
+        plannerDiagnostic('routing.decision', { task: content, route: 'quiz-again', agentTask: false })
+        this.pendingExercise = null
+        try { const ex = await q.followup(); this.pendingExercise = ex; return say(formatExercise(ex)) }
+        catch { return say("I couldn't put the next question together just now — try again in a moment.") }
+      }
+      if (this.pendingExercise) {
+        const ex = this.pendingExercise; this.pendingExercise = null
+        if (/^\s*(skip|stop|cancel|never ?mind|forget it|no)\s*[.!]*$/i.test(content)) return say('Okay, skipped. Say "quiz me" whenever you want another.')
+        plannerDiagnostic('routing.decision', { task: content, route: 'quiz-grade', agentTask: false })
+        try { const review = await q.grade(ex, content); return say(formatReview(review, ex.bookTitle)) }
+        catch { return say("I couldn't grade that just now — try answering again, or say \"quiz me\" for a fresh question.") }
+      }
     }
 
     // "This is my new phone" / "is the device a smartphone?" after a new-device alert: say what

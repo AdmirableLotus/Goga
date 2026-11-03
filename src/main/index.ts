@@ -31,7 +31,8 @@ import { OrchestratorService, SCHEDULED_ID_PREFIX, msSinceUserMessage } from './
 import { describeSchedule, initScheduler, scheduler, type ScheduledTask } from './services/scheduler'
 import { BrainService } from './services/brain'
 import { bookStudy, initBookStudy } from './services/bookStudy'
-import { backgroundChat } from './services/backgroundChat'
+import { backgroundChat, foregroundJson } from './services/backgroundChat'
+import { initQuiz } from './services/quiz'
 import type { ChatMessage } from '../shared/types'
 import { nanoid } from './utils/nanoid'
 import { registerDeveloperHandlers, stopDeveloperTask } from './handlers/developer'
@@ -128,6 +129,11 @@ function startBookStudy(): void {
     chunks: id => library.chunksOf(id),
     report: text => tellOwner(text, true),
   }).start()
+  // Self-testing: generate and grade practice questions from what he's studied (local model).
+  initQuiz(path.join(app.getPath('userData'), 'quizzes.json'), {
+    chat: (messages, numPredict) => foregroundJson(messages, numPredict),
+    studied: () => bookStudy()?.all() ?? [],
+  })
 }
 
 /**

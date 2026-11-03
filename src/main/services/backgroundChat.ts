@@ -20,3 +20,16 @@ export async function backgroundChat(messages: Messages, opts?: { json?: boolean
   if (llama.isReady()) return llama.chat(messages, undefined, undefined, { ifIdle: true })
   throw new Error('no brain is running')
 }
+
+/**
+ * Foreground JSON thinking for interactive features the user is waiting on (quizzes, grading).
+ * Unlike backgroundChat it is NOT idle-gated — the user asked, so it runs now.
+ */
+export async function foregroundJson(messages: Messages, numPredict = 600): Promise<string> {
+  const llama = LocalLlamaService.getInstance()
+  if (SettingsService.getInstance().get().primaryModel === 'ollama' && await ollama.isAvailable()) {
+    return ollama.chatJson(messages, undefined, undefined, { num_predict: numPredict })
+  }
+  if (llama.isReady()) return llama.chat(messages, undefined, undefined, { ifIdle: false })
+  throw new Error('no brain is running')
+}
