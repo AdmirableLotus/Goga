@@ -40,6 +40,7 @@ import { messageOwnerOnPhone } from './telegram'
 import { deviceAlertReply } from './deviceReplies'
 import { STUDY_QUESTION, bookStudy, matchSkills, skillsForPrompt } from './bookStudy'
 import { downloadDocument, findDocumentLink, isLearnFromLink } from './webLibrary'
+import { isLearnFromVideo, extractMediaPath, transcribeMedia, progressText } from './mediaStudy'
 import fs from 'fs'
 import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
 
@@ -162,6 +163,18 @@ export class OrchestratorService {
       plannerDiagnostic('routing.decision', { task: content, route: 'learn-from-link', agentTask: false })
       void this.importBook(link.replace(/[.,;:!?)]+$/, ''))
       const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `Getting the book from ${link} now. A big book can take a few minutes to download and read in; I'll tell you here when it's in my Library, then I'll study it while you're not chatting.`, timestamp: Date.now() }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+
+    // "Watch this video and learn from it C:\…\lecture.mp4" — transcribe the recording, add the
+    // transcript to the Library, then study it like a book. A local file (a long video is far too
+    // big for Telegram), so this is a path, not a link.
+    if (isLearnFromVideo(content) && content.length < 600) {
+      const mediaPath = extractMediaPath(content)!
+      plannerDiagnostic('routing.decision', { task: content, route: 'learn-from-video', agentTask: false })
+      void this.studyVideo(mediaPath)
+      const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `Watching "${path.basename(mediaPath)}" now. I listen to the whole recording and write down everything that's said, then study those notes and turn them into skills. A long video (an hour or more) takes a while — I'll tell you here when the transcript is in my Library, and again once I've studied it. Ask "how is your studying going" any time.`, timestamp: Date.now() }
       this.brain.addMessage(reply); onToken?.(reply.content)
       return reply
     }
@@ -551,6 +564,30 @@ export class OrchestratorService {
       this.post(`I couldn't get that book: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       if (file) try { fs.rmSync(path.dirname(file), { recursive: true, force: true }) } catch { /* temp file */ }
+    }
+  }
+
+  private async studyVideo(mediaPath: string): Promise<void> {
+    if (!fs.existsSync(mediaPath)) {
+      this.post(`I can't find that file: ${mediaPath}. Send me the full path to the video or audio file (for example C:\\Users\\you\\Videos\\lecture.mp4).`)
+      return
+    }
+    let transcript: string | null = null
+    try {
+      let reported = -1
+      transcript = await transcribeMedia(mediaPath, {
+        onProgress: (done, total) => {
+          const pct = total > 0 ? Math.round((done / total) * 100) : 0
+          // Report at roughly each quarter so a six-hour video doesn't flood the chat.
+          if (pct >= reported + 25) { reported = pct; this.post(`🎧 Transcribing "${path.basename(mediaPath)}": ${progressText(done, total)}.`) }
+        },
+      })
+      const meta = await this.library.ingest(transcript)
+      this.post(`📚 I've listened to "${path.basename(mediaPath)}" and added what was said to my Library as "${meta.title}" (${meta.chunkCount.toLocaleString('en-US')} passages). I'll study it section by section while you're not chatting and tell you when I'm done. Ask "how is your studying going" any time.`)
+    } catch (err) {
+      this.post(`I couldn't learn from that recording: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      if (transcript) try { fs.rmSync(path.dirname(transcript), { recursive: true, force: true }) } catch { /* temp file */ }
     }
   }
 
