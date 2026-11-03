@@ -237,6 +237,8 @@ export interface AppSettings {
   // Faster model used to transcribe long videos/recordings (over ~40 min), where the
   // accurate mic model would take hours. The mic keeps whisperModel.
   mediaFastModel: 'tiny' | 'base' | 'small' | 'medium'
+  // Also read a video's slides/on-screen text with the vision model while studying it.
+  videoReadFrames: boolean
   ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
   // Sleep mode: closing the window keeps Goga in the tray, watching and listening
   sleepOnClose: boolean
@@ -385,6 +387,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   whisperDevice: 'cpu',
   whisperLanguage: '',
   mediaFastModel: 'medium',
+  videoReadFrames: true,
   ttsProvider: 'sapi',
   sleepOnClose: true,
   startWithWindows: true,

@@ -6,7 +6,7 @@ import path from 'path'
 // mediaStudy imports electron/settings transitively; the pure helpers tested here never call them.
 vi.mock('electron', () => ({ app: { getAppPath: () => '/app', getPath: () => '/fake/userData' } }))
 
-import { isLearnFromVideo, extractMediaPath, parseTranscribeLine, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia } from '../mediaStudy'
+import { isLearnFromVideo, extractMediaPath, parseTranscribeLine, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia, parseFrameLine, timeTag, formatVisualNotes, isVideoFile } from '../mediaStudy'
 
 describe('finding a media file in a message', () => {
   it('pulls a video/audio path, quoted or bare, but not other files or URLs', () => {
@@ -62,6 +62,26 @@ describe('learning from a folder of recordings', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('reading a video\'s frames', () => {
+  it('parses FRAME / DONE / ERROR lines', () => {
+    expect(parseFrameLine('FRAME 125 C:\\tmp\\f_000125.jpg')).toEqual({ type: 'frame', seconds: 125, path: 'C:\\tmp\\f_000125.jpg' })
+    expect(parseFrameLine('DONE 42')).toEqual({ type: 'done', count: 42 })
+    expect(parseFrameLine('ERROR no video track')).toEqual({ type: 'error', message: 'no video track' })
+    expect(parseFrameLine('loading')).toBeNull()
+  })
+
+  it('tags times and builds a visual-notes section, distinguishing video from audio', () => {
+    expect(timeTag(75)).toBe('01:15')
+    expect(timeTag(3725)).toBe('1:02:05')
+    expect(formatVisualNotes([])).toBe('')
+    const notes = formatVisualNotes([{ seconds: 90, text: 'Slide: Risk 1% per trade' }])
+    expect(notes).toContain('[01:30] Slide: Risk 1% per trade')
+    expect(notes).toContain('On-screen slides')
+    expect(isVideoFile('C:\\v\\a.mp4')).toBe(true)
+    expect(isVideoFile('C:\\v\\a.mp3')).toBe(false)
   })
 })
 

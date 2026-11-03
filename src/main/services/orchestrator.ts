@@ -40,7 +40,7 @@ import { messageOwnerOnPhone } from './telegram'
 import { deviceAlertReply } from './deviceReplies'
 import { STUDY_QUESTION, bookStudy, matchSkills, skillsForPrompt } from './bookStudy'
 import { downloadDocument, findDocumentLink, isLearnFromLink } from './webLibrary'
-import { isLearnFromVideo, extractMediaPath, transcribeMedia, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia } from './mediaStudy'
+import { isLearnFromVideo, extractMediaPath, transcribeMedia, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia, readVisuals, isVideoFile } from './mediaStudy'
 import { quiz, QUIZ_REQUEST, QUIZ_AGAIN, QUIZ_HISTORY, extractQuizTopic, formatExercise, formatReview, type Exercise } from './quiz'
 import fs from 'fs'
 import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
@@ -653,6 +653,16 @@ export class OrchestratorService {
           if (pct >= reported + 25) { reported = pct; this.post(`🎧 ${prefix}Transcribing "${path.basename(mediaPath)}"${slowNote}: ${progressText(done, total)}.`); slowNote = '' }
         },
       })
+      // For a video, also read the slides / on-screen text with the vision model and append
+      // them to the transcript, so what Goga studies includes what was shown, not only said.
+      if (isVideoFile(mediaPath) && (SettingsService.getInstance().get().videoReadFrames ?? true)) {
+        this.post(`👀 ${prefix}Now reading the slides and on-screen text in "${path.basename(mediaPath)}"…`)
+        let vreported = -1
+        const visuals = await readVisuals(mediaPath, {
+          onProgress: (done, total) => { const pct = total > 0 ? Math.round((done / total) * 100) : 0; if (pct >= vreported + 50) { vreported = pct; this.post(`👀 ${prefix}Reading frames: ${pct}% (${done}/${total}).`) } },
+        })
+        if (visuals) fs.appendFileSync(transcript, visuals)
+      }
       return await this.library.ingest(transcript)
     } finally {
       if (transcript) try { fs.rmSync(path.dirname(transcript), { recursive: true, force: true }) } catch { /* temp file */ }
