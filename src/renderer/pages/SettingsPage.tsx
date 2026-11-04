@@ -531,6 +531,19 @@ export default function SettingsPage() {
           <input type="range" min="0" max="1" step="0.05" value={settings.voiceVolume} onChange={e => update({ voiceVolume: parseFloat(e.target.value) })} disabled={!settings.voiceEnabled} style={{ width: 180 }} />
         </Field>
 
+        <Section label="Learning from video & audio" />
+        <Field label="Read a video's slides and on-screen text (vision model), not just the audio">
+          <input type="checkbox" checked={settings.videoReadFrames ?? true} onChange={e => update({ videoReadFrames: e.target.checked })} />
+        </Field>
+        <Field label="Model for long recordings (over ~40 min, where the accurate model would take hours)">
+          <select value={settings.mediaFastModel ?? 'medium'} onChange={e => update({ mediaFastModel: e.target.value as AppSettings['mediaFastModel'] })} style={styles.select}>
+            <option value="tiny">tiny (fastest, lowest accuracy)</option>
+            <option value="base">base</option>
+            <option value="small">small</option>
+            <option value="medium">medium (recommended)</option>
+          </select>
+        </Field>
+
         <Section label="General" />
         <Field label="Log Retention (days)">
           <input type="number" value={settings.logRetentionDays} onChange={e => update({ logRetentionDays: Number(e.target.value) })} style={{ width: 80 }} />
