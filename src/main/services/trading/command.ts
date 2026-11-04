@@ -58,7 +58,7 @@ function tokenSymbol(tok: string): string | null {
 
 /** The symbol that an intent verb points at, e.g. "analyze AAPL", "buy 10 TSLA", "on EUR/USD". */
 function symbolAfter(text: string, verbs: string): string | null {
-  const re = new RegExp(`\\b(?:${verbs})\\b\\s+(?:to open\\s+|into\\s+|some\\s+|a\\s+|an\\s+|the\\s+|my\\s+|on\\s+|of\\s+|for\\s+|\\d+(?:\\.\\d+)?\\s+(?:shares?\\s+|units?\\s+|coins?\\s+)?(?:of\\s+)?)*(\\$?[A-Za-z]{2,5}(?:\\/[A-Za-z]{3})?)\\b`, 'i')
+  const re = new RegExp(`\\b(?:${verbs})\\b\\s+(?:to open\\s+|into\\s+|some\\s+|a\\s+|an\\s+|the\\s+|my\\s+|on\\s+|of\\s+|for\\s+|all\\s+|out\\s+|everything\\s+|whole\\s+|entire\\s+|\\d+(?:\\.\\d+)?\\s+(?:shares?\\s+|units?\\s+|coins?\\s+)?(?:of\\s+)?)*(\\$?[A-Za-z]{2,5}(?:\\/[A-Za-z]{3})?)\\b`, 'i')
   const m = text.match(re)
   return m ? tokenSymbol(m[1]) : null
 }
@@ -122,6 +122,11 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
   const cancel = text.match(/\bcancel (?:the )?order\s+([0-9a-f]{8}(?:-[0-9a-f-]{1,28})?)\b/i)
   if (cancel) return { tool: 'trading.cancel', params: { orderId: cancel[1].toLowerCase() } }
 
+  // "is the market open?" — about trading hours, not an account/position/order question.
+  if (/\b(stock market|markets?|exchange|nyse|nasdaq)\b/.test(lower) && /\b(open|closed|close|hours?)\b/.test(lower)
+    && !/\b(account|position|holdings?|order|buy|sell|news|price|quote)\b/.test(lower))
+    return { tool: 'trading.clock', params: {} }
+
   // Account / journal / connection status need no symbol.
   if ((/\b(account|portfolio|positions|holdings|balance|buying power)\b/.test(lower) && /\b(my|practice|paper|account|portfolio|positions|holdings|balance|show|what)\b/.test(lower))
     || /\b(my (trading|paper) (progress|status|results)|(are we|am i) connected to alpaca|alpaca (status|connected))\b/.test(lower)
@@ -140,6 +145,13 @@ export function parseTradingCommand(raw: string): TradingCommand | null {
     const symbol = symbolAfter(text, 'news|on|about|for') ?? symbolIn(text)
     if (symbol) return { tool: 'trading.news', params: { symbol } }
     if (/\b(market|stock|stocks|crypto|financial|trading)\s+news\b/.test(lower)) return { tool: 'trading.news', params: {} }
+  }
+
+  // Close a whole position: "sell all my AAPL", "close out BTC", "exit my EUR/USD", "dump TSLA".
+  // Checked before the buy/sell plan below so "sell all my AAPL" closes rather than opens a sell.
+  if (/\b(close|exit|liquidate|dump|flatten|get out of|sell (?:all|everything|it all|my (?:whole|entire)))\b/.test(lower)) {
+    const symbol = symbolAfter(text, 'close|exit|liquidate|dump|flatten|get out of|out of|sell|out|of') ?? symbolIn(text)
+    if (symbol) return { tool: 'trading.close', params: { symbol } }
   }
 
   // Plan a trade. Symbol must sit right after the buy/sell verb ("buy AAPL"), or be an

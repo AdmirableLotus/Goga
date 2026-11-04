@@ -109,6 +109,18 @@ describe('practice trading', () => {
     expect(fx.equity).toBeCloseTo(100_000 - 5000 * 0.02, 0)
     expect(desk.journal().map(e => e.reason)).toEqual(['euro holding above its 200-day average', 'stop reached'])
   })
+
+  it('closes a whole forex position when asked', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goga-fxc-'))
+    const data = { quote: async (s: string) => ({ symbol: s, market: 'forex', price: 1.1, time: 'today', source: 'test' }) } as unknown as MarketData
+    const desk = new PaperTrading({ keys: () => null, data, limits: () => limits, journalFile: path.join(dir, 'j.json'), fxFile: path.join(dir, 'fx.json') })
+    await desk.order({ symbol: 'EUR/USD', side: 'buy', notional: 5500, stopPrice: 1.08, reason: 'euro holding above its 200-day average' })
+    const msg = await desk.closePosition('EUR/USD', 'taking the practice position off the table')
+    expect(msg).toMatch(/sell/i)
+    expect((await desk.accounts())[0].positions).toEqual([])
+    expect(desk.journal().some(e => e.reason === 'taking the practice position off the table')).toBe(true)
+    await expect(desk.closePosition('GBP/USD', 'nothing is held here anyway')).rejects.toThrow(/no GBP\/USD/)
+  })
 })
 
 describe('routing trading work', () => {

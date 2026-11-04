@@ -142,7 +142,9 @@ export class PaperTrading {
 
   /** Sell all of a paper position: its stop and target orders are cancelled first so they can't sell twice. */
   async closePosition(symbol: string, reason: string): Promise<string> {
-    const sym = instrument(symbol).symbol
+    const inst = instrument(symbol)
+    if (inst.market === 'forex') return this.fxClose(inst.symbol, reason)
+    const sym = inst.symbol
     const bare = sym.replace('/', '')
     const held = (await this.alpaca('/positions') as { symbol: string; qty: string; current_price: string }[])
       .find(p => p.symbol.replace('/', '') === bare)
@@ -300,6 +302,13 @@ export class PaperTrading {
     this.saveFx(ledger)
     this.writeJournal({ time: new Date().toISOString(), symbol, side: req.side, qty: units, price, stop: req.stopPrice, target: req.takeProfit, reason: req.reason, status: 'filled' })
     return `Practice forex ${req.side} of ${units.toFixed(0)} ${symbol.split('/')[0]} at ${price} filled ($${cost.toFixed(0)}). The ledger checks stops and targets against each day's rate.`
+  }
+
+  /** Sell all of a practice forex position at the daily rate; its stop/target go with it. */
+  private async fxClose(symbol: string, reason: string): Promise<string> {
+    const held = this.readFx().positions[symbol]
+    if (!held) throw new Error(`no ${symbol} position is held in the practice forex ledger`)
+    return this.fxOrder(symbol, { symbol, side: 'sell', qty: held.units, reason })
   }
 
   /**

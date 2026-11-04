@@ -31,6 +31,35 @@ describe('the leftover AAPL stops from a real account', () => {
   })
 })
 
+describe('closing a position', () => {
+  it('closes the whole position on an explicit exit phrase', () => {
+    expect(parseTradingCommand('sell all my AAPL')).toEqual({ tool: 'trading.close', params: { symbol: 'AAPL' } })
+    expect(parseTradingCommand('close out BTC')).toEqual({ tool: 'trading.close', params: { symbol: 'BTC/USD' } })
+    expect(parseTradingCommand('exit my EUR/USD position')).toEqual({ tool: 'trading.close', params: { symbol: 'EUR/USD' } })
+    expect(parseTradingCommand('dump TSLA')).toEqual({ tool: 'trading.close', params: { symbol: 'TSLA' } })
+    expect(parseTradingCommand('get out of NVDA')).toEqual({ tool: 'trading.close', params: { symbol: 'NVDA' } })
+  })
+
+  it('leaves a plain sell as a plan, and needs a real symbol', () => {
+    expect(parseTradingCommand('sell AAPL')).toEqual({ tool: 'trading.plan', params: { symbol: 'AAPL', side: 'sell' } })
+    expect(parseTradingCommand('close the chart')).toBeNull()
+    expect(parseTradingCommand('close the app')).toBeNull()
+  })
+})
+
+describe('is the market open', () => {
+  it('answers trading hours from the clock, not the account', () => {
+    expect(parseTradingCommand('is the market open')).toEqual({ tool: 'trading.clock', params: {} })
+    expect(parseTradingCommand('is the stock market open today')).toEqual({ tool: 'trading.clock', params: {} })
+    expect(parseTradingCommand('what are the market hours')).toEqual({ tool: 'trading.clock', params: {} })
+  })
+
+  it('does not fire for market news or a vague "how is the market"', () => {
+    expect(parseTradingCommand('any market news')).toEqual({ tool: 'trading.news', params: {} })
+    expect(parseTradingCommand('how is the market doing')).toBeNull()
+  })
+})
+
 describe('agreeing to a trade proposal', () => {
   it('finds the symbol Goga proposed, not an indicator name', () => {
     const offer = 'I’ll check the 50-day and 200-day moving averages, RSI, and support/resistance levels for AAPL. Based on the analysis, I’ll place a new buy order for AAPL with a stop loss. Would you like me to proceed?'

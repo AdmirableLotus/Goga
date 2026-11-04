@@ -191,6 +191,37 @@ reg.register({
 })
 
 reg.register({
+  name: 'trading.close',
+  description: 'Close a PRACTICE position completely — sell everything held of one symbol. Cancels that symbol\'s open stop/target orders first so it can\'t sell twice. Use when the user says to sell all of something, close it out, exit, or dump a position.',
+  parameters: {
+    type: 'object',
+    properties: {
+      symbol: symbolParam,
+      reason: { type: 'string', description: 'Why close now — for the journal.' },
+    },
+    required: ['symbol'],
+  },
+  riskLevel: 'medium', reversible: false, category: 'web',
+}, async p => {
+  try {
+    const reason = String(p.reason ?? '').trim() || 'Closed the whole position at your request.'
+    return { success: true, data: await paperTrading().closePosition(String(p.symbol), reason) }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'trading.clock',
+  description: 'Whether the US stock market is open right now. (Crypto trades 24/7; practice forex uses the daily ECB rate.)',
+  parameters: { type: 'object', properties: {} },
+  riskLevel: 'low', reversible: true, category: 'web',
+}, async () => {
+  try {
+    const open = await paperTrading().stockMarketOpen()
+    return { success: true, data: `The US stock market is ${open ? 'open' : 'closed'} right now. Crypto trades 24/7; practice forex uses the daily ECB rate.` }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
   name: 'trading.journal',
   description: 'The trading journal: recent practice trades with their reasons, stops and targets — for reviewing what worked and what to learn.',
   parameters: { type: 'object', properties: { limit: { type: 'number', description: 'How many recent trades (default 20).' } } },
