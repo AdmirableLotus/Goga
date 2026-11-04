@@ -543,6 +543,9 @@ export default function SettingsPage() {
             <option value="medium">medium (recommended)</option>
           </select>
         </Field>
+        <Field label="Learn from the web when asked ('research X online' — searches, reads, and summarizes pages locally; never browses on its own)">
+          <input type="checkbox" checked={settings.webLearnEnabled ?? true} onChange={e => update({ webLearnEnabled: e.target.checked })} />
+        </Field>
 
         <Section label="General" />
         <Field label="Log Retention (days)">

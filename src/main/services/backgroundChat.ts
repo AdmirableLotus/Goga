@@ -33,3 +33,17 @@ export async function foregroundJson(messages: Messages, numPredict = 600): Prom
   if (llama.isReady()) return llama.chat(messages, undefined, undefined, { ifIdle: false })
   throw new Error('no brain is running')
 }
+
+/**
+ * Foreground PROSE thinking for interactive features that want natural-language output, not JSON
+ * (web-research notes and answers). Like foregroundJson it runs now — the user asked for it.
+ */
+export async function foregroundText(messages: Messages, numPredict = 500): Promise<string> {
+  const llama = LocalLlamaService.getInstance()
+  const s = SettingsService.getInstance().get()
+  if (s.primaryModel === 'ollama' && await ollama.isAvailable()) {
+    return ollama.chatWith(s.modelName, messages, undefined, undefined, { num_predict: numPredict })
+  }
+  if (llama.isReady()) return llama.chat(messages, undefined, undefined, { ifIdle: false })
+  throw new Error('no brain is running')
+}

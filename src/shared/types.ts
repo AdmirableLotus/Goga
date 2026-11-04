@@ -239,6 +239,10 @@ export interface AppSettings {
   mediaFastModel: 'tiny' | 'base' | 'small' | 'medium'
   // Also read a video's slides/on-screen text with the vision model while studying it.
   videoReadFrames: boolean
+  // Opt-in web research: when asked to "research X online" Goga searches the web, reads a few
+  // public pages, summarises them locally, and remembers source-grounded notes. Off = never browse.
+  // Search queries and page fetches go to the internet; summarising and storage stay local.
+  webLearnEnabled: boolean
   ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
   // Sleep mode: closing the window keeps Goga in the tray, watching and listening
   sleepOnClose: boolean
@@ -388,6 +392,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   whisperLanguage: '',
   mediaFastModel: 'medium',
   videoReadFrames: true,
+  webLearnEnabled: true,
   ttsProvider: 'sapi',
   sleepOnClose: true,
   startWithWindows: true,

@@ -41,6 +41,7 @@ import { deviceAlertReply } from './deviceReplies'
 import { STUDY_QUESTION, bookStudy, matchSkills, skillsForPrompt } from './bookStudy'
 import { downloadDocument, findDocumentLink, isLearnFromLink } from './webLibrary'
 import { isLearnFromVideo, extractMediaPath, transcribeMedia, progressText, isLearnFromVideoFolder, extractFolderPath, collectMedia, readVisuals, isVideoFile } from './mediaStudy'
+import { isLearnFromWeb, isWebSearch, isWebRecall, extractTopic, formatFindings, webLearn } from './webLearning'
 import { quiz, QUIZ_REQUEST, QUIZ_AGAIN, QUIZ_HISTORY, extractQuizTopic, formatExercise, formatReview, type Exercise } from './quiz'
 import fs from 'fs'
 import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
@@ -190,6 +191,34 @@ export class OrchestratorService {
       const reply: ChatMessage = { id: nanoid(), role: 'assistant', content: `Looking in "${folder}" for videos and recordings. I'll go through them one by one — transcribe each, add it to my Library, and study it into skills. I'll tell you here how many I found and report as I finish each one.`, timestamp: Date.now() }
       this.brain.addMessage(reply); onToken?.(reply.content)
       return reply
+    }
+
+    // Honest web research (opt-in): "research X online", "search the web for X", "what did you
+    // find about X online". Goga searches, reads a few real public pages, summarises each with his
+    // own model, and recalls from source-grounded notes with the links — never during ordinary
+    // chat, and never claiming a live visit. The honest counterpart to "I can't crawl a website".
+    const wl = webLearn()
+    if (wl && SettingsService.getInstance().get().webLearnEnabled && content.length < 400) {
+      const sayWeb = (c: string): ChatMessage => { const m: ChatMessage = { id: nanoid(), role: 'assistant', content: c, timestamp: Date.now() }; this.brain.addMessage(m); onToken?.(c); return m }
+      if (isWebRecall(content)) {
+        plannerDiagnostic('routing.decision', { task: content, route: 'web-recall', agentTask: false })
+        try { return sayWeb(await wl.answer(content)) } catch { return sayWeb("I couldn't pull that from my saved research just now — try again in a moment.") }
+      }
+      if (isLearnFromWeb(content) && extractTopic(content)) {
+        const topic = extractTopic(content)
+        plannerDiagnostic('routing.decision', { task: content, route: 'learn-from-web', agentTask: false })
+        void this.studyWeb(topic)
+        return sayWeb(`Searching the web about "${topic}" now. I'll read a few public pages, summarise each with my own model, and save source-grounded notes — then ask "what did you find about ${topic}" and I'll answer from those notes with the links. I only do this because you asked; I don't browse on my own, and I'll never claim I read a page live.`)
+      }
+      if (isWebSearch(content) && extractTopic(content)) {
+        const topic = extractTopic(content)
+        plannerDiagnostic('routing.decision', { task: content, route: 'web-search', agentTask: false })
+        try {
+          const hits = await wl.search(topic)
+          if (hits.length === 0) return sayWeb(`I searched the web for "${topic}" but got nothing back — the search may be rate-limited right now. Try again in a moment.`)
+          return sayWeb(`Here's what I found on the web for "${topic}" (links only — I haven't read or saved anything yet):\n\n${hits.map(h => `• ${h.title || h.url}\n  ${h.url}`).join('\n')}\n\nSay "research ${topic} online" and I'll read and remember them.`)
+        } catch { return sayWeb(`I couldn't search the web just now (it may be rate-limited). Try again in a moment.`) }
+      }
     }
 
     // "Learn from the book I gave you" / "what skills have you learned" — real study progress.
@@ -618,6 +647,17 @@ export class OrchestratorService {
       this.post(`📚 I've listened to "${path.basename(mediaPath)}" and added what was said to my Library as "${meta.title}" (${meta.chunkCount.toLocaleString('en-US')} passages). I'll study it section by section while you're not chatting and tell you when I'm done. Ask "how is your studying going" any time.`)
     } catch (err) {
       this.post(`I couldn't learn from that recording: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /** Opt-in web research: search, read a few public pages, summarise locally, remember the notes. */
+  private async studyWeb(topic: string): Promise<void> {
+    const wl = webLearn(); if (!wl) return
+    try {
+      const { saved, skipped } = await wl.learn(topic, msg => this.post(`🔎 ${msg}`))
+      this.post(formatFindings(topic, saved, skipped))
+    } catch (err) {
+      this.post(`I couldn't finish researching "${topic}": ${err instanceof Error ? err.message : String(err)}. The web search may be rate-limited — try again in a bit.`)
     }
   }
 

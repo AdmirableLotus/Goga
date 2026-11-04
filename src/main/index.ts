@@ -31,8 +31,9 @@ import { OrchestratorService, SCHEDULED_ID_PREFIX, msSinceUserMessage } from './
 import { describeSchedule, initScheduler, scheduler, type ScheduledTask } from './services/scheduler'
 import { BrainService } from './services/brain'
 import { bookStudy, initBookStudy } from './services/bookStudy'
-import { backgroundChat, foregroundJson } from './services/backgroundChat'
+import { backgroundChat, foregroundJson, foregroundText } from './services/backgroundChat'
 import { initQuiz } from './services/quiz'
+import { initWebLearn } from './services/webLearning'
 import type { ChatMessage } from '../shared/types'
 import { nanoid } from './utils/nanoid'
 import { registerDeveloperHandlers, stopDeveloperTask } from './handlers/developer'
@@ -133,6 +134,10 @@ function startBookStudy(): void {
   initQuiz(path.join(app.getPath('userData'), 'quizzes.json'), {
     chat: (messages, numPredict) => foregroundJson(messages, numPredict),
     studied: () => bookStudy()?.all() ?? [],
+  })
+  // Opt-in web research with honest, source-grounded memory (see webLearning.ts).
+  initWebLearn(path.join(app.getPath('userData'), 'web-learning.json'), {
+    chat: (messages, numPredict) => foregroundText(messages, numPredict),
   })
 }
 
