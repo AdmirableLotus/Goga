@@ -20,8 +20,8 @@ import { buildMediaRequest } from './mediaRequest'
 import { DesktopAdapter } from '../adapters/desktop'
 import { getMainWindow } from '../index'
 
-import { chatHonestyNote, parseRoute, routeQuestion } from './replyHonesty'
-import { looksLikeAgentTask, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer, SLEEP_REQUEST, isCompoundQuestion } from './agentRouting'
+import { chatHonestyNote, enforceHonestReply, parseRoute, routeQuestion } from './replyHonesty'
+import { looksLikeAgentTask, isImperativeRequest, isConversationalQuestion, APPROVE_REPLY, DENY_REPLY, isVagueOpenWebsite, CONFIRM_TRIGGERS, isReadOnlyObservationRequest, isConfirmation, isActionProposal, startsWithAgreement, planNeedsComputer, SLEEP_REQUEST, isCompoundQuestion } from './agentRouting'
 import { LONG_TEXT_CHARS, NotesStore, asNotes, fitHistory, takeNotes, rewriteRequest, rewriteInParts } from './longText'
 import { app } from 'electron'
 import path from 'path'
@@ -45,6 +45,16 @@ import { isLearnFromWeb, isWebSearch, isWebRecall, extractTopic, formatFindings,
 import { quiz, QUIZ_REQUEST, QUIZ_AGAIN, QUIZ_HISTORY, extractQuizTopic, formatExercise, formatReview, type Exercise } from './quiz'
 import fs from 'fs'
 import { SCHEDULE_LIST, SCHEDULE_STOP_ALL, SCHEDULE_TASK_COMMAND, describeSchedule, parseSchedule, scheduler } from './scheduler'
+import { looksLikeBigTask, parseJobCommand, questionMessage } from './jobs/routing'
+import { securityRunRequest, securityToolQuestion, securityUnnamedRunRequest, unnamedRunRefusal } from './security/toolboxVerdicts'
+import { findTool } from './security/toolboxQuery'
+import { classifyRunRequest, refusalFor, VERDICT_LABEL } from './security/toolboxVerdicts'
+import {
+  parseScopeQuestion, parseLocalReview, looksLikeLocalReview, parseVenueCommand, parseMarketsCommand,
+  parseBusinessPrepare, parseMonitorCommand, parseEvolutionDecision, parseDeveloperCommand,
+  parseLocalRootCommand,
+} from './chatRoutes'
+import { findWordPressCopies, rememberedRoot, rememberRoot } from './localTarget'
 
 // A scheduled task's run is sent as a chat message whose id starts with this.
 export const SCHEDULED_ID_PREFIX = 'sched-'
@@ -126,6 +136,80 @@ export class OrchestratorService {
     }
 
     const content = userMessage.content.trim()
+
+    // "What's the verdict for subfinder?" — answered from the catalog, so the verdict the user
+    // reads is the one the Toolbox holds, not a model's recollection of it. A question that
+    // names a technique instead of a tool ("is port scanning allowed?") is answered from the
+    // tools that technique belongs to.
+    const toolQuestion = userMessage.attachments?.length ? null : securityToolQuestion(content)
+    if (toolQuestion) {
+      const asked = (toolQuestion.tools ?? [toolQuestion.tool]).map(id => findTool(id)).filter((t): t is NonNullable<typeof t> => !!t)
+      if (asked.length) {
+        plannerDiagnostic('routing.decision', { task: content, route: 'security-reference', agentTask: false })
+        const reply: ChatMessage = {
+          id: nanoid(), role: 'assistant',
+          content: [
+            ...asked.map(tool => [
+              `${tool.name} — ${VERDICT_LABEL[tool.verdict]}`,
+              tool.what,
+              '',
+              `Why: ${tool.verdictReason}`,
+              '',
+              `Useful on a bounty: ${tool.usefulPart}`,
+              `Gets the account banned or the person arrested: ${tool.bannedPart}`,
+              `Needs: ${tool.needs.join(', ')}`,
+              '',
+              `Docs (the tool's own): ${tool.docs.map(d => `${d.title} — ${d.url}`).join('; ')}`,
+              `Commands: ${tool.sections.reduce((n, s) => n + s.commands.length, 0)} transcribed from your sheet ${tool.sheet}. Ask for the commands and I'll read them out.`,
+            ].join('\n')),
+            '',
+            'A cheat sheet is a memory aid, not authorisation. Goga can teach the commands; it cannot give permission.',
+          ].join('\n\n'),
+          timestamp: Date.now(),
+        }
+        this.brain.addMessage(reply); onToken?.(reply.content)
+        return reply
+      }
+    }
+
+    // "Run nmap at shop.example.com" — answered from the Toolbox, never run. The Security area
+    // has exactly one way to reach a target (the single approved GET), so a request to run a
+    // security tool is answered with that tool's verdict and refused, before any plan is made.
+    const runRequest = userMessage.attachments?.length ? null : securityRunRequest(content)
+    if (runRequest) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'security-refusal', agentTask: false })
+      const tool = findTool(runRequest.tool)
+      const body = tool
+        ? [refusalFor(tool) ?? classifyRunRequest(runRequest.tool).refusal,
+           '',
+           `Verdict: ${tool.verdict}`,
+           `Useful on a bounty: ${tool.usefulPart}`,
+           `Gets the account banned or the person arrested: ${tool.bannedPart}`].join('\n')
+        : classifyRunRequest(runRequest.tool).refusal
+      const reply: ChatMessage = {
+        id: nanoid(), role: 'assistant',
+        content: `${body}\n\nIf you want to see what the tool does, ask me for its verdict or its commands — I'll read them from your cheat sheets.`,
+        timestamp: Date.now(),
+      }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
+
+    // "Scan a host" / "run a port scan on shop.example.com" — the same request with no tool
+    // named. This used to fall through to the agent loop, which spent steps looking for a tool
+    // to call; the verdict and the refusal belong in the answer instead.
+    const unnamedRun = userMessage.attachments?.length ? null : securityUnnamedRunRequest(content)
+    if (unnamedRun) {
+      plannerDiagnostic('routing.decision', { task: content, route: 'security-refusal-unnamed', agentTask: false })
+      const tools = unnamedRun.tools.map(id => findTool(id)).filter((t): t is NonNullable<typeof t> => !!t)
+      const reply: ChatMessage = {
+        id: nanoid(), role: 'assistant',
+        content: unnamedRunRefusal(unnamedRun.phrase, tools),
+        timestamp: Date.now(),
+      }
+      this.brain.addMessage(reply); onToken?.(reply.content)
+      return reply
+    }
 
     // "Look at the paper I opened" / "go to my browser and look at the video": find that
     // window (never Goga's own), read the real document or look at the page, then answer.
@@ -292,6 +376,15 @@ export class OrchestratorService {
         return reply
       }
     }
+    // Jobs: "my jobs", "job <id>: yes", "start job: …". A job's question is answered only
+    // when the message names that job, so an ordinary sentence is never taken as an answer.
+    if (!isScheduledMessage(userMessage)) {
+      const jobReply = this.jobCommand(content)
+      if (jobReply) {
+        this.brain.addMessage(jobReply); onToken?.(jobReply.content)
+        return jobReply
+      }
+    }
 
     // "How does your trade watcher work?" / "analyze your code" — answer from the real
     // source files, so Goga describes himself as he is built, not as he imagines it.
@@ -364,6 +457,42 @@ export class OrchestratorService {
       }
     }
 
+    // ── The work that used to need a page ────────────────────────────────────
+    //
+    // Each of these has exactly one right tool and no planning to do, so it is parsed and
+    // dispatched here rather than left to the planner. This is what makes chat the route that
+    // acts: a scope question, a local file review, a venue read, a market backtest, a prepared
+    // business action, a self-improvement decision and a developer run all reach their tool
+    // from a sentence.
+    if (this.agent.getState().status !== 'running') {
+      const direct = this.directRoute(content)
+      if (direct) {
+        plannerDiagnostic('routing.decision', { task: content, route: `direct:${direct.calls.map(c => c.tool).join('+')}`, agentTask: false })
+        const parts: string[] = []
+        let incomplete = false
+        for (const call of direct.calls) {
+          const reply = await this.runTradingCommand({ tool: call.tool, params: call.params }, signal)
+          parts.push(reply.content)
+          const failed = !reply.content || reply.content.startsWith("Couldn't do that:")
+          if (failed) {
+            incomplete = true
+            // A failed import is not a reason to skip the check that follows it: the check
+            // runs against whatever program is already imported, and its answer is still the
+            // one the user asked for. Any other failure ends the chain.
+            if (call.tool !== 'security.importProgram') break
+          }
+        }
+        const body = parts.filter(Boolean).join('\n\n')
+        const withIntent: ChatMessage = {
+          id: nanoid(), role: 'assistant', fromTools: true, timestamp: Date.now(),
+          content: body ? `${direct.intent}\n\n${body}` : direct.intent,
+        }
+        this.brain.addMessage(withIntent); onToken?.(withIntent.content)
+        if (incomplete) this.log.warn(`Direct route ${direct.calls.map(c => c.tool).join('+')} did not complete`)
+        return withIntent
+      }
+    }
+
     const history = this.brain.getHistory()
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content
 
@@ -397,6 +526,20 @@ export class OrchestratorService {
         timestamp: Date.now()
       }
       this.brain.addMessage(reply)
+      return reply
+    }
+
+    // A big compound request becomes ONE job with sub-steps, not one enormous chat turn.
+    // The job runs in the background, survives the window closing, and reports honestly.
+    if (agentTask && looksLikeBigTask(content) && this.agent.getState().status !== 'running') {
+      const job = this.jobsManager().create({ goal: content })
+      plannerDiagnostic('routing.decision', { task: content, route: 'job', agentTask: false })
+      const reply: ChatMessage = {
+        id: nanoid(), role: 'assistant',
+        content: `This is big enough to deserve its own worker, so I've made it job ${job.id} ("${job.title}"). It runs in the background — you can close the window and it keeps going. Watch it on the Jobs page; if it needs a decision from you it will stop and ask, here and there.`,
+        timestamp: Date.now(),
+      }
+      this.brain.addMessage(reply); onToken?.(reply.content)
       return reply
     }
 
@@ -506,6 +649,59 @@ export class OrchestratorService {
     return this.llama.chat(messages, undefined, signal)
   }
 
+  /** The job manager, required lazily so the chat path stays light. */
+  private jobsManager() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { jobs } = require('./jobs/instance') as typeof import('./jobs/instance')
+    return jobs()
+  }
+
+  /** "my jobs", "job <id>", "job <id>: <answer>", "cancel job <id>", "start job: …". */
+  private jobCommand(content: string): ChatMessage | null {
+    const cmd = parseJobCommand(content)
+    if (!cmd) return null
+    const say = (text: string): ChatMessage => ({ id: nanoid(), role: 'assistant', content: text, timestamp: Date.now() })
+    try {
+      const manager = this.jobsManager()
+      if (cmd.kind === 'list') {
+        const view = manager.view()
+        if (view.jobs.length === 0) return say('No jobs yet. Give me a big request and I will hand it to its own worker.')
+        const lines = view.jobs.map(j => {
+          const asking = j.state === 'waiting' && j.question ? ` — ASKING: ${j.question.text}` : ''
+          return `• ${j.id} [${j.state}] ${j.title} — ${j.progress}${asking}`
+        })
+        return say(`${view.running} running, ${view.queued} queued, ${view.waiting} waiting on you (limit ${view.cap}).\n\n${lines.join('\n')}`)
+      }
+      if (cmd.kind === 'read') {
+        const job = manager.get(cmd.id)
+        if (!job) return say(`I have no job with the id ${cmd.id}. Say "my jobs" to see them.`)
+        const parts = [`${job.title} [${job.state}]`, job.progress]
+        if (job.question && job.state === 'waiting') parts.push(questionMessage(job))
+        if (job.report) {
+          parts.push(`WHAT YOU GET:\n${job.report.result.map(r => `- ${r}`).join('\n') || '- nothing'}`)
+          parts.push(`NOT DONE:\n${job.report.notDone.map(r => `- ${r}`).join('\n') || '- nothing was left undone'}`)
+        }
+        return say(parts.join('\n\n'))
+      }
+      if (cmd.kind === 'answer') {
+        manager.answer(cmd.id, cmd.answer)
+        return say(`Sent to job ${cmd.id}. It carries on from there.`)
+      }
+      if (cmd.kind === 'cancel') {
+        manager.cancel(cmd.id)
+        return say(`Job ${cmd.id} is stopped. It kept the steps it had already done and wrote a report saying so.`)
+      }
+      if (cmd.kind === 'resume') {
+        manager.resume(cmd.id)
+        return say(`Job ${cmd.id} is running again from where it stopped.`)
+      }
+      const job = manager.create({ goal: cmd.goal })
+      return say(`Started job ${job.id} ("${job.title}"). It is ${job.state}. Watch it on the Jobs page.`)
+    } catch (err) {
+      return say(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   private startAgentTask(task: string, onTaskComplete?: (result: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => void): ChatMessage {
     let finished = false
     const finishOnce = (r: { status: 'success' | 'cancelled' | 'error'; reply: string; state: AgentState; error?: string }) => {
@@ -521,13 +717,24 @@ export class OrchestratorService {
       // here): answer in chat instead of reporting a planning error.
       const ran = this.agent.getState()
       if (ran.status === 'error' && ran.error?.startsWith('planning_failed') && !ran.steps.some(s => s.tool)) {
-        this.log.info('Agent found no PC step — answering in chat instead')
-        const answer = await this.answerInChat(task).catch((err): ChatMessage => ({ id: nanoid(), role: 'assistant', content: `Model error: ${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() }))
-        this.brain.addMessage(answer)
-        getMainWindow()?.webContents.send('chat:message', answer)
-        finishOnce({ status: 'success', reply: answer.content, state: ran })
+        // An order that took no step did not happen. Answering it in chat is what produced
+        // the replies that narrated an action Goga never took, so the reply here says what
+        // is true instead: nothing ran, and what the user can say to get it moving.
+        this.log.warn('Agent took no step on an action request — reporting that, not answering in chat')
+        const honest = enforceHonestReply(reply, { acted: false })
+        const msg: ChatMessage = {
+          id: nanoid(), role: 'assistant',
+          content: `${honest.content}\n\nI could not turn that into any step I can take. `
+            + 'Name the site or the exact thing to do and I will go and do it — for example '
+            + '"open hackerone.com/coinbase and read the scope", or "start Firefox and read that page".',
+          timestamp: Date.now(), fromTools: true,
+        }
+        this.brain.addMessage(msg)
+        getMainWindow()?.webContents.send('chat:message', msg)
+        finishOnce({ status: 'error', reply: msg.content, state: ran, error: 'planning_failed: zero executable steps' })
         return
       }
+      // Already held to its own step history by the agent loop, so it goes out as written.
       const msg: ChatMessage = { id: nanoid(), role: 'assistant', content: reply, timestamp: Date.now(), fromTools: true }
       this.brain.addMessage(msg)
       getMainWindow()?.webContents.send('chat:message', msg)
@@ -821,6 +1028,113 @@ export class OrchestratorService {
     return reply
   }
 
+  /**
+   * A local source tree to review against, when the user has not named one.
+   *
+   * Only a WordPress tree is looked for, only under the user's own workspace, and only when
+   * exactly one is found. Anything else returns null so the reply asks for the folder instead
+   * of reviewing the wrong code.
+   */
+  private discoveredRoot(): string | null {
+    try {
+      const found = findWordPressCopies()
+      return found.length === 1 ? found[0] : null
+    } catch { return null }
+  }
+
+  /**
+   * The one-tool routes, in the order they are tried.
+   *
+   * Returns null when the message is not one of them, so ordinary conversation and open-ended
+   * work still reach the planner. Every branch here is a request that used to be answerable
+   * only by pressing a button on a page.
+   */
+  private directRoute(content: string): { calls: { tool: string; params: Record<string, unknown> }[]; intent: string } | null {
+    // "use C:\src\wordpress as my local copy" — remember the folder, so a review can name
+    // just the file from then on.
+    const root = parseLocalRootCommand(content)
+    if (root) {
+      const saved = rememberRoot(root.root)
+      return {
+        calls: [{ tool: 'security.indexTarget', params: { root: saved } }],
+        intent: `Remembered ${saved} as the local copy to review.`,
+      }
+    }
+
+    // "is status.coinbase.com in scope for coinbase" — answered from the imported program's
+    // own rules, never from a model's recollection of them.
+    const scope = parseScopeQuestion(content)
+    if (scope) {
+      // Importing reads the program's published policy and grants nothing; it is what makes
+      // the scope check possible. Then the check itself, against that program's own rules.
+      const calls = scope.program
+        ? [
+            { tool: 'security.importProgram', params: { handle: scope.program } },
+            { tool: 'security.checkTarget', params: { target: scope.target } },
+          ]
+        : [{ tool: 'security.checkTarget', params: { target: scope.target } }]
+      return {
+        calls,
+        intent: scope.program
+          ? `Checking ${scope.target} against ${scope.program}'s published scope.`
+          : `Checking ${scope.target} against the active program's scope.`,
+      }
+    }
+
+    // "review wp-includes/class-wp-http.php in the local WordPress copy" — the Grimoire, on a
+    // file the user is allowed to read. The folder comes from what the user pointed at, or
+    // from a WordPress tree found in their own workspace. Two candidates is a question, not a
+    // guess.
+    const review = parseLocalReview(content, rememberedRoot() ?? this.discoveredRoot())
+    if (review) {
+      return {
+        calls: [{ tool: 'security.reviewFile', params: { root: review.root, path: review.path } }],
+        intent: `Reviewing ${review.path} in ${review.root} with the specialist reviewers.`,
+      }
+    }
+    // It names a file to review, but there is no folder to review it in. Ask for one, and say
+    // how to give it — this used to reach the planner and become eight failing steps.
+    if (looksLikeLocalReview(content)) {
+      const known = rememberedRoot()
+      const found = findWordPressCopies()
+      const why = found.length > 1
+        ? `I found more than one source tree, so I will not guess: ${found.join(', ')}.`
+        : known
+          ? `The folder I had was ${known}, which cannot be read.`
+          : 'I do not have a local copy to look in.'
+      return {
+        calls: [],
+        intent: `${why} Tell me the folder — "use C:\\path\\to\\copy as my local copy" — and I will review the file in it.`,
+      }
+    }
+
+    // "how is my pivex account doing" — the Practice page's reads, from chat.
+    const venue = parseVenueCommand(content)
+    if (venue) return { calls: [{ tool: venue.tool, params: venue.params }], intent: venue.intent }
+
+    // "backtest my watchlist" — the Markets page's operations, from chat.
+    const markets = parseMarketsCommand(content)
+    if (markets) return { calls: [{ tool: markets.tool, params: markets.params }], intent: markets.intent }
+
+    // "check my apps" — a fresh health check, not just the last one.
+    const monitor = parseMonitorCommand(content)
+    if (monitor) return { calls: [{ tool: monitor.tool, params: monitor.params }], intent: monitor.intent }
+
+    // "draft an email to sam@example.com about the invoice" — prepared, never sent.
+    const business = parseBusinessPrepare(content)
+    if (business) return { calls: [{ tool: business.tool, params: business.params }], intent: business.intent }
+
+    // "install it" / "discard it" after a self-improvement run.
+    const evolution = parseEvolutionDecision(content)
+    if (evolution) return { calls: [{ tool: evolution.tool, params: evolution.params }], intent: evolution.intent }
+
+    // "developer mode: the browser retries a failing page".
+    const developer = parseDeveloperCommand(content)
+    if (developer) return { calls: [{ tool: developer.tool, params: developer.params }], intent: developer.intent }
+
+    return null
+  }
+
   /** Run a parsed trading command directly and format the result as a chat reply. */
   private async runTradingCommand(cmd: { tool: string; params: Record<string, unknown> }, signal?: AbortSignal): Promise<ChatMessage> {
     const result = await this.registry.execute(cmd.tool, cmd.params, { abortSignal: signal ?? new AbortController().signal })
@@ -840,10 +1154,23 @@ export class OrchestratorService {
     return { id: nanoid(), role: 'assistant', content, timestamp: Date.now(), fromTools: true }
   }
 
-  /** A chat answer, with a warning when it claims an action no tool performed. */
+  /**
+   * Hold a chat answer to what actually happened in this turn.
+   *
+   * A chat answer is written by a local model with no tools in front of it. It still writes
+   * "I've opened it" and "I've searched for that". Since nothing ran, those sentences are
+   * removed and replaced with what is true; a reply that denies an ability Goga has is
+   * replaced with the real capability and its specific limits. The old behaviour — keeping
+   * the false sentence and adding a warning underneath — was the bug.
+   *
+   * `acted` is false here by construction: this method is the chat path.
+   */
   private grounded(reply: ChatMessage, asked?: string): ChatMessage {
-    if (asked) gapJournal()?.record(gapFromChat(asked, reply.content))
-    return { ...reply, content: reply.content + chatHonestyNote(reply.content) }
+    const honest = enforceHonestReply(reply.content, { acted: false })
+    if (honest.corrected) this.log.warn(`Chat reply corrected (${honest.reason}): it did not match anything that ran`)
+    const content = honest.content
+    if (asked) gapJournal()?.record(gapFromChat(asked, content))
+    return { ...reply, content }
   }
 
   /** For a message the phrase rules did not recognise: does the brain read it as a request to act now? */
@@ -897,7 +1224,7 @@ ${(STUDY_QUESTION.test(userInput) || BOOK_STUDY_REQUEST.test(userInput)) && book
 
 You can read all of your own source code and change any of it. When asked to improve yourself with a specific goal (or "work on gap N"), your workshop writes the change on a private copy with your coding model and keeps it only if the typecheck and every test pass; ${settings.userName} reviews it and says "merge it" to put it in your real code (changes to your safety files are flagged for a close look). A real-money trading address and code that reads stored keys are always refused. A vague "update your code" is not enough for your coding model; ask what to change or offer your gap list.
 
-You can also operate this PC: browser, files, apps, desktop. You can design electronics too: look up real parts and build circuits (netlist, parts list, rule check) with KiCad on this PC, and work in ${settings.userName}'s Flux (flux.ai) circuit-board projects when Flux is connected in Settings. Like Schematik, you can make Arduino, ESP32 and Raspberry Pi Pico projects (code, parts to buy, wiring, build steps), compile them and upload them to a plugged-in board, and read ${settings.userName}'s Schematik (schematik.io) projects. You are also ${settings.userName}'s trading coach: with real prices and history (US stocks, ETFs, crypto, forex) you read charts, test strategies on history, and place practice trades with fake money in a paper account, within ${settings.userName}'s risk rules. You do not know current prices from memory: never state one without fetching it. Teach the why (trend, risk per trade, stops, position size, keeping a journal), be honest that no one can predict markets, and never promise profit. ${settings.userName}'s practice goal is to protect capital (risk 1% or less per trade), be consistent over many trades, and beat buy-and-hold — NOT to hit a fixed monthly dollar amount. If ${settings.userName} names an unrealistic target (for example "$3000/month", which on this account is ~3%/month — better than almost every professional fund), gently reset it: steady ~1%/month with no big drawdowns is already excellent, and chasing a dollar figure causes overtrading and losses. Income follows the skill, not the other way around. For electronics, plan the blocks, parts and power first, and point out anything that needs an engineer's review (safety, medical use, mains power).When ${settings.userName} wants something done, talk it through like a partner: say in a few plain sentences what you would do, mention anything risky or irreversible and anything ${settings.userName} must do personally (such as typing a password or a two-factor code), then end by asking "Want me to go ahead?". When ${settings.userName} agrees, you will carry out that plan. Do not refuse reasonable requests or tell ${settings.userName} to rephrase; if you have a concern, explain it and let ${settings.userName} decide. In this reply itself you have not acted yet: never write out tool calls, JSON or commands as if you were acting, and never claim to have done something on the computer. You cannot browse and read a whole website, its modules or its pages, and you cannot read a web page's text just from its link. Never summarise or claim to have read a website, module, chapter or article unless its real text is in front of you — a document in your Library, or text ${settings.userName} pasted. If ${settings.userName} asks you to read a site you can't download, say so plainly and ask for a direct file link (ending in .pdf or .epub) or the file itself (many course sites have a "Download PDF" button); do not invent its contents from memory.
+You can also operate this PC: browser, files, apps, desktop. You can design electronics too: look up real parts and build circuits (netlist, parts list, rule check) with KiCad on this PC, and work in ${settings.userName}'s Flux (flux.ai) circuit-board projects when Flux is connected in Settings. Like Schematik, you can make Arduino, ESP32 and Raspberry Pi Pico projects (code, parts to buy, wiring, build steps), compile them and upload them to a plugged-in board, and read ${settings.userName}'s Schematik (schematik.io) projects. You are also ${settings.userName}'s trading coach: with real prices and history (US stocks, ETFs, crypto, forex) you read charts, test strategies on history, and place practice trades with fake money in a paper account, within ${settings.userName}'s risk rules. You do not know current prices from memory: never state one without fetching it. Teach the why (trend, risk per trade, stops, position size, keeping a journal), be honest that no one can predict markets, and never promise profit. ${settings.userName}'s practice goal is to protect capital (risk 1% or less per trade), be consistent over many trades, and beat buy-and-hold — NOT to hit a fixed monthly dollar amount. If ${settings.userName} names an unrealistic target (for example "$3000/month", which on this account is ~3%/month — better than almost every professional fund), gently reset it: steady ~1%/month with no big drawdowns is already excellent, and chasing a dollar figure causes overtrading and losses. Income follows the skill, not the other way around. For electronics, plan the blocks, parts and power first, and point out anything that needs an engineer's review (safety, medical use, mains power).When ${settings.userName} tells you to do something, you do it. An order is not a topic to discuss: "open X", "go to Y", "search for Z", "do a bounty on Coinbase", "check whether that's in scope" are instructions, and you carry them out and then report what happened. You have a browser you drive yourself (Firefox, your own profile): you can open a page, read its text, find and click elements, type into fields, wait for something to appear, take a screenshot, and learn a site so the next visit is quicker. You can also read and change your own source code, install an approved program, check a bug-bounty program's scope, and prepare a trade. Use them. Do not ask "want me to go ahead?" for ordinary work — go and do it, then say what you found. The only things you stop for are the ones that genuinely need ${settings.userName}: signing in as them, a two-factor code, accepting terms, moving money, submitting a report, or a choice between two things that match equally. When you hit one of those, say exactly which one it is and what ${settings.userName} should do, having actually tried first. Never say you are unable to act in general — you can. In this reply itself, if you have not run a tool, you have not done anything: never write "I've opened", "I've searched" or "I've checked" unless a tool in this turn really did it. Never describe what a page usually contains — read it, then report what it said. If you could not read it, say that and why.
 
 Trading account: ${alpacaKeys() ? `${settings.userName}'s Alpaca PAPER account is already connected (keys stored encrypted from earlier setup)` : 'no Alpaca keys are saved yet'}. NEVER ask ${settings.userName} to paste, share or type API keys, secrets or passwords in chat — keys are entered in Settings and stored encrypted. To show the account or trades, ${settings.userName} just asks "my account" or "my journal".${autoTradingSummary() ? ` ${autoTradingSummary()} Report only these facts about your trading; never invent trades or results.` : ''}
 

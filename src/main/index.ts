@@ -20,6 +20,19 @@ import { registerModelHandlers } from './handlers/model'
 import { registerRemoteHandlers, applyRemoteSettings, stopRemoteLink } from './handlers/remote'
 import { registerFluxHandlers, resumeFluxLink, stopFluxLink } from './handlers/flux'
 import { registerTradingHandlers } from './handlers/trading'
+import { registerBrokerHandlers } from './handlers/broker'
+import { registerBrowserHandlers, registerVenueHandlers } from './handlers/browser'
+import { registerSecurityHandlers } from './handlers/security'
+import { registerGrimoireHandlers } from './handlers/grimoire'
+import { registerEvolutionHandlers } from './handlers/evolution'
+import { registerSelfWorkHandlers } from './handlers/selfwork'
+import { registerStrategyHandlers } from './handlers/strategy'
+import { registerBusinessHandlers } from './handlers/business'
+import { registerPersonaHandlers } from './handlers/persona'
+import { registerOsintHandlers } from './handlers/osint'
+import { registerJobsHandlers } from './handlers/jobs'
+import { registerSetupHandlers } from './handlers/setup'
+import { startJobs, stopJobs } from './services/jobs/instance'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -42,16 +55,31 @@ import { emergencyStop } from './services/emergencyStop'
 import './tools/index'
 import { plannerDiagnostic, loadedModuleIdentity } from './services/plannerDiagnostics'
 
-plannerDiagnostic('build.loaded', {
-  entry: loadedModuleIdentity(__filename),
-  planner: loadedModuleIdentity(require.resolve('./services/agentLoop')),
-  modelWrapper: loadedModuleIdentity(require.resolve('./services/localLlama')),
-  executable: process.execPath, appPath: app.getAppPath(), version: app.getVersion()
-})
+// A diagnostic must never be the reason the app fails to start. `require.resolve` on a
+// TypeScript path throws under a test runner, and this block runs at module load, so a
+// resolution failure here would take the whole main process down with it.
+try {
+  plannerDiagnostic('build.loaded', {
+    entry: loadedModuleIdentity(__filename),
+    planner: loadedModuleIdentity(require.resolve('./services/agentLoop')),
+    modelWrapper: loadedModuleIdentity(require.resolve('./services/localLlama')),
+    executable: process.execPath, appPath: app.getAppPath(), version: app.getVersion()
+  })
+} catch { /* diagnostics are best-effort */ }
 
 // Started with Windows, the working folder is not the app's, so the keys in .env are
 // loaded from the app folder too (never overriding ones already set).
 dotenv.config({ path: path.join(app.getAppPath(), '.env') })
+
+// Windows: Chromium's native window-occlusion tracker can decide the window is covered
+// and never clear that after it is restored, so the renderer stays "hidden", stops
+// painting and the window shows blank. Turning that one feature off keeps it painting.
+if (process.platform === 'win32') {
+  const existing = app.commandLine.getSwitchValue('disable-features')
+  const features = new Set(existing.split(',').map(f => f.trim()).filter(Boolean))
+  features.add('CalculateNativeWinOcclusion')
+  app.commandLine.appendSwitch('disable-features', Array.from(features).join(','))
+}
 
 let mainWindow: BrowserWindow | null = null
 let telegram: TelegramService | undefined
@@ -62,7 +90,7 @@ let telegram: TelegramService | undefined
 let quitting = false
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1280,
     height: 800,
     minWidth: 900,
@@ -72,14 +100,17 @@ function createWindow() {
     autoHideMenuBar: true,
     // Started with Windows, Goga wakes up asleep in the tray.
     show: !startedAsleep(),
-    titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
     }
-  })
+  }
+  // hiddenInset is a macOS-only title bar style; on Windows it is meaningless.
+  if (process.platform === 'darwin') windowOptions.titleBarStyle = 'hiddenInset'
+
+  mainWindow = new BrowserWindow(windowOptions)
 
   // Grant microphone permission automatically
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
@@ -192,8 +223,25 @@ app.whenReady().then(() => {
   registerRemoteHandlers(ipcMain)
   registerFluxHandlers(ipcMain)
   registerTradingHandlers(ipcMain)
+  registerBrokerHandlers(ipcMain)
+  registerBrowserHandlers(ipcMain)
+  registerVenueHandlers(ipcMain)
+  registerSecurityHandlers(ipcMain)
+  registerGrimoireHandlers(ipcMain)
+  registerEvolutionHandlers(ipcMain)
+  registerSelfWorkHandlers(ipcMain)
+  registerOsintHandlers(ipcMain)
+  registerStrategyHandlers(ipcMain)
+  registerBusinessHandlers(ipcMain)
+  registerPersonaHandlers(ipcMain)
+  registerJobsHandlers(ipcMain)
+  registerSetupHandlers(ipcMain)
   createWindow()
   startSleepMode(getMainWindow, createWindow)
+
+  // Jobs outlive the window, so the board is loaded here — not when the page opens — and
+  // anything that was mid-run when the app last closed is marked interrupted, not lost.
+  startJobs()
 
   // Hands-free "hey goga": start the always-on wake listener at launch when
   // enabled, so it works with the window open — not only when asleep in the tray.
@@ -256,6 +304,7 @@ app.on('will-quit', async (event) => {
   stopSleepMode()
   scheduler()?.stop()
   bookStudy()?.stop()
+  stopJobs()
   telegram?.stop()
   stopRemoteLink()
   stopFluxLink()

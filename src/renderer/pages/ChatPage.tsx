@@ -4,6 +4,8 @@ import type { ScreenshotResult } from '@shared/ipc'
 import { useGogaVisual } from '../context/GogaVisualContext'
 import { agentStateToVisual } from '../components/GogaCore/GogaVisualState'
 import GogaTriangleScene from '../components/GogaCore/GogaTriangleScene'
+import AgentStatusLine from '../components/AgentStatusLine'
+import WakeIndicator from '../components/WakeIndicator'
 import ChatComposer from '../components/ChatComposer'
 import type { ChatAttachment } from '../../shared/attachments'
 
@@ -18,11 +20,17 @@ export default function ChatPage() {
     { id: '0', role: 'system', content: 'Goga is ready. Type or speak to me.', timestamp: Date.now() }
   ])
   const [loading, setLoading]             = useState(false)
+  // A typed send is in flight. Kept separately from `loading`, because a stray
+  // agent:state from the previous turn can clear `loading` while the reply is
+  // still being written — and then the status line would claim to be Ready.
+  const [sending, setSending]             = useState(false)
   // Per-turn streaming text: turnId → accumulated tokens
   const [streamingTurns, setStreamingTurns] = useState<Map<string, string>>(new Map())
   const [agentState, setAgentState]       = useState<AgentState | null>(null)
   const [agentSteps, setAgentSteps]       = useState<AgentStep[]>([])
   const [showSteps, setShowSteps]         = useState(true)
+  // 0–1 agitation reported by the status line; the scene follows the same curve.
+  const [heat, setHeat]                   = useState(0)
   const bottomRef      = useRef<HTMLDivElement>(null)
   const stepsBottomRef = useRef<HTMLDivElement>(null)
   const { setVisualState } = useGogaVisual()
@@ -35,6 +43,8 @@ export default function ChatPage() {
   const sendInFlight = useRef(false)
 
   const inConversation = hasConversation(messages)
+  // A turn is in flight if either the page or the agent says so.
+  const busy = loading || sending
   const isAgentRunning = agentState?.status === 'running' || agentState?.status === 'waiting-approval'
 
   // Derive a single streaming text for display: the most-recently-active turn
@@ -153,6 +163,7 @@ export default function ChatPage() {
     window.goga.invoke('voice:stopSpeaking')
 
     setLoading(true)
+    setSending(true)
     setAgentSteps([])
     setStreamingTurns(new Map())
     setVisualState('thinking')
@@ -187,130 +198,142 @@ export default function ChatPage() {
       return false
     } finally {
       setLoading(false)
+      setSending(false)
       sendInFlight.current = false
     }
   }
 
-  const coreH = inConversation ? 180 : 500
-
   return (
-    <div style={S.page}>
+    // --heat is the status line's 0-1 agitation, handed to the backdrop so the
+    // scene can grow and warm while Goga works and settle back when it is idle.
+    <div className="g-chat" style={{ ['--heat' as string]: heat.toFixed(2) }}>
 
-      {/* Triangle */}
-      <div style={{ ...S.coreWrap, height: coreH, transition: 'height 0.6s cubic-bezier(0.4,0,0.2,1)' }}>
-        <GogaTriangleScene compact={inConversation} />
+      {/* Before a conversation the scene IS the page, full height behind the hero.
+          Once messages exist it moves down into the open space under them (the
+          .g-chat-stage below), because a strip behind the bubbles was mostly
+          covered by them and the animation had nothing visible to drive. What
+          stays up here then is only a warm wash that follows --heat. */}
+      <div className={`g-chat-backdrop${inConversation ? ' g-chat-backdrop--compact' : ''}`} aria-hidden="true">
+        {!inConversation && <GogaTriangleScene compact={false} heat={heat} showBadge={false} />}
       </div>
 
-      {/* Welcome */}
-      {!inConversation && (
-        <div style={S.greeting}>
-          <span style={S.greetName}>Goga</span>
-          <span style={S.greetSub}>Your local AI operator. Type or speak.</span>
-        </div>
-      )}
+      <div className="g-chat-column">
 
-      {/* Agent step panel */}
-      {(agentSteps.length > 0 || isAgentRunning) && agentState?.status !== 'error' && agentState?.status !== 'done' && (
-        <div style={S.agentPanel}>
-          <div style={S.agentHeader}>
-            <span style={{ fontWeight: 600, fontSize: 11, color: '#8b5cff' }}>
-              {agentState?.status === 'waiting-approval' ? '⏳ awaiting approval' : `⚡ ${agentState?.status ?? 'running'}`}
-              {agentState?.currentTool && <span style={{ color: '#554477', marginLeft: 6 }}>{agentState.currentTool}</span>}
-            </span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={() => setShowSteps(v => !v)} style={S.miniBtn}>{showSteps ? '▲' : '▼'}</button>
-              <button onClick={() => { window.goga.invoke('agent:stop'); setLoading(false) }} style={{ ...S.miniBtn, color: 'var(--danger)' }}>⏹</button>
-            </div>
+        {!inConversation && (
+          <div className="g-chat-hero">
+            <span className="g-chat-greet">Goga</span>
+            <span className="g-chat-sub">Your local AI operator. Type or speak.</span>
           </div>
-          {agentState?.pendingApproval && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: '1px solid #2a2040', fontSize: 12 }}>
-              <span style={{ flex: 1, color: 'var(--text)' }}>
-                Goga wants to run <code>{agentState.pendingApproval.tool}</code>: {agentState.pendingApproval.label}
+        )}
+
+        {/* Agent step panel */}
+        {(agentSteps.length > 0 || isAgentRunning) && agentState?.status !== 'error' && agentState?.status !== 'done' && (
+          <div className="g-steps">
+            <div className="g-steps-head">
+              <span style={{ fontWeight: 600, color: 'var(--accent-hover)' }}>
+                {agentState?.status === 'waiting-approval' ? '⏳ awaiting approval' : `⚡ ${agentState?.status ?? 'running'}`}
               </span>
-              <button onClick={() => window.goga.invoke('action:approve', agentState.pendingApproval!.id)} style={{ ...S.miniBtn, color: '#00ffcc' }}>Approve</button>
-              <button onClick={() => window.goga.invoke('action:reject', agentState.pendingApproval!.id)} style={{ ...S.miniBtn, color: 'var(--danger)' }}>Deny</button>
+              {agentState?.currentTool && <span className="g-mono" style={{ color: 'var(--text-faint)' }}>{agentState.currentTool}</span>}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                <button className="g-btn g-btn--ghost g-btn--sm" onClick={() => setShowSteps(v => !v)}>{showSteps ? '▲' : '▼'}</button>
+                <button className="g-btn g-btn--ghost g-btn--sm" style={{ color: 'var(--danger)' }} onClick={() => { window.goga.invoke('agent:stop'); setLoading(false) }}>⏹</button>
+              </div>
             </div>
-          )}
-          {showSteps && (
-            <div style={S.stepList}>
-              {agentSteps.map((step, i) => (
-                <div key={i} style={S.stepRow}>
-                  <span style={{ color: step.result.success ? '#00ffcc' : 'var(--danger)', width: 12, flexShrink: 0 }}>
-                    {step.result.success ? '✓' : '✗'}
-                  </span>
-                  <span style={{ color: '#8b5cff', width: 150, flexShrink: 0, fontSize: 10 }}>{step.tool}</span>
-                  <span style={{ color: '#554477', flex: 1, fontSize: 10 }}>{step.thought.slice(0, 90)}</span>
-                </div>
-              ))}
-              {isAgentRunning && (
-                <div style={{ ...S.stepRow, color: '#443355', fontStyle: 'italic', fontSize: 10 }}>
-                  <span style={{ width: 12 }}>⋯</span><span>thinking…</span>
-                </div>
-              )}
-              <div ref={stepsBottomRef} />
-            </div>
-          )}
+            {agentState?.pendingApproval && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-caption)' }}>
+                <span style={{ flex: 1 }}>
+                  Goga wants to run <code>{agentState.pendingApproval.tool}</code>: {agentState.pendingApproval.label}
+                </span>
+                <button className="g-btn g-btn--sm" style={{ color: 'var(--success)' }} onClick={() => window.goga.invoke('action:approve', agentState.pendingApproval!.id)}>Approve</button>
+                <button className="g-btn g-btn--sm" style={{ color: 'var(--danger)' }} onClick={() => window.goga.invoke('action:reject', agentState.pendingApproval!.id)}>Deny</button>
+              </div>
+            )}
+            {showSteps && (
+              <div className="g-steps-list">
+                {agentSteps.map((step, i) => (
+                  <div key={i} className="g-step-row">
+                    <span style={{ color: step.result.success ? 'var(--success)' : 'var(--danger)', width: 12, flexShrink: 0 }}>
+                      {step.result.success ? '✓' : '✗'}
+                    </span>
+                    <span className="g-step-tool">{step.tool}</span>
+                    <span className="g-step-thought">{step.thought.slice(0, 90)}</span>
+                  </div>
+                ))}
+                {isAgentRunning && (
+                  <div className="g-step-row" style={{ color: 'var(--text-faint)', fontStyle: 'italic' }}>
+                    <span style={{ width: 12 }}>⋯</span><span>thinking…</span>
+                  </div>
+                )}
+                <div ref={stepsBottomRef} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Messages */}
+        {inConversation && (
+          <div className="g-chat-messages">
+            {messages.filter(m => !(m.id === '0' && !inConversation)).map(m => (
+              <div key={m.id} className={`g-bubble g-bubble--${m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant'}`}>
+                <span className="g-bubble-role">{m.role}</span>
+                <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{m.content}</p>
+                {m.attachments?.map(a => <div key={a.id} style={{ marginTop: 10 }}>
+                  <span style={{ fontSize: 'var(--fs-caption)' }}>{a.name}{a.kind === 'video' ? ` · ${a.images.length} sampled frames (no audio)` : ''}</span>
+                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{a.images.map((image, i) => <figure key={i} style={{ margin: 0 }}><img src={image} alt={`${a.name}${a.kind === 'video' ? ` frame ${i + 1}` : ''}`} style={{ maxWidth: a.kind === 'video' ? 150 : 380, maxHeight: 240, width: '100%', borderRadius: 6 }} />{a.kind === 'video' && <figcaption style={{ fontSize: 10 }}>{a.sampledAtSeconds?.[i].toFixed(1)}s</figcaption>}</figure>)}</div>
+                </div>)}
+                {m.screenshot && <img src={`data:image/png;base64,${m.screenshot.base64}`} alt="Screenshot" style={{ display: 'block', marginTop: 10, maxWidth: '100%', borderRadius: 6, border: '1px solid var(--border)' }} />}
+              </div>
+            ))}
+            {busy && !isAgentRunning && activeStreamingText === '' && (
+              <div className="g-bubble g-bubble--assistant" style={{ color: 'var(--text-faint)' }}>
+                <span className="g-bubble-role">assistant</span>Thinking…
+              </div>
+            )}
+            {activeStreamingText !== '' && (
+              <div className="g-bubble g-bubble--assistant">
+                <span className="g-bubble-role">assistant</span>
+                <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                  {activeStreamingText}<span style={{ opacity: 0.5, animation: 'pulse 1s infinite' }}>▍</span>
+                </p>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        )}
+
+        {/* The open space under the conversation. The triangle lives here while a
+            talk is going on: same scene, same heat, same fixed camera framing, just
+            in room of its own instead of under the bubbles. */}
+        {inConversation && (
+          <div className="g-chat-stage" aria-hidden="true">
+            <GogaTriangleScene compact heat={heat} showBadge={false} />
+          </div>
+        )}
+
+        {/* Hands-free indicator — only shown while the wake word is really on */}
+        <WakeIndicator />
+
+        {/* Live status — what Goga is actually doing, from the agent loop's own state */}
+        <AgentStatusLine
+          agentState={agentState}
+          loading={busy}
+          streaming={activeStreamingText !== ''}
+          onHeat={setHeat}
+        />
+
+        {/* Composer — the primary control on the page */}
+        <div className="g-composer">
+          <ChatComposer
+            allowAttachments
+            onSend={sendText}
+            loading={loading}
+            isAgentRunning={isAgentRunning}
+          />
+          <div className="g-composer-hint">Enter to send · Shift+Enter for a new line · Ctrl+Shift+Esc stops everything</div>
         </div>
-      )}
-
-      {/* Messages */}
-      <div style={S.messages}>
-        {messages.filter(m => !(m.id === '0' && !inConversation)).map(m => (
-          <div key={m.id} style={{ ...S.bubble, ...(m.role === 'user' ? S.user : m.role === 'system' ? S.system : S.assistant) }}>
-            <span style={S.role}>{m.role}</span>
-            <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.content}</p>
-            {m.attachments?.map(a => <div key={a.id} style={{ marginTop: 10 }}>
-              <span style={{ fontSize: 11 }}>{a.name}{a.kind === 'video' ? ` · ${a.images.length} sampled frames (no audio)` : ''}</span>
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{a.images.map((image, i) => <figure key={i} style={{ margin: 0 }}><img src={image} alt={`${a.name}${a.kind === 'video' ? ` frame ${i + 1}` : ''}`} style={{ maxWidth: a.kind === 'video' ? 150 : 380, maxHeight: 240, width: '100%', borderRadius: 6 }} />{a.kind === 'video' && <figcaption style={{ fontSize: 10 }}>{a.sampledAtSeconds?.[i].toFixed(1)}s</figcaption>}</figure>)}</div>
-            </div>)}
-            {m.screenshot && <img src={`data:image/png;base64,${m.screenshot.base64}`} alt="Screenshot" style={S.screenshot} />}
-          </div>
-        ))}
-        {loading && !isAgentRunning && activeStreamingText === '' && (
-          <div style={{ ...S.bubble, ...S.assistant, color: '#554477' }}>
-            <span style={S.role}>assistant</span>Thinking…
-          </div>
-        )}
-        {activeStreamingText !== '' && (
-          <div style={{ ...S.bubble, ...S.assistant }}>
-            <span style={S.role}>assistant</span>
-            <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-              {activeStreamingText}<span style={{ opacity: 0.5, animation: 'pulse 1s infinite' }}>▍</span>
-            </p>
-          </div>
-        )}
-        <div ref={bottomRef} />
       </div>
-
-      {/* Composer — mic + input + send (shared with MissionMode) */}
-      <ChatComposer
-        allowAttachments
-        onSend={sendText}
-        loading={loading}
-        isAgentRunning={isAgentRunning}
-      />
 
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </div>
   )
-}
-
-const S: Record<string, React.CSSProperties> = {
-  page:        { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', background: '#06050e' },
-  coreWrap:    { flexShrink: 0, width: '100%', position: 'relative', overflow: 'hidden' },
-  greeting:    { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '10px 0 18px', flexShrink: 0 },
-  greetName:   { fontSize: 22, fontWeight: 700, color: '#b794ff', letterSpacing: 4 },
-  greetSub:    { fontSize: 12, color: '#443355', letterSpacing: 1 },
-  agentPanel:  { background: '#0a0816', borderBottom: '1px solid #1e1a30', flexShrink: 0 },
-  agentHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 16px' },
-  stepList:    { maxHeight: 110, overflowY: 'auto', padding: '2px 16px 6px' },
-  stepRow:     { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '2px 0' },
-  miniBtn:     { background: '#13101f', color: '#443355', padding: '2px 8px', fontSize: 11 },
-  messages:    { flex: 1, overflowY: 'auto', padding: '14px 24px', display: 'flex', flexDirection: 'column', gap: 10, background: '#07060d' },
-  bubble:      { maxWidth: 680, padding: '9px 13px', borderRadius: 8, lineHeight: 1.5 },
-  user:        { background: '#2d1580', color: '#e8d8ff', alignSelf: 'flex-end' },
-  assistant:   { background: '#0e0c18', border: '1px solid #1e1a30', alignSelf: 'flex-start', color: '#c8b8f0' },
-  system:      { background: 'transparent', border: '1px solid #1a1428', alignSelf: 'center', color: '#3d2d55', fontSize: 11 },
-  role:        { display: 'block', fontSize: 9, opacity: 0.45, marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.8 },
-  screenshot:  { display: 'block', marginTop: 10, maxWidth: '100%', borderRadius: 6, border: '1px solid #2a1f4a' },
 }

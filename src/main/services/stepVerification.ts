@@ -7,8 +7,21 @@ export const READ_ONLY_TOOLS = new Set([
   'computer.screenshot', 'computer.activeWindow', 'computer.windowList',
   'computer.uiElements', 'filesystem.read', 'filesystem.list',
   'filesystem.search', 'process.list', 'web.search', 'web.fetch',
+  'research.search', 'research.summarize', 'research.brief', 'computer.readScreenText',
   'memory.search', 'browser.read', 'browser.screenshot',
+  // The Firefox-backed browser tools: reading a page, listing tabs and finding an
+  // element change nothing, and their result IS the evidence.
+  'browser.readPage', 'browser.listTabs', 'browser.find', 'browser.recallSite',
+  'browser.learnSite', 'browser.waitForText',
+  // Code-work reads.
+  'selfwork.list', 'selfwork.read', 'selfwork.search', 'selfwork.state',
+  'selfwork.proposePatch', 'selfwork.proposeWrite', 'selfwork.check',
   'vision.analyze', 'vision.findElement',
+  // Broker reads, scope checks, datasheet lookups and the learning layer change nothing.
+  'broker.account', 'broker.bars', 'broker.audit',
+  'security.scope', 'security.checkTarget', 'security.findings', 'security.learn', 'security.audit', 'security.reflectionCheck',
+  'ee.powerBudget', 'ee.electrodeImpedance', 'ee.filterResponse', 'ee.findComponent', 'ee.componentDetail', 'ee.reviewDesign',
+  'evolution.status', 'evolution.learning', 'evolution.skills',
 ])
 
 function host(url: unknown): string {

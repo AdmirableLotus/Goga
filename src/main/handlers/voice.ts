@@ -37,6 +37,12 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
     getWindow()?.webContents.send('voice:status', { status: 'listening' })
   })
 
+  // The honest state of the always-on listener, for the Settings toggle and the
+  // Chat indicator: off / starting / listening / request / error.
+  voice.on('wake:status', (status) => {
+    getWindow()?.webContents.send('voice:wakeStatus', status)
+  })
+
   voice.on('amplitude', (value: number) => {
     getWindow()?.webContents.send('voice:amplitude', { value })
   })
@@ -210,11 +216,32 @@ export function registerVoiceHandlers(ipcMain: IpcMain, getWindow: () => Browser
   })
 
   ipcMain.handle('voice:startWakeLoop', async () => {
-    voice.startWakeLoop()
+    // The click IS the request: record it before starting, so the listener does
+    // not refuse itself. If the microphone is missing or blocked, startWakeLoop
+    // turns the setting back off and the returned status says why.
+    //
+    // autoSpeakResponses goes on with it. "Hey goga" is a request to be answered
+    // out loud; with that setting off the reply would be written to the chat and
+    // never spoken, which is the one thing the user asked for. It is a normal
+    // setting and can be turned back off in Settings.
+    const settings = SettingsService.getInstance()
+    settings.set({ voiceEnabled: true, wakeWordEnabled: true, autoSpeakResponses: true })
+    // Never reported as listening unless the probe and the engine both say so.
+    await voice.startWakeLoop()
+    return voice.getWakeStatus()
   })
 
   ipcMain.handle('voice:stopWakeLoop', async () => {
     voice.stopWakeLoop()
+    return voice.getWakeStatus()
+  })
+
+  ipcMain.handle('voice:wakeStatus', async () => {
+    return voice.getWakeStatus()
+  })
+
+  ipcMain.handle('voice:probeMic', async () => {
+    return voice.probeWakeMicrophone()
   })
 
   ipcMain.handle('voice:status', async () => {

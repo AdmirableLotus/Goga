@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import type { MemoryEntry } from '@shared/types'
 import type { GogaFact } from '@shared/types'
+import { PageHeader, Card, Field, EmptyState, Chip } from '../components/ui'
 
-const CATEGORY_COLOR: Record<string, string> = {
-  about_user: 'var(--accent)',
-  preference: 'var(--success)',
-  learned: 'var(--warn)',
-  event: 'var(--text-muted)'
+const CATEGORY_TONE: Record<string, 'accent' | 'ok' | 'warn' | undefined> = {
+  about_user: 'accent',
+  preference: 'ok',
+  learned: 'warn',
+  event: undefined,
 }
 
 export default function MemoryPage() {
@@ -34,84 +35,72 @@ export default function MemoryPage() {
   const clearHistory = async () => { await window.goga.invoke('brain:clearHistory'); alert('Conversation history cleared.') }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <button onClick={() => setTab('facts')} style={{ ...styles.tabBtn, ...(tab === 'facts' ? styles.tabActive : {}) }}>
-            🧠 Goga's Memory ({facts.length})
-          </button>
-          <button onClick={() => setTab('store')} style={{ ...styles.tabBtn, ...(tab === 'store' ? styles.tabActive : {}) }}>
-            🗄️ Key-Value Store ({entries.length})
-          </button>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={loadAll} style={styles.btn}>Refresh</button>
-          {tab === 'facts' && <button onClick={clearHistory} style={{ ...styles.btn, color: 'var(--warn)' }}>Clear History</button>}
-        </div>
-      </div>
+    <div className="g-page">
+      <div className="g-page-inner">
 
-      {tab === 'facts' && (
-        <div style={styles.list}>
-          {facts.length === 0 && (
-            <div style={styles.empty}>
-              <p style={{ color: 'var(--text-muted)' }}>Goga hasn't learned anything yet.</p>
-              <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>
-                Start chatting — he'll automatically remember things you tell him about yourself, your preferences, and what he learns from books.
-              </p>
+        <PageHeader
+          title="Memory"
+          purpose="What Goga has learned about you, and the key-value store he keeps it in."
+          actions={<>
+            <div className="g-seg" role="group" aria-label="Memory view">
+              <button aria-pressed={tab === 'facts'} onClick={() => setTab('facts')}>Learned ({facts.length})</button>
+              <button aria-pressed={tab === 'store'} onClick={() => setTab('store')}>Store ({entries.length})</button>
             </div>
-          )}
-          {facts.map(f => (
-            <div key={f.id} style={styles.factRow}>
-              <span style={{ ...styles.badge, background: CATEGORY_COLOR[f.category] ?? 'var(--surface2)' }}>
-                {f.category.replace('_', ' ')}
-              </span>
-              <span style={{ flex: 1, fontSize: 13 }}>{f.content}</span>
-              <span style={{ color: 'var(--text-muted)', fontSize: 11, flexShrink: 0 }}>
-                {f.source} · {new Date(f.createdAt).toLocaleDateString()}
-              </span>
-              <button onClick={() => delFact(f.id)} style={styles.delBtn}>✕</button>
-            </div>
-          ))}
-        </div>
-      )}
+            <button className="g-btn g-btn--sm" onClick={loadAll}>Refresh</button>
+            {tab === 'facts' && <button className="g-btn g-btn--sm" style={{ color: 'var(--warn)' }} onClick={clearHistory}>Clear history</button>}
+          </>}
+        />
 
-      {tab === 'store' && (
-        <>
-          <div style={styles.form}>
-            <input value={key} onChange={e => setKey(e.target.value)} placeholder="Key" style={{ width: 180 }} />
-            <input value={value} onChange={e => setValue(e.target.value)} placeholder="Value (JSON or string)" style={{ flex: 1 }} />
-            <button onClick={save} style={styles.saveBtn}>Set</button>
-          </div>
-          <div style={styles.list}>
-            {entries.length === 0 && <p style={{ color: 'var(--text-muted)', padding: 20 }}>Store is empty.</p>}
-            {entries.map(e => (
-              <div key={e.id} style={styles.row}>
-                <span style={{ fontWeight: 600, width: 180, flexShrink: 0 }}>{e.key}</span>
-                <span style={{ flex: 1, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {JSON.stringify(e.value)}
-                </span>
-                <button onClick={() => delEntry(e.key)} style={styles.delBtn}>✕</button>
+        {tab === 'facts' && (
+          facts.length === 0 ? (
+            <EmptyState
+              icon="🧠"
+              title="Goga hasn't learned anything yet"
+              body="Start chatting — he remembers things you tell him about yourself, your preferences, and what he learns from books."
+            />
+          ) : (
+            <Card title={`${facts.length} fact${facts.length === 1 ? '' : 's'}`}>
+              {facts.map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                  <Chip tone={CATEGORY_TONE[f.category]}>{f.category.replace('_', ' ')}</Chip>
+                  <span style={{ flex: 1, fontSize: 'var(--fs-body)' }}>{f.content}</span>
+                  <span className="g-caption g-faint" style={{ flexShrink: 0 }}>{f.source} · {new Date(f.createdAt).toLocaleDateString()}</span>
+                  <button className="g-btn g-btn--ghost g-btn--sm" onClick={() => delFact(f.id)} aria-label="Delete fact">✕</button>
+                </div>
+              ))}
+            </Card>
+          )
+        )}
+
+        {tab === 'store' && (
+          <>
+            <Card title="Set a value" sub="JSON is parsed; anything else is stored as a string">
+              <div className="g-row">
+                <Field label="Key"><input className="g-input g-input--sm" value={key} onChange={e => setKey(e.target.value)} placeholder="key" /></Field>
+                <Field label="Value"><input className="g-input g-input--lg" value={value} onChange={e => setValue(e.target.value)} placeholder='{"any":"JSON"} or plain text' /></Field>
+                <button className="g-btn g-btn--primary" onClick={save} disabled={!key.trim()}>Set</button>
               </div>
-            ))}
-          </div>
-        </>
-      )}
+            </Card>
+
+            {entries.length === 0 ? (
+              <EmptyState icon="🗄️" title="Store is empty" body="Nothing has been written to the key-value store yet. Set a value above, or let Goga write one while he works." />
+            ) : (
+              <Card title={`${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`}>
+                {entries.map(e => (
+                  <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                    <span className="g-mono" style={{ width: 200, flexShrink: 0, fontWeight: 600 }}>{e.key}</span>
+                    <span className="g-caption" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {JSON.stringify(e.value)}
+                    </span>
+                    <button className="g-btn g-btn--ghost g-btn--sm" onClick={() => delEntry(e.key)} aria-label={`Delete ${e.key}`}>✕</button>
+                  </div>
+                ))}
+              </Card>
+            )}
+          </>
+        )}
+
+      </div>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' },
-  toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
-  tabBtn: { background: 'transparent', color: 'var(--text-muted)', padding: '5px 12px', borderRadius: 'var(--radius)' },
-  tabActive: { background: 'var(--surface2)', color: 'var(--text)' },
-  btn: { background: 'var(--surface2)', color: 'var(--text)' },
-  form: { display: 'flex', gap: 8, padding: '12px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
-  saveBtn: { background: 'var(--accent)', color: '#fff', fontWeight: 600 },
-  list: { flex: 1, overflowY: 'auto' },
-  empty: { padding: 32, textAlign: 'center' },
-  factRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '9px 24px', borderBottom: '1px solid var(--border)', fontSize: 13 },
-  badge: { fontSize: 10, padding: '2px 7px', borderRadius: 10, color: '#fff', flexShrink: 0, textTransform: 'uppercase', letterSpacing: 0.5 },
-  row: { display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid var(--border)' },
-  delBtn: { background: 'transparent', color: 'var(--text-muted)', padding: '3px 6px', fontSize: 12, flexShrink: 0 }
 }

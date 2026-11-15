@@ -587,6 +587,48 @@ reg.register({
   return { success: true, data: r }
 })
 
+reg.register({
+  name: 'computer.readScreenText',
+  description:
+    'Read a rectangle of the screen as plain text using Windows OCR — no vision model, no network. ' +
+    'Give the region in logical screen pixels (the same space computer.click uses); omit it to read the whole primary screen. ' +
+    'Returns the recognised text, its lines, and the region that was read. Use this instead of vision.analyze when you need exact wording, ' +
+    'numbers, error messages or table values rather than a description of the screen.',
+  parameters: {
+    type: 'object',
+    properties: {
+      x:      { type: 'number', description: 'Left edge in logical screen pixels. Default: 0.' },
+      y:      { type: 'number', description: 'Top edge in logical screen pixels. Default: 0.' },
+      width:  { type: 'number', description: 'Region width in logical pixels. Default: the primary screen width.' },
+      height: { type: 'number', description: 'Region height in logical pixels. Default: the primary screen height.' }
+    }
+  },
+  riskLevel: 'low', reversible: true, category: 'computer'
+}, async (p) => {
+  let region = {
+    x: p.x as number | undefined,
+    y: p.y as number | undefined,
+    width: p.width as number | undefined,
+    height: p.height as number | undefined
+  }
+  // No region given: read the primary display, whose bounds come from the same monitor enumeration
+  // the click coordinates use, so the default region lines up with what the user sees.
+  if (region.width === undefined || region.height === undefined) {
+    const monitors = await desktop.listMonitors()
+    const primary = monitors.monitors.find(m => m.primary) ?? monitors.monitors[0]
+    if (primary) {
+      region = {
+        x: region.x ?? primary.bounds.x,
+        y: region.y ?? primary.bounds.y,
+        width: region.width ?? primary.bounds.width,
+        height: region.height ?? primary.bounds.height
+      }
+    }
+  }
+  const r = await desktop.readScreenText(region)
+  return { success: true, data: r }
+})
+
 export function registerComputerTools() {
   // Side-effect: all registrations above run on import
   return ToolRegistry.getInstance()

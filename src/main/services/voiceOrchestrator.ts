@@ -29,6 +29,10 @@ import { SentenceBuffer } from './speech/sentenceBuffer'
 import { isConfirmation } from './agentRouting'
 import { SettingsService } from './settings'
 import { LogService } from './logs'
+import {
+  DEFAULT_WAKE_PHRASE, WakeDetector, acceptWakeHit, probeMicrophone, wakePhrases,
+  type WakeStatus,
+} from './wakeWord'
 
 export type VoiceStatus =
   | 'idle'
@@ -99,6 +103,21 @@ export class VoiceOrchestrator extends EventEmitter {
   private wakeLoopActive = false
   private approvalPending = false
   private abortWake = false
+
+  // ── Wake word ─────────────────────────────────────────────────────────────
+  // The always-on part is a grammar-limited detector that only ever reports the
+  // wake phrase. Full dictation opens only after the wake word fires, and closes
+  // again when the conversation window ends, so the microphone costs nothing
+  // while Goga is idle.
+  private wakeDetector: WakeDetector | null = null
+  private dictationRunning = false
+  private wakeState: WakeStatus = {
+    enabled: false,
+    state: 'off',
+    message: 'Wake word is off.',
+    phrase: DEFAULT_WAKE_PHRASE,
+    micReady: false,
+  }
 
   // ── Conversation session ──────────────────────────────────────────────────
   // After wake word or any interaction, stay in active-conversation mode for
@@ -337,6 +356,17 @@ export class VoiceOrchestrator extends EventEmitter {
     this.emit('status', s)
   }
 
+  /**
+   * The status to fall back to when nothing else is happening. During a
+   * conversation the microphone is open for dictation, so it is 'listening';
+   * otherwise only the cheap wake grammar is running.
+   */
+  private passiveStatus(): VoiceStatus {
+    if (this.conversationActive && this.dictationRunning) return 'listening'
+    if (this.wakeLoopActive) return 'wake_listening'
+    return 'idle'
+  }
+
   // ── Conversation session ──────────────────────────────────────────────────
 
   private activateConversation() {
@@ -351,43 +381,184 @@ export class VoiceOrchestrator extends EventEmitter {
     this.conversationTimer = setTimeout(() => {
       this.conversationActive = false
       this.conversationTimer = null
+      // Drop dictation and the mic with it; only the cheap grammar stays.
+      this.stopDictation()
+      this.clearSubmitTimer()
+      this.pendingSpeech = ''
+      this.userSpeaking = false
       this.emit('conversation:active', false)
       this.log.info('VoiceOrchestrator: conversation window expired, returning to passive mode')
+      if (this.wakeLoopActive && !this.abortWake) this.startDetector(this.wakePhrase())
     }, secs * 1000)
   }
 
   // ── Wake word loop (continuous) ───────────────────────────────────────────
 
+  /** The phrase the user configured, with a safe fallback. */
+  private wakePhrase(): string {
+    return SettingsService.getInstance().get().wakePhrase?.trim() || DEFAULT_WAKE_PHRASE
+  }
+
+  /** What the Settings toggle and the Chat indicator show. Never a guess. */
+  getWakeStatus(): WakeStatus {
+    return { ...this.wakeState }
+  }
+
+  private setWakeState(patch: Partial<WakeStatus>) {
+    this.wakeState = { ...this.wakeState, ...patch }
+    this.emit('wake:status', this.getWakeStatus())
+  }
+
+  /**
+   * Start hands-free listening: probe the microphone, then open the wake grammar.
+   * If there is no microphone or Windows will not open it, the setting is turned
+   * back off and the reason is shown — Goga never claims to be listening.
+   */
   async startWakeLoop(): Promise<void> {
     if (this.wakeLoopActive) return
     const settings = SettingsService.getInstance().get()
-    if (!settings.voiceEnabled) return
+    const phrase = this.wakePhrase()
+    if (!settings.voiceEnabled) {
+      this.setWakeState({ enabled: false, state: 'off', message: 'Voice is off, so the wake word cannot listen.', phrase })
+      return
+    }
+    if (!settings.wakeWordEnabled) {
+      this.setWakeState({ enabled: false, state: 'off', message: 'Wake word is off.', phrase })
+      return
+    }
+
     this.wakeLoopActive = true
     this.abortWake = false
-    this.setStatus('wake_listening')
+    this.setWakeState({ enabled: true, state: 'starting', message: 'Checking the microphone…', phrase, micReady: false })
 
-    // Wait for the authoritative STT selection before touching any provider,
-    // so we never start a recognizer mid-probe.
-    await this.ensureSttSelected()
+    const probe = await probeMicrophone()
     if (!this.wakeLoopActive || this.abortWake) return
 
-    this.log.info(`VoiceOrchestrator: wake loop started (continuous, provider=${this.stt.name})`)
+    if (!probe.ok) {
+      this.wakeLoopActive = false
+      this.log.warn(`VoiceOrchestrator: wake word not started — ${probe.message}`)
+      this.setWakeState({ enabled: false, state: 'error', message: probe.message, phrase, micReady: false })
+      if (this.status === 'wake_listening') this.setStatus('idle')
+      // Stay off rather than claim to be listening.
+      try { SettingsService.getInstance().set({ wakeWordEnabled: false }) } catch { /* settings write failed; the state above already says off */ }
+      return
+    }
 
-    // Use continuous recognition — no repeated PS startup cost
+    // A microphone that opens is not the same as a request Goga can hear.
+    const sttProblem = this.sttUnavailableReason()
+    if (sttProblem) {
+      this.wakeLoopActive = false
+      this.log.warn(`VoiceOrchestrator: wake word not started — ${sttProblem}`)
+      this.setWakeState({ enabled: false, state: 'error', message: sttProblem, phrase, micReady: true })
+      if (this.status === 'wake_listening') this.setStatus('idle')
+      try { SettingsService.getInstance().set({ wakeWordEnabled: false }) } catch { /* the state above already says off */ }
+      return
+    }
+
+    this.setWakeState({ micReady: true })
+    this.setStatus('wake_listening')
+    this.startDetector(phrase)
+  }
+
+  /** Open the wake grammar. One recogniser owns the microphone at a time. */
+  private startDetector(phrase: string) {
+    this.stopDetector()
+    const phrases = wakePhrases(phrase)
+    const detector = new WakeDetector(phrases, {
+      onReady: () => {
+        if (!this.wakeLoopActive || this.abortWake) return
+        this.setStatus('wake_listening')
+        this.setWakeState({
+          enabled: true,
+          state: 'listening',
+          message: `Listening for "${phrase}".`,
+          phrase,
+          micReady: true,
+        })
+        this.log.info(`VoiceOrchestrator: wake listener started — local grammar, ${phrases.length} phrases (${phrases.slice(0, 4).join(', ')})`)
+      },
+      onWake: (text, confidence) => {
+        if (!this.abortWake) this.onWakeHeard(text, confidence)
+      },
+      onError: message => this.onDetectorFailure(message),
+    })
+    this.wakeDetector = detector
+    detector.start()
+  }
+
+  private stopDetector() {
+    if (this.wakeDetector) {
+      try { this.wakeDetector.stop() } catch { /* already gone */ }
+      this.wakeDetector = null
+    }
+  }
+
+  /** The detector could not start or died. Say so plainly; do not keep claiming to listen. */
+  private onDetectorFailure(message: string) {
+    this.stopDetector()
+    this.wakeLoopActive = false
+    if (this.status === 'wake_listening') this.setStatus('idle')
+    this.log.warn(`VoiceOrchestrator: wake listener stopped — ${message}`)
+    this.setWakeState({ enabled: false, state: 'error', message, micReady: false })
+    try { SettingsService.getInstance().set({ wakeWordEnabled: false }) } catch { /* the state above already says off */ }
+  }
+
+  /**
+   * A wake phrase was heard. Swap the grammar for real dictation, open the
+   * conversation window, and send whatever followed the wake word.
+   */
+  private onWakeHeard(text: string, confidence?: number) {
+    const phrase = this.wakePhrase()
+    if (!acceptWakeHit({ text, confidence }, phrase)) return
+    const rest = afterWakeWord(text, phrase)
+    if (rest === null) return
+
+    this.log.info(`VoiceOrchestrator: wake word heard (${confidence === undefined ? 'n/a' : confidence.toFixed(2)}): "${text.slice(0, 60)}"`)
+    this.setWakeState({ state: 'request', message: 'Heard you — listening for the request.', micReady: true })
+    this.setStatus('listening')
+    this.emit('wake:detected')
+
+    this.activateConversation()
+    void this.startConversationDictation()
+    if (rest.trim().length > 2) this.queueSpeech(rest)
+  }
+
+  /** Full dictation, only for the length of a conversation. */
+  private async startConversationDictation(): Promise<void> {
+    if (this.dictationRunning) return
+    this.dictationRunning = true
+    // Free the microphone first: two recognisers on one device is a conflict.
+    this.stopDetector()
+
+    await this.ensureSttSelected()
+    if (!this.conversationActive || this.abortWake) { this.dictationRunning = false; return }
+
+    this.log.info(`VoiceOrchestrator: dictation listening (provider=${this.stt.name})`)
     this.stt.startContinuous(
-      (result) => { if (!this.abortWake) this.onContinuousResult(result) },
+      result => { if (!this.abortWake) this.onContinuousResult(result) },
       () => {
-        // Engine died — restart after brief pause if still active
-        if (this.wakeLoopActive && !this.abortWake) {
-          setTimeout(() => { if (this.wakeLoopActive) this.startWakeLoop() }, 1000)
-        }
+        if (!this.dictationRunning) return
+        this.dictationRunning = false
+        setTimeout(() => {
+          if (this.conversationActive && this.wakeLoopActive && !this.abortWake) void this.startConversationDictation()
+        }, 1000)
       }
     )
+  }
+
+  private stopDictation() {
+    if (!this.dictationRunning) return
+    this.dictationRunning = false
+    this.log.info('VoiceOrchestrator: dictation stopped')
+    this.stt.stopContinuous()
+    this.stt.abort()
   }
 
   stopWakeLoop() {
     this.abortWake = true
     this.wakeLoopActive = false
+    this.stopDetector()
+    this.dictationRunning = false
     this.stt.stopContinuous()
     this.stt.abort()
     if (this.status === 'wake_listening') this.setStatus('idle')
@@ -396,7 +567,44 @@ export class VoiceOrchestrator extends EventEmitter {
     this.clearSubmitTimer()
     this.pendingSpeech = ''
     this.userSpeaking = false
+    // Keep an error message on screen; only a deliberate off reads as "off".
+    if (this.wakeState.state !== 'error') {
+      this.setWakeState({ enabled: false, state: 'off', message: 'Wake word is off.', phrase: this.wakePhrase() })
+    } else {
+      this.setWakeState({ enabled: false })
+    }
     this.log.info('VoiceOrchestrator: wake loop stopped')
+  }
+
+  /**
+   * Can the dictation half of hands-free actually run?
+   *
+   * The wake grammar and the dictation that follows it are two different engines.
+   * A microphone that opens is not enough: if the user selected Whisper and its
+   * model is not on disk, the wake word would fire and then nothing would be
+   * heard. This answers that question before the toggle is allowed to say
+   * "listening", and returns the sentence to show when it cannot.
+   */
+  private sttUnavailableReason(): string | null {
+    const settings = SettingsService.getInstance().get()
+    if ((settings.sttProvider ?? 'windows') !== 'whisper') return null
+    if (!WhisperSttProvider.scriptExists()) {
+      return 'The Whisper speech model is not installed, so Goga could not hear the request after the wake word. The wake word is off.'
+    }
+    const model = (settings as { whisperModel?: WhisperModel }).whisperModel ?? 'base'
+    const device = (settings as { whisperDevice?: WhisperDevice }).whisperDevice ?? 'cpu'
+    const preflight = WhisperSttProvider.preflight(model, device)
+    if (!preflight.cached) {
+      return `The Whisper "${model}" model has not been downloaded yet, so Goga could not hear the request after the wake word. The wake word is off.`
+    }
+    return null
+  }
+
+  /** An explicit "check the microphone" from Settings. Never starts anything. */
+  async probeWakeMicrophone() {
+    const probe = await probeMicrophone()
+    this.setWakeState({ micReady: probe.ok })
+    return probe
   }
 
   private onContinuousResult(result: SpeechRecognitionResult | string) {
@@ -518,6 +726,10 @@ export class VoiceOrchestrator extends EventEmitter {
       await new Promise(r => setTimeout(r, VoiceOrchestrator.OUTPUT_DRAIN_MS))
     }
 
+    // One recogniser owns the microphone: close the wake grammar for the press.
+    const hadDetector = this.wakeDetector !== null
+    this.stopDetector()
+
     // Wait for the authoritative STT selection before invoking any provider,
     // so an immediate mic click during the probe uses the correct recognizer
     // (never a transient/broken Whisper).
@@ -526,7 +738,7 @@ export class VoiceOrchestrator extends EventEmitter {
     // If any playback somehow resumed, do not open the mic.
     if (this.tts.isPlaying?.()) {
       this.log.info('VoiceOrchestrator: listenOnce aborted — TTS still playing')
-      this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      this.setStatus(this.passiveStatus())
       return
     }
 
@@ -535,24 +747,32 @@ export class VoiceOrchestrator extends EventEmitter {
     try {
       const result = await this.stt.recognize(12000)
       const transcript = result.transcript?.trim() ?? ''
-      if (!transcript) { this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle'); return }
+      if (!transcript) { this.setStatus(this.passiveStatus()); return }
       // Reject self-echo by BOTH the timed window and the timing-independent
       // recent-spoken-text overlap check.
       if (this.isSelfTts(transcript) || this.isRecentSpokenEcho(transcript)) {
         this.log.info(`VoiceOrchestrator: rejected self-echo transcript: "${transcript.slice(0, 48)}"`)
-        this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+        this.setStatus(this.passiveStatus())
         return
       }
       this.activateConversation()
       await this.handleTranscript(transcript)
     } catch {
-      this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      this.setStatus(this.passiveStatus())
+    } finally {
+      // Hand the microphone back to the wake grammar once the press is over.
+      if (hadDetector && this.wakeLoopActive && !this.abortWake && !this.conversationActive) {
+        this.startDetector(this.wakePhrase())
+      }
     }
   }
 
   stopListening() {
     this.stt.abort()
-    this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+    this.setStatus(this.passiveStatus())
+    if (this.wakeLoopActive && !this.abortWake && !this.conversationActive && !this.wakeDetector) {
+      this.startDetector(this.wakePhrase())
+    }
   }
 
   // ── Self-TTS suppression ──────────────────────────────────────────────────
@@ -647,11 +867,11 @@ export class VoiceOrchestrator extends EventEmitter {
     this.resetConversationTimer()
     this.log.info(`VoiceOrchestrator: transcript: "${text.slice(0, 80)}"`)
 
-    // Stop word — cancel speech + mission
+    // Stop word — cut speech immediately, then let the mission layer stop too.
     if (STOP_WORDS.test(text.trim())) {
-      this.tts.stop()
+      this.stopSpeaking()
       this.emit('transcript', text)
-      this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      this.setStatus(this.passiveStatus())
       return
     }
 
@@ -659,12 +879,12 @@ export class VoiceOrchestrator extends EventEmitter {
     if (this.approvalPending) {
       if (APPROVE_WORDS.test(text.trim()) || isConfirmation(text.trim())) {
         this.emit('voice:approve', true)
-        this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+        this.setStatus(this.passiveStatus())
         return
       }
       if (REJECT_WORDS.test(text.trim())) {
         this.emit('voice:approve', false)
-        this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+        this.setStatus(this.passiveStatus())
         return
       }
     }
@@ -677,7 +897,7 @@ export class VoiceOrchestrator extends EventEmitter {
 
     // Normal transcript → chat pipeline
     this.emit('transcript', text)
-    this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+    this.setStatus(this.passiveStatus())
   }
 
   // ── TTS ───────────────────────────────────────────────────────────────────
@@ -765,7 +985,7 @@ export class VoiceOrchestrator extends EventEmitter {
       provider.onPlaybackStart = undefined
       this.emit('amplitude', 0)
       this.clearTtsSuppression()
-      this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      this.setStatus(this.passiveStatus())
       this.log.info('VoiceOrchestrator: speak completed, status → idle')
     }
   }
@@ -839,7 +1059,7 @@ export class VoiceOrchestrator extends EventEmitter {
           provider.onPlaybackStart = undefined
           this.emit('amplitude', 0)
           this.clearTtsSuppression()
-          this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+          this.setStatus(this.passiveStatus())
           this.log.info('VoiceOrchestrator: speak completed, status → idle')
         }
       }
@@ -875,7 +1095,7 @@ export class VoiceOrchestrator extends EventEmitter {
     this.tts.stop()
     this.fallbackTts.stop()
     this.clearTtsSuppression()
-    this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+    this.setStatus(this.passiveStatus())
     this.log.info('VoiceOrchestrator: stopSpeaking called')
   }
 
@@ -923,7 +1143,7 @@ export class VoiceOrchestrator extends EventEmitter {
       provider.onPlaybackStart = undefined
       this.emit('amplitude', 0)
       this.clearTtsSuppression()
-      if (this.status === 'speaking') this.setStatus(this.wakeLoopActive ? 'wake_listening' : 'idle')
+      if (this.status === 'speaking') this.setStatus(this.passiveStatus())
     }
   }
 

@@ -6,7 +6,17 @@ import { useGogaVisual } from '../../context/GogaVisualContext'
 import type { GogaVisualState } from './GogaVisualState'
 import { VISUAL_STATE_LABEL, VISUAL_STATE_COLOR } from './GogaVisualState'
 
-export default function GogaTriangleScene({ compact = false }: { compact?: boolean }) {
+export default function GogaTriangleScene({
+  compact = false,
+  heat = 0,
+  showBadge = true,
+}: {
+  compact?: boolean
+  /** 0-1 agitation, driven by the Chat status line. */
+  heat?: number
+  /** The Chat page shows its own status line, so it turns the in-scene badge off. */
+  showBadge?: boolean
+}) {
   const canvasRef  = useRef<HTMLCanvasElement>(null)
   const videoRef   = useRef<HTMLVideoElement>(null)
   const gestureRef = useRef<GogaGestureController | null>(null)
@@ -17,7 +27,8 @@ export default function GogaTriangleScene({ compact = false }: { compact?: boole
   const { rotateBy, scaleBy } = useGogaScene(
     canvasRef as React.RefObject<HTMLCanvasElement>,
     visualState,
-    audioAmplitude
+    audioAmplitude,
+    heat
   )
 
   useEffect(() => {
@@ -56,7 +67,7 @@ export default function GogaTriangleScene({ compact = false }: { compact?: boole
     <div style={styles.wrap}>
       <canvas ref={canvasRef} style={{ ...styles.canvas, cursor: 'pointer' }} onClick={handleCoreClick} />
 
-      {!compact && (
+      {!compact && showBadge && (
         <div style={{ ...styles.badge, color, borderColor: color + '55' }}>
           <span style={{ ...styles.dot, background: color }} />
           {VISUAL_STATE_LABEL[visualState]}

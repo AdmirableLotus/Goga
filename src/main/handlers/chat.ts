@@ -5,7 +5,19 @@ import type { ChatMessage } from '../../shared/types'
 import { nanoid } from '../utils/nanoid'
 import { validateAttachments } from '../../shared/attachments'
 
-const orchestrator = new OrchestratorService()
+/**
+ * Built on first use, not at import time.
+ *
+ * `agentLoop` imports `../index` for the window handle, and `index` imports this handler, so a
+ * module-scope instance here would be constructed while `AgentLoop` is still half-loaded — the
+ * circular import then throws on `AgentLoop.getInstance()`. Creating it when the first message
+ * arrives means the cycle is already resolved.
+ */
+let orchestratorInstance: OrchestratorService | null = null
+function orchestrator(): OrchestratorService {
+  if (!orchestratorInstance) orchestratorInstance = new OrchestratorService()
+  return orchestratorInstance
+}
 
 export function registerChatHandlers(ipcMain: IpcMain) {
   ipcMain.handle('chat:send', async (event, message: string, attachments?: unknown): Promise<ChatMessage> => {
@@ -29,7 +41,7 @@ export function registerChatHandlers(ipcMain: IpcMain) {
     }
     let reply: ChatMessage
     try {
-      reply = await orchestrator.process(userMsg, onToken)
+      reply = await orchestrator().process(userMsg, onToken)
     } catch (err) {
       speech.cancel()
       throw err

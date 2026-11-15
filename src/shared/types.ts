@@ -131,7 +131,7 @@ export interface ToolDefinition {
   // true = action can be undone (click, type, navigate); false = destructive (delete, format)
   reversible: boolean
   // categories used for scope checking in security mode
-  category: 'computer' | 'browser' | 'shell' | 'filesystem' | 'process' | 'vision' | 'memory' | 'web' | 'android' | 'system'
+  category: 'computer' | 'browser' | 'shell' | 'filesystem' | 'process' | 'vision' | 'memory' | 'web' | 'android' | 'system' | 'selfwork'
 }
 
 // One step the agent took during a task
@@ -261,6 +261,16 @@ export interface AppSettings {
   tradingMaxPositionPct: number
   tradingRequireStop: boolean
   tradingDailyLossPct: number
+  // Alpaca broker limits, enforced in code on every order (paper and live)
+  brokerMaxPositionPct: number
+  brokerMaxOpenPositions: number
+  brokerMaxOrderNotional: number
+  brokerDailyLossPct: number
+  // Bug bounty: the workspace whose imported scope governs any request
+  securityWorkspaceId: string
+  // Electrical engineering: folder holding the user's datasheets, for grounded lookups
+  eeDatasheetDir: string
+  jobConcurrency: number
 }
 
 // ── Phase D: Mission types ───────────────────────────────────────────────────
@@ -404,5 +414,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   coderModelName: 'qwen2.5-coder:14b',
   tradingMaxPositionPct: 10,
   tradingRequireStop: true,
-  tradingDailyLossPct: 3
+  tradingDailyLossPct: 3,
+  brokerMaxPositionPct: 10,
+  brokerMaxOpenPositions: 5,
+  brokerMaxOrderNotional: 2000,
+  brokerDailyLossPct: 3,
+  securityWorkspaceId: '',
+  eeDatasheetDir: '',
+  jobConcurrency: 2
 }

@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { AppSettings } from '@shared/types'
-import { DEFAULT_SETTINGS, MAX_PERSONALITY_CHARS } from '@shared/types'
+import { DEFAULT_SETTINGS } from '@shared/types'
 import type { DownloadProgress } from '../../main/services/modelManager'
+import PersonaEditor from '../components/PersonaEditor'
+import WakeWordSettings from '../components/WakeWordSettings'
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
@@ -93,8 +95,21 @@ export default function SettingsPage() {
     if (err) setTtsReloadError(err)
   }
 
+  /**
+   * The wake switch acts immediately and saves itself: the main process opens the
+   * microphone, records the setting, and reports back whether it really is
+   * listening. This only mirrors the outcome into the form, so a later Save
+   * cannot quietly turn the listener back on or off.
+   */
+  const setWakeEnabled = (on: boolean) => {
+    update({ wakeWordEnabled: on, ...(on ? { voiceEnabled: true } : {}) })
+  }
+
   const save = async () => {
-    await window.goga.invoke('settings:set', settings)
+    // Personality is saved by the persona editor on its own, so this form must not carry a
+    // stale copy back over it.
+    const { personality: _personality, ...rest } = settings
+    await window.goga.invoke('settings:set', rest)
     // A changed brain model reloads in the background; refresh its status shortly after.
     setTimeout(checkBrain, 500)
     checkRemote()
@@ -146,10 +161,16 @@ export default function SettingsPage() {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <span style={{ fontWeight: 600 }}>Settings</span>
-        <button onClick={save} style={styles.saveBtn}>{saved ? '✓ Saved' : 'Save'}</button>
+    <div className="g-page">
+      <div className="g-page-inner">
+      <div className="g-page-head">
+        <div className="g-page-head-main">
+          <h1 className="g-title">Settings</h1>
+          <p className="g-purpose">Identity, models, voice, remote access and trading keys. Changes apply when you press Save.</p>
+        </div>
+        <div className="g-page-actions">
+          <button onClick={save} className="g-btn g-btn--primary">{saved ? 'Saved' : 'Save'}</button>
+        </div>
       </div>
       <div style={styles.form}>
 
@@ -157,20 +178,11 @@ export default function SettingsPage() {
         <Field label="Your name (Goga calls you this)">
           <input value={settings.userName} onChange={e => update({ userName: e.target.value })} style={{ width: 200 }} placeholder="Boss" />
         </Field>
-        <Field label="Personality (how Goga should be)">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <textarea
-              value={settings.personality ?? ''}
-              onChange={e => update({ personality: e.target.value.slice(0, MAX_PERSONALITY_CHARS) })}
-              rows={4}
-              style={styles.textarea}
-              placeholder="e.g. Be playful and joke a little. Speak to me in Russian when I write in Russian. Remind me to take breaks."
-            />
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              Used in chat, voice, Telegram and tasks. Honesty and safety limits always come first. {(settings.personality ?? '').length}/{MAX_PERSONALITY_CHARS}
-            </span>
-          </div>
-        </Field>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 12px' }}>
+          Personality and memory are edited in the two cards just below. They save on their own, so pressing Save up here does not undo them.
+        </p>
+
+        <PersonaEditor />
 
         <Section label="AI Model" />
         <Field label="Primary model">
@@ -363,6 +375,23 @@ export default function SettingsPage() {
           <input type="checkbox" checked={settings.tradingRequireStop ?? true} onChange={e => update({ tradingRequireStop: e.target.checked })} />
         </Field>
 
+        <Section label="Alpaca broker limits (enforced on every order, paper and live)" />
+        <Field label="Biggest position (% of account)">
+          <input type="number" min={1} max={100} value={settings.brokerMaxPositionPct ?? 10} onChange={e => update({ brokerMaxPositionPct: Number(e.target.value) })} style={{ width: 80 }} />
+        </Field>
+        <Field label="Most positions held at once">
+          <input type="number" min={1} max={50} value={settings.brokerMaxOpenPositions ?? 5} onChange={e => update({ brokerMaxOpenPositions: Number(e.target.value) })} style={{ width: 80 }} />
+        </Field>
+        <Field label="Largest single order ($)">
+          <input type="number" min={1} step={1} value={settings.brokerMaxOrderNotional ?? 2000} onChange={e => update({ brokerMaxOrderNotional: Number(e.target.value) })} style={{ width: 100 }} />
+        </Field>
+        <Field label="Halt trading for the day after losing (%)">
+          <input type="number" min={0.5} max={50} step={0.5} value={settings.brokerDailyLossPct ?? 3} onChange={e => update({ brokerDailyLossPct: Number(e.target.value) })} style={{ width: 80 }} />
+        </Field>
+        <Field label="Datasheet folder (Engineering)">
+          <input value={settings.eeDatasheetDir ?? ''} placeholder="Optional: a folder of datasheet PDFs" onChange={e => update({ eeDatasheetDir: e.target.value })} style={{ width: 320 }} />
+        </Field>
+
         <Section label="Voice & Speech" />
         <Field label="TTS provider">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -502,9 +531,12 @@ export default function SettingsPage() {
         <Field label="Voice conversation">
           <input type="checkbox" checked={settings.voiceEnabled} onChange={e => update({ voiceEnabled: e.target.checked })} />
         </Field>
-        <Field label="Wake word (Hey Goga)">
-          <input type="checkbox" checked={settings.wakeWordEnabled ?? false} onChange={e => update({ wakeWordEnabled: e.target.checked })} disabled={!settings.voiceEnabled} />
-        </Field>
+        <WakeWordSettings
+          voiceEnabled={settings.voiceEnabled}
+          wakeEnabled={settings.wakeWordEnabled ?? false}
+          phrase={settings.wakePhrase || 'hey goga'}
+          onEnable={setWakeEnabled}
+        />
         <Field label="Wake phrase">
           <input value={settings.wakePhrase ?? 'hey goga'} onChange={e => update({ wakePhrase: e.target.value })} style={{ width: 180 }} disabled={!settings.voiceEnabled || !settings.wakeWordEnabled} />
         </Field>
@@ -574,6 +606,7 @@ export default function SettingsPage() {
           <input value={settings.visionModelName} onChange={e => update({ visionModelName: e.target.value })} style={{ width: 200 }} placeholder="llava:13b" />
         </Field>
       </div>
+      </div>
     </div>
   )
 }
@@ -603,7 +636,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' },
   toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderBottom: '1px solid var(--border)' },
-  form: { padding: '8px 24px', overflowY: 'auto', flex: 1 },
+  form: { padding: '0 0 24px' },
   saveBtn: { background: 'var(--accent)', color: '#fff', fontWeight: 600 },
   textarea: { background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 10px', width: 420, resize: 'vertical', fontFamily: 'inherit' },
   select: { background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 10px', minWidth: 200 },

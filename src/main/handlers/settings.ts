@@ -31,11 +31,14 @@ export function registerSettingsHandlers(ipcMain: IpcMain) {
       VoiceOrchestrator.getInstance().reloadTtsProvider()
     }
     // Start/stop the "hey goga" wake listener the moment the toggle (or voice
-    // enable) changes, so it works without an app restart.
+    // enable) changes, so it works without an app restart. Starting is awaited:
+    // if there is no microphone, or Windows will not open it, the listener turns
+    // the setting back off and the renderer is handed the corrected value.
     if (previous.voiceEnabled !== updated.voiceEnabled || previous.wakeWordEnabled !== updated.wakeWordEnabled) {
       const voice = VoiceOrchestrator.getInstance()
-      if (updated.voiceEnabled && updated.wakeWordEnabled) voice.startWakeLoop()
+      if (updated.voiceEnabled && updated.wakeWordEnabled) await voice.startWakeLoop()
       else voice.stopWakeLoop()
+      return settings.get()
     }
     return updated
   })

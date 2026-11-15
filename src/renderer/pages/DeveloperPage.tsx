@@ -16,6 +16,7 @@ export default function DeveloperPage() {
   const [pending, setPending] = useState(false)
   const end = useRef<HTMLDivElement>(null)
   const active = state?.status === 'running' || state?.status === 'stopping'
+  const runDiff = state?.runDiff ?? null
   useEffect(() => {
     const unsub = window.goga.on('developer:state', setState)
     window.goga.invoke('developer:state').then(async current => {
@@ -66,7 +67,20 @@ export default function DeveloperPage() {
           {state?.events.map(event => <article className={`developer-event ${event.kind}`} key={event.id}><span>{event.kind}</span><pre>{event.text}</pre></article>)}<div ref={end} />
         </div>
         {state?.summary && <div className="developer-panel"><h2>Agent report</h2><pre className="developer-report">{state.summary}</pre></div>}
-        <div className="developer-panel"><h2>Working tree</h2><p>Includes changes that existed before this run. Review before committing.</p><pre className="developer-report">{state?.project?.changedFiles || (state?.project?.git ? 'No uncommitted changes.' : 'Choose a Git project to see changed files.')}</pre></div>
+        <div className="developer-panel"><h2>Changes in this run</h2>
+          <p>Diffed against a snapshot taken when the run started, so earlier edits are not counted.</p>
+          {runDiff === null
+            ? <pre className="developer-report">{state?.status === 'running' ? 'The diff appears when the run finishes.' : 'No run yet.'}</pre>
+            : !runDiff.available
+              ? <pre className="developer-report">{runDiff.reason || 'No diff available for this run.'}</pre>
+              : <>
+                  <pre className="developer-report">{runDiff.stat || 'This run changed no tracked files.'}</pre>
+                  {runDiff.newFiles.length > 0 && <p>New files: {runDiff.newFiles.join(', ')}</p>}
+                  {runDiff.deletedFiles.length > 0 && <p>Deleted files: {runDiff.deletedFiles.join(', ')}</p>}
+                  {runDiff.patch && <details><summary>Full patch{runDiff.truncated ? ' (truncated)' : ''}</summary><pre className="developer-report">{runDiff.patch}</pre></details>}
+                </>}
+        </div>
+        <div className="developer-panel"><h2>Working tree</h2><p>Everything uncommitted, including changes that existed before this run. Review before committing.</p><pre className="developer-report">{state?.project?.changedFiles || (state?.project?.git ? 'No uncommitted changes.' : 'Choose a Git project to see changed files.')}</pre></div>
       </div>
     </div>
   </section>

@@ -1,13 +1,13 @@
 import { app, dialog, type IpcMain } from 'electron'
-import { DeveloperService } from '../services/developer'
+import { developerService } from '../services/developerInstance'
 import { getMainWindow } from '../index'
 
-let service: DeveloperService | undefined
-export function stopDeveloperTask() { service?.stop() }
+export function stopDeveloperTask() { developerService().stop() }
 
 export function registerDeveloperHandlers(ipcMain: IpcMain) {
-  const developer = new DeveloperService(state => getMainWindow()?.webContents.send('developer:state', state))
-  service = developer
+  // The same instance the `developer.start` tool uses, so a run started from chat appears on
+  // this page and the page's Stop button stops it.
+  const developer = developerService(state => getMainWindow()?.webContents.send('developer:state', state))
   void developer.detect().catch(() => {})
   ipcMain.handle('developer:state', () => developer.getState())
   ipcMain.handle('developer:self', () => {

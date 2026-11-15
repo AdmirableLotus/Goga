@@ -9,7 +9,13 @@ import { MissionEngine } from '../services/missionEngine'
 
 const store = ActionStore.getInstance()
 const log = LogService.getInstance()
-const orchestrator = new OrchestratorService()
+// Built on first use: `agentLoop` imports `../index`, which imports this handler, so a
+// module-scope instance would be constructed while AgentLoop is still half-loaded.
+let orchestratorInstance: OrchestratorService | null = null
+function orchestratorService(): OrchestratorService {
+  if (!orchestratorInstance) orchestratorInstance = new OrchestratorService()
+  return orchestratorInstance
+}
 
 export function registerActionHandlers(ipcMain: IpcMain) {
   ipcMain.handle('actions:list', async () => store.list())
@@ -59,7 +65,7 @@ export function registerActionHandlers(ipcMain: IpcMain) {
       // These are actions created outside the agent loop (e.g. direct UI
       // actions from the Approvals panel). resolveApproval must NOT be called
       // here — there is no pending agent promise to resolve.
-      orchestrator.executeAction(action).then(() => {
+      orchestratorService().executeAction(action).then(() => {
         getMainWindow()?.webContents.send('action:update', store.get(actionId))
       }).catch(() => {
         getMainWindow()?.webContents.send('action:update', store.get(actionId))

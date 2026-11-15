@@ -38,6 +38,16 @@ export interface UIElement {
   enabled: boolean
 }
 
+export interface ScreenTextResult {
+  text: string
+  lines: string[]
+  /** The region that was read, in the same logical pixels the caller passed in. */
+  region: { x: number; y: number; width: number; height: number }
+  /** Display scale used to turn logical pixels into captured pixels. */
+  scale: number
+  language: string
+}
+
 export class WindowDiscoveryError extends Error {
   constructor(public readonly kind: 'enumeration' | 'parsing', detail: string) {
     super(`discovery_${kind}_error: ${detail}`)
@@ -74,6 +84,7 @@ export class DesktopAdapter implements ToolAdapter {
       case 'findElement':   return this.findElement(params as { name?: string; role?: string; automationId?: string; windowTitle?: string })
       case 'invoke':        return this.invoke(params as { name?: string; role?: string; automationId?: string; windowTitle?: string })
       case 'setValue':      return this.setValue(params as { name?: string; role?: string; automationId?: string; windowTitle?: string }, params.value as string)
+      case 'readScreenText': return this.readScreenText(params as { x?: number; y?: number; width?: number; height?: number })
       case 'wait':          return this.wait(params as Parameters<DesktopAdapter['wait']>[0])
       case 'restoreWindow': return this.restoreWindow(params.pid as number)
       default: throw new Error(`Unknown desktop op: ${op}`)
@@ -1605,6 +1616,138 @@ export class DesktopAdapter implements ToolAdapter {
       const bottom = Math.max(...monitors.map(m => m.bounds.y + m.bounds.height))
       return { monitors, virtualDesktop: { left, top, width: right - left, height: bottom - top } }
     } catch { return { monitors: [], virtualDesktop: { left: 0, top: 0, width: 0, height: 0 } } }
+  }
+
+  /**
+   * Read a rectangle of the screen as text with Windows' own OCR engine
+   * (Windows.Media.Ocr) — no vision model, no network, no extra dependency.
+   *
+   * Coordinates are logical screen pixels, the same space the click and
+   * screenshot ops use. The region is captured at the display's real DPI, so a
+   * scaled display still reads the pixels the user sees. The capture is written
+   * to a temp file, read, and deleted; nothing is kept.
+   */
+  async readScreenText(region: { x?: number; y?: number; width?: number; height?: number }): Promise<ScreenTextResult> {
+    if (process.platform !== 'win32') throw new Error('screen OCR is only implemented on Windows')
+    const x = Math.round(Number(region.x ?? 0))
+    const y = Math.round(Number(region.y ?? 0))
+    const width = Math.round(Number(region.width ?? 0))
+    const height = Math.round(Number(region.height ?? 0))
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+      throw new Error('readScreenText needs numeric x, y, width and height')
+    }
+    if (width < 1 || height < 1) throw new Error('readScreenText needs a region at least 1x1')
+    if (width > 10_000 || height > 10_000) throw new Error('readScreenText region is too large (max 10000x10000)')
+
+    const ps = `
+      $ErrorActionPreference = 'Stop'
+      Add-Type -AssemblyName System.Drawing
+      Add-Type -AssemblyName System.Runtime.WindowsRuntime
+      Add-Type @"
+        using System; using System.Runtime.InteropServices;
+        public class GogaOcrMon {
+          public struct RECT { public int L,T,R,B; }
+          public delegate bool MEPROC(IntPtr hMon, IntPtr hDC, ref RECT lpRect, IntPtr lParam);
+          [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MEPROC fn, IntPtr data);
+          [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr hMon, int dpiType, out uint dpiX, out uint dpiY);
+          public static int DpiForPoint(int x, int y) {
+            int dpi = 96;
+            // A named delegate, not a lambda: the C# compiler rejects a lambda whose
+            // parameters mix implicit and explicit types, which is what a ref parameter forces.
+            MEPROC cb = delegate(IntPtr hMon, IntPtr hDC, ref RECT r, IntPtr l) {
+              if (x >= r.L && x < r.R && y >= r.T && y < r.B) {
+                uint dx = 96, dy = 96;
+                try { GetDpiForMonitor(hMon, 0, out dx, out dy); } catch {}
+                dpi = (int)dx;
+                return false;
+              }
+              return true;
+            };
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, cb, IntPtr.Zero);
+            return dpi;
+          }
+        }
+"@
+      $dpi = [GogaOcrMon]::DpiForPoint(${x}, ${y})
+      $scale = $dpi / 96.0
+      $px = [int][Math]::Round(${x} * $scale)
+      $py = [int][Math]::Round(${y} * $scale)
+      $pw = [int][Math]::Round(${width} * $scale)
+      $ph = [int][Math]::Round(${height} * $scale)
+      if ($pw -lt 1 -or $ph -lt 1) { Write-Output 'err:empty_region'; exit 0 }
+
+      $out = Join-Path $env:TEMP ('goga-ocr-' + [Guid]::NewGuid().ToString('N') + '.png')
+      $bmp = New-Object System.Drawing.Bitmap $pw, $ph
+      $g = [System.Drawing.Graphics]::FromImage($bmp)
+      $g.CopyFromScreen($px, $py, 0, 0, (New-Object System.Drawing.Size $pw, $ph))
+      $g.Dispose()
+      $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+      $bmp.Dispose()
+
+      $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name.StartsWith('IAsyncOperation')
+      })[0]
+      function Await($WinRtTask, $ResultType) {
+        $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+        $netTask = $asTask.Invoke($null, @($WinRtTask))
+        $netTask.Wait(-1) | Out-Null
+        $netTask.Result
+      }
+
+      [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
+      [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
+      [Windows.Storage.StorageFile, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
+
+      $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+      if (-not $engine) { Remove-Item $out -ErrorAction SilentlyContinue; Write-Output 'err:no_ocr_engine'; exit 0 }
+
+      $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($out)) ([Windows.Storage.StorageFile])
+      $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+      $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+      $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+      $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+
+      $lines = @()
+      foreach ($line in $result.Lines) {
+        # OCR output can carry stray control characters (a bell, a form feed) that
+        # ConvertTo-Json writes raw and JSON.parse then rejects. Keep printable text only.
+        $clean = ($line.Text -replace '[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]', ' ').Trim()
+        if ($clean) { $lines += $clean }
+      }
+      $payload = [PSCustomObject]@{
+        text   = ($lines -join [char]10)
+        lines  = $lines
+        lang   = $engine.RecognizerLanguage.LanguageTag
+        scale  = $scale
+        pixels = @{ x = $px; y = $py; width = $pw; height = $ph }
+      }
+      $stream.Dispose()
+      Remove-Item $out -ErrorAction SilentlyContinue
+      # Base64 the JSON: PowerShell's console encoding mangles non-ASCII text, and
+      # ConvertTo-Json is not reliable about escaping every control character.
+      $json = $payload | ConvertTo-Json -Compress -Depth 4
+      Write-Output ('b64:' + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($json)))
+    `
+
+    const raw = (await this.runPS(ps)).trim()
+    if (raw.startsWith('err:')) {
+      const code = raw.slice(4)
+      if (code === 'no_ocr_engine') throw new Error('no OCR language pack is installed for this Windows user')
+      throw new Error(`screen OCR failed: ${code}`)
+    }
+    const json = raw.startsWith('b64:')
+      ? Buffer.from(raw.slice(4), 'base64').toString('utf8')
+      : raw
+    const parsed = JSON.parse(json) as { text?: string; lines?: string[] | string; lang?: string; scale?: number }
+    // ConvertTo-Json collapses a one-element array to a bare string.
+    const lines = Array.isArray(parsed.lines) ? parsed.lines : parsed.lines ? [parsed.lines] : []
+    return {
+      text: parsed.text ?? lines.join('\n'),
+      lines,
+      region: { x, y, width, height },
+      scale: parsed.scale ?? 1,
+      language: parsed.lang ?? ''
+    }
   }
 
   private runPS(script: string, diagnostic?: { discoveryId: string; enumerationError: boolean }, signal?: AbortSignal, filenameDiagnostics = false): Promise<string> {

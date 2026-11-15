@@ -5,7 +5,13 @@ import { getMainWindow } from '../index'
 import { nanoid } from '../utils/nanoid'
 import type { ChatMessage } from '../../shared/types'
 
-const agent = AgentLoop.getInstance()
+// Built on first use: `agentLoop` imports `../index`, which imports this handler, so a
+// module-scope instance would be constructed while AgentLoop is still half-loaded.
+let agentInstance: AgentLoop | null = null
+function agentLoop(): AgentLoop {
+  if (!agentInstance) agentInstance = AgentLoop.getInstance()
+  return agentInstance
+}
 const log = LogService.getInstance()
 
 export function registerAgentHandlers(ipcMain: IpcMain) {
@@ -14,7 +20,7 @@ export function registerAgentHandlers(ipcMain: IpcMain) {
     log.info(`agent:start — ${task.slice(0, 80)}`)
 
     // Run in background, push final reply as a chat message when done
-    agent.run(task).then((reply) => {
+    agentLoop().run(task).then((reply) => {
       const msg: ChatMessage = {
         id: nanoid(),
         role: 'assistant',
@@ -34,17 +40,17 @@ export function registerAgentHandlers(ipcMain: IpcMain) {
   })
 
   ipcMain.handle('agent:stop', async () => {
-    agent.stop('Stopped by user')
+    agentLoop().stop('Stopped by user')
   })
 
   ipcMain.handle('agent:state', async () => {
-    return agent.getState()
+    return agentLoop().getState()
   })
 
   // Called by ApprovalsPage when user approves/rejects an agent-requested action
   // The existing action:approve/reject handlers in actions.ts handle the ActionStore side;
   // we additionally need to unblock the agent's approval promise.
   ipcMain.on('agent:resolveApproval', (_e, actionId: string, approved: boolean) => {
-    agent.resolveApproval(actionId, approved)
+    agentLoop().resolveApproval(actionId, approved)
   })
 }

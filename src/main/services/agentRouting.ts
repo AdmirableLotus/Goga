@@ -38,6 +38,8 @@ export const AGENT_TRIGGERS: RegExp[] = [
   /\b(price|quote|chart|analy[sz]e|technical analysis|news)\b.{0,30}\b(stocks?|crypto|bitcoin|btc|eth|ethereum|solana|forex|eur\/?usd|gbp\/?usd|usd\/?jpy|spy|qqq|aapl|tsla|nvda|msft|amzn|[a-z]{2,5}\/usd)\b/i,
   /\b(bitcoin|btc|ethereum|eth|solana|the stock market|eur\/?usd)\b.{0,20}\b(price|doing|today|now|chart)\b/i,
   /\bschematik\.io\b|\b(upload|flash)\b.{0,40}\b(arduino|esp32|pico|board|sketch)\b|\b(make|create|build)\b.{0,30}\b(arduino|esp32|pico|microcontroller) project\b/i,
+  // Public-source research about a person, a handle, an address or a domain.
+  /\b(osint|reverse (username|email)|domain recon|subdomain enumeration|breach (check|status))\b/i,
 ]
 
 export const CONFIRM_TRIGGERS = /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|please|yup|affirmative|correct|right|exactly|absolutely)[.!]?$/i
@@ -111,7 +113,32 @@ const HARDWARE_TOOLS = /^(electronics\.|microcontroller\.|schematik\.)/
 const HARDWARE_SIDE_TOOLS = /^(web\.(search|fetch)$|memory\.|notepad\.saveText$|filesystem\.(read|write|list)$|browser\.openExternal$|clock\.now$|vision\.analyze$|computer\.(windowList|focus\.window)$)/
 const FLUX_RARELY_NEEDED = /^flux\.(send_feedback|review_knowledge|list_organization_memberships|get_assets)$/
 
-export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bitcoin|btc|eth|ethereum|solana|forex|currency pair|portfolio|backtest\w*|rsi|macd|candlesticks?|paper (account|trad\w+)|practice (account|trad\w+)|eur\/?usd|gbp\/?usd|usd\/?jpy|[a-z]{2,5}\/usd)\b/i
+export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bitcoin|btc|eth|ethereum|solana|forex|currency pair|portfolio|backtest\w*|rsi|macd|candlesticks?|paper (account|trad\w+)|practice (account|trad\w+)|alpaca|broker|kill switch|positions?|open orders?|eur\/?usd|gbp\/?usd|usd\/?jpy|[a-z]{2,5}\/usd)\b/i
+
+/** Tasks about bug bounty work: scope, a target, a finding, a report, or the curriculum. */
+export const SECURITY_TASK = /\b(bug ?bounty|bount(y|ies)|hackerone|bugcrowd|scope|in.scope|out.of.scope|probe|xss|cross.site scripting|vulnerabilit(y|ies)|pentest|penetration test|reconnaissance|recon|triager|disclosure|submission|owasp|nmap|subfinder|nuclei|sqlmap|wpscan|toolbox|cheat.?sheet|metasploit|msfconsole|hashcat|john the ripper|hydra|medusa|netexec|nxc|aircrack|ettercap|kismet|mimikatz|wireshark|tshark)\b/i
+
+/** Tasks about designing or debugging hardware, or the ring project's sensing chain. */
+export const ENGINEERING_TASK = /\b(ads12\d\d|afe|op ?amp|datasheet|bill of materials|bom|power budget|battery life|electrode|impedance|isfet|bioimpedance|filter (cutoff|response)|decoupling|regulator|pcb|schematic|netlist|kicad|solder|bench|oscilloscope|multimeter|viora|alma)\b/i
+
+/**
+ * Tasks about the user's own accounts and business: mail, social, storefronts, testers,
+ * releases, monitoring, freelance work. Kept separate from trading so a mail task is not
+ * handed the broker tools.
+ */
+export const BUSINESS_TASK = /\b(inbox|gmail|e-?mail|mail|bluesky|mastodon|social (post|media)|shopify|printful|storefront|listing|testers?|play console|release|deploy|uptime|monitor|freelance|upwork|fiverr|proposal|invoice|my (shop|store|app|site|website))\b/i
+
+/** Tasks about public-source people and domain research. */
+/** Tasks about handing work to a background job, or checking on one. */
+export const JOBS_TASK = /\b(jobs?|background (job|task|worker)|worker|in the background|job board|what'?s running)\b/i
+
+export const OSINT_TASK = /\b(osint|reverse (username|email)|username search|people search|domain recon|subdomain enumeration|whois|breach (check|status)|public mentions)\b/i
+
+/** Tasks about Goga improving his own code, or about what he has learned. */
+export const EVOLUTION_TASK = /\b(improve (yourself|your ?self|your (own )?code)|evolve|self.improv\w*|your own code|learn(ed)? (that|from)|remember (that|this)|record (a |this )?skill|what did you learn)\b/i
+
+/** Tasks about installing a program, or setting up a virtual machine to work in. */
+export const SETUP_TASK = /\b(install|uninstall|set ?up|provision|virtual ?machine|\bvm\b|hyper-?v|virtualbox|vmware|wsl2?|sandbox|winget|package manager|what'?s installed|is .{0,20} installed|do you have .{0,20} installed)\b/i
 
 /** Tasks about Goga himself — his code, his tools, what he couldn't do. */
 export const SELF_TASK = /\b(your|goga'?s) (own )?(code|source|codebase|tools|gaps?|failures)\b|\byour ?self\b|\bwhat (tools?|abilities) (do )?you need\b/i
@@ -122,22 +149,61 @@ export const SELF_TASK = /\b(your|goga'?s) (own )?(code|source|codebase|tools|ga
  */
 const SCHEDULE_TASK = /\b(every (\d+ )?(minute|hour|day|week|morning|evening|night)s?|hourly|daily|weekly|schedul\w*|recurring|automat\w*|remind\w*|on your own)\b/i
 
+/** The browser tools every task may use: they drive Goga's own Firefox. */
+const GENERAL_BROWSER_TOOLS = /^browser\.(goto|readPage|listTabs|selectTab|click|type|find|waitForText|screenshot|learnSite|recallSite|correctSite)$/
+
 export function plannerOffers(task: string): (name: string) => boolean {
   const offers = baseOffers(task)
   // The self-reading tools only take room in the prompt when the task is about Goga himself.
-  const self = SELF_TASK.test(task)
+  const self = SELF_TASK.test(task) || EVOLUTION_TASK.test(task)
   const schedule = SCHEDULE_TASK.test(task)
-  return name => name.startsWith('self.') ? self : name.startsWith('schedule.') ? schedule : offers(name)
+  const evolution = EVOLUTION_TASK.test(task)
+  const osint = OSINT_TASK.test(task)
+  // Starting, listing or stopping a background job is its own kind of request. A worker
+  // inside a job is never offered these, so a job cannot quietly multiply itself.
+  const jobsTask = JOBS_TASK.test(task)
+  const setupTask = SETUP_TASK.test(task)
+  return name => name.startsWith('setup.') ? setupTask
+    : name.startsWith('jobs.') ? jobsTask
+    : name.startsWith('osint.') ? osint
+    : name.startsWith('self.') ? self
+    : name.startsWith('schedule.') ? schedule
+    : name.startsWith('evolution.') ? evolution
+    : offers(name)
 }
 
 function baseOffers(task: string): (name: string) => boolean {
   const hardware = HARDWARE_TASK.test(task), trading = TRADING_TASK.test(task)
-  if (!hardware && !trading) return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.')
+  const security = SECURITY_TASK.test(task), engineering = ENGINEERING_TASK.test(task)
+  const business = BUSINESS_TASK.test(task)
+  const focused = hardware || trading || security || engineering || business
+  if (!focused) {
+    // Everything except the focused families and the self/evolution tools (offered separately).
+    return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.')
+      && !name.startsWith('broker.') && !name.startsWith('security.') && !name.startsWith('ee.') && !name.startsWith('evolution.')
+      && !name.startsWith('osint.') && !name.startsWith('strategy.') && !name.startsWith('business.')
+      && !name.startsWith('jobs.') && !name.startsWith('setup.')
+  }
   const flux = FLUX_TASK.test(task)
   return name => {
     if (name.startsWith('flux.')) return flux && !FLUX_RARELY_NEEDED.test(name)
     if (name.startsWith('trading.')) return trading
-    return (hardware && HARDWARE_TOOLS.test(name)) || HARDWARE_SIDE_TOOLS.test(name)
+    if (name.startsWith('broker.')) return trading
+    if (name.startsWith('security.')) return security
+    if (name.startsWith('strategy.')) return trading
+    if (name.startsWith('business.')) return business
+    if (name.startsWith('persona.')) return true
+    // Driving its own Firefox and working on its own source are general abilities, not one
+    // area's tools: a bounty task, a trading task and a setup task all need them. Only the
+    // Firefox-backed family is added here — the older Playwright name stays where it was,
+    // because a focused task gets a short list on purpose.
+    if (GENERAL_BROWSER_TOOLS.test(name)) return true
+    if (name.startsWith('selfwork.')) return true
+    if (name.startsWith('ee.')) return engineering || hardware
+    if (name.startsWith('evolution.')) return false
+    if (hardware && HARDWARE_TOOLS.test(name)) return true
+    if (engineering && /^(ee\.|electronics\.)/.test(name)) return true
+    return HARDWARE_SIDE_TOOLS.test(name)
   }
 }
 
@@ -159,6 +225,7 @@ export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): 
   if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false
   if (isWritingRequest(message)) return false
+  if (isImperativeRequest(message)) return true
   if (AGENT_TRIGGERS.some(r => r.test(message))) return true
   if (CONFIRM_TRIGGERS.test(message.trim()) && lastAssistantMsg) {
     return /\b(search|look|find|open|navigate|run|execute|install|shall i|want me|would you like|should i|can i)\b/i.test(lastAssistantMsg)
@@ -180,7 +247,7 @@ export function isVagueOpenWebsite(message: string): boolean {
   // If a concrete target is present, it's NOT vague.
   const hasUrl = /https?:\/\/|www\.|\b[a-z0-9-]+\.(com|net|org|io|gov|edu|co|dev|ai|app)\b/.test(m)
   // A known site/app name makes it concrete enough for the agent.
-  const hasNamedSite = /\b(google|youtube|gmail|amazon|facebook|twitter|x\.com|reddit|github|hackerone|bugcrowd|wikipedia|stackoverflow|linkedin|instagram|netflix|spotify|chatgpt|bing|yahoo)\b/.test(m)
+  const hasNamedSite = /\b(google|youtube|gmail|amazon|facebook|twitter|x\.com|reddit|github|hackerone|bugcrowd|cantina|intigriti|yeswehack|synack|wikipedia|stackoverflow|linkedin|instagram|netflix|spotify|chatgpt|bing|yahoo|alpaca|pivex|coinbase)\b/.test(m)
   return !hasUrl && !hasNamedSite
 }
 
@@ -188,3 +255,71 @@ export function isVagueOpenWebsite(message: string): boolean {
 export const SLEEP_REQUEST = /^\s*(?:(?:ok(?:ay)?|goga|hey goga|alright)[,\s]+)*(?:please\s+)?(?:go to sleep(?: mode)?|sleep mode|sleep now|go sleep|good ?night)(?:[,\s]+(?:goga|go to sleep(?: mode)?|good ?night|sleep well|ace))*\s*[.!]*\s*$/i
 /** Several questions in one message ("why…? second did you…, third how…"). */
 export const isCompoundQuestion = (text: string): boolean => (text.match(/\?/g) ?? []).length > 1 || /\b(second(ly)?|third(ly)?|also|and (how|what|why|did|are|is))\b/i.test(text)
+
+// ── An imperative is an instruction to act ──────────────────────────────────
+//
+// "lets do bounty" and "I would like to do coinbase one" are not conversation topics. They
+// fell through to the chat path, which then narrated an action it had not taken. The rules
+// below treat a stated intention to do something as dispatch, so the agent loop gets it and
+// the browser tools actually move.
+//
+// Two things keep this from swallowing ordinary conversation:
+//   - a question about how or why is still a question (CONVERSATIONAL_PREFIX, checked first)
+//   - a bare "do it" with nothing to do it to is handled by the confirmation path, not here
+
+/** Verbs that, at the start of a request, mean "go and do this". */
+const ACTION_VERBS = String.raw`open|go\s+to|visit|navigate|browse|pull\s+up|bring\s+up|check|read|search|look\s+up|find|research|do|run|try|start|launch|click|type|fill|log\s*in|sign\s*in|download|install|set\s+up|prepare|place|book|buy|sell|send|draft|write|save|create|make|build|scan|test|apply|submit|register|enroll|compare|review|look\s+at|show\s+me|walk\s+me|help\s+me\s+with`
+
+/** "let's …", "lets …", "let us …" — a stated intention to do something. */
+const LETS = /^\s*(?:ok(?:ay)?[,\s]+)?(?:let'?s|lets|let\s+us)\s+(?:\w+\s+){0,2}?(?:do|go|try|start|begin|check|look|open|work|run|get|have|tackle|take|handle|dive|start\s+on)\b/i
+
+/** "I would like to …", "I want to …", "can you …", "please …" followed by a real verb. */
+const WANTS = new RegExp(
+  String.raw`^\s*(?:please[,\s]+|hey\s+goga[,\s]+|goga[,\s]+)?(?:i(?:'d|\s+would)?\s+(?:like|want|need)\s+to|i(?:'d|\s+would)\s+like\s+(?:you\s+)?to|can\s+you|could\s+you|would\s+you|will\s+you|go\s+ahead\s+and|(?:please|kindly))\s+(?:${ACTION_VERBS})\b`,
+  'i',
+)
+
+/** Starts with a bare action verb in the imperative: "open the Coinbase page", "scan it". */
+const BARE_IMPERATIVE = new RegExp(String.raw`^\s*(?:${ACTION_VERBS})\b`, 'i')
+
+/** Things that look like an imperative start but are not: "show me how", "look at this differently". */
+const NOT_IMPERATIVE = /^\s*(?:show\s+me\s+how|help\s+me\s+understand|walk\s+me\s+through|look\s+at\s+(?:this|the)\s+(?:differently)|do\s+you|can\s+you\s+tell|let\s+me\s+know|can\s+you\s+fill\s+me\s+in|fill\s+me\s+in|please\s+fill\s+(?:in\s+|out\s+)?your|fill\s+(?:in\s+|out\s+)?your\s+(?:details|info|name|email))\b/i
+
+/** A phrase addressed back at the user ("fill in your details") is not an order to Goga. */
+const ADDRESSED_AT_USER = /\b(?:fill|enter|type)\s+(?:in\s+|out\s+)?your\s+\w+/i
+
+/**
+ * True when the message is an order to do something on the computer or online.
+ *
+ * Deliberately generous about *intent* and strict about *form*: a message that opens with a
+ * verb, or states an intention to act, or asks Goga to act, is dispatched. A question about
+ * the same subject is not — `isConversationalQuestion` is checked before this runs.
+ */
+export function isImperativeRequest(message: string): boolean {
+  const m = String(message ?? '').trim()
+  if (!m) return false
+  if (NOT_IMPERATIVE.test(m)) return false
+  // "please fill in your details" asks the user to do something, not Goga.
+  if (ADDRESSED_AT_USER.test(m) && /^\s*(?:please|can\s+you|could\s+you)?\s*(?:fill|enter|type)/i.test(m)) return false
+  if (LETS.test(m)) return true
+  if (WANTS.test(m)) return true
+  // A bare imperative must also be about something, not a single word like "run".
+  // A bare imperative must also be about something: not a single word like "run", and not an
+  // order with no target at all ("read this and tell me how it sounds" is a request for an
+  // opinion, and dispatching it would open a browser at nothing).
+  if (BARE_IMPERATIVE.test(m) && m.split(/\s+/).length >= 2 && namesAnActionTarget(m)) return true
+  // "do a bounty for me on hacker one" — a doing-verb in the middle, addressed to Goga.
+  if (/\b(?:do|run|work|take|carry\s+out|handle)\b[^.!?]{0,60}\b(?:for\s+me|on\s+my\s+behalf|yourself|on\s+your\s+own)\b/i.test(m)) return true
+  return false
+}
+
+/**
+ * True when the request names something to act on, so the agent has a target rather than a
+ * topic. Used to decide between "go and do it" and "ask what you mean".
+ */
+export function namesAnActionTarget(message: string): boolean {
+  return /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu|gov)\b/i.test(message)
+    || /\b(?:hackerone|bugcrowd|coinbase|github|alpaca|pivex|firefox|chrome|edge|brave|notepad|explorer)\b/i.test(message)
+    || /\b(?:this|that|the)\s+(?:page|site|website|tab|window|file|folder|program|app)\b/i.test(message)
+    || /\b(?:bounty|bounties|scope|program|report|invoice|install|package|vm|virtual machine)\b/i.test(message)
+}

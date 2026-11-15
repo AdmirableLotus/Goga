@@ -1,12 +1,27 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { spawn, execFile, type ChildProcess } from 'child_process'
+import { spawn, execFile, execFileSync, type ChildProcess } from 'child_process'
 import { promisify } from 'util'
-import type { DeveloperState, DeveloperEvent, DeveloperProject } from '../../shared/developer'
+import type { DeveloperState, DeveloperEvent, DeveloperProject, DeveloperRunDiff } from '../../shared/developer'
 
 const execute = promisify(execFile)
 const MAX_TEXT = 16_000
+const MAX_PATCH = 40_000
+
+/**
+ * A snapshot of the working tree taken before the coding agent runs, so the diff
+ * afterwards shows what THIS run changed rather than everything that was already
+ * uncommitted. `git stash create` builds a commit object from the working tree
+ * without touching the index, the working tree, or the stash list.
+ */
+interface RunBaseline {
+  /** Commit-ish to diff against: the snapshot, or HEAD when the tree was clean. */
+  ref: string
+  /** Untracked files that already existed, so new ones can be told apart. */
+  untracked: Set<string>
+}
+
 
 export function developerEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Do not forward Goga's Telegram, voice-provider, or API credentials.
@@ -26,11 +41,12 @@ export function describeDeveloperEvent(event: any): Omit<DeveloperEvent, 'id'> |
 }
 
 export class DeveloperService {
-  private state: DeveloperState = { project: null, available: false, status: 'idle', mode: 'plan', task: '', events: [], summary: '' }
+  private state: DeveloperState = { project: null, available: false, status: 'idle', mode: 'plan', task: '', events: [], summary: '', runDiff: null }
   private child: ChildProcess | null = null
   private executable: string | null = null
   private seq = 0
   private selecting = false
+  private baseline: RunBaseline | null = null
   constructor(private publish: (state: DeveloperState) => void) {}
 
   getState(): DeveloperState { return structuredClone(this.state) }
@@ -56,12 +72,68 @@ export class DeveloperService {
     this.emit()
   }
 
-  private async git(root: string, args: string[]): Promise<string | null> {
+  private async git(root: string, args: string[], maxBuffer = 4_000_000): Promise<string | null> {
     try {
-      const { stdout } = await execute('git', ['-C', root, ...args], { windowsHide: true, timeout: 10_000, maxBuffer: 256_000 })
+      const { stdout } = await execute('git', ['-C', root, ...args], { windowsHide: true, timeout: 20_000, maxBuffer })
       return stdout.trim()
     } catch { return null }
   }
+
+  /** Untracked files in the tree, as repo-relative paths. */
+  private async untrackedFiles(root: string): Promise<Set<string>> {
+    const raw = await this.git(root, ['ls-files', '--others', '--exclude-standard'])
+    return new Set((raw ?? '').split('\n').map(l => l.trim()).filter(Boolean))
+  }
+
+  /**
+   * Snapshot the tree before a run. `git stash create` writes a commit object for the
+   * current working tree without changing the index, the working tree or the stash list,
+   * so the diff afterwards is exactly what the run changed. A clean tree needs no
+   * snapshot: HEAD is already the baseline.
+   *
+   * Synchronous on purpose: it must finish before the coding agent is spawned, and
+   * `start()` is synchronous. These are two local git calls on a small tree.
+   */
+  private takeBaseline(root: string): RunBaseline | null {
+    const run = (args: string[]): string | null => {
+      try {
+        return execFileSync('git', ['-C', root, ...args], { windowsHide: true, timeout: 10_000, maxBuffer: 256_000, encoding: 'utf8' }).trim()
+      } catch { return null }
+    }
+    const untracked = new Set((run(['ls-files', '--others', '--exclude-standard']) ?? '').split('\n').map(l => l.trim()).filter(Boolean))
+    const snapshot = run(['stash', 'create'])
+    if (snapshot) return { ref: snapshot, untracked }
+    const head = run(['rev-parse', 'HEAD'])
+    return head ? { ref: head, untracked } : null
+  }
+
+  /** What the run changed: diff against the baseline, plus files it created or deleted. */
+  private async diffSinceBaseline(root: string, baseline: RunBaseline | null): Promise<DeveloperRunDiff> {
+    if (!baseline) {
+      return { available: false, stat: '', patch: '', newFiles: [], deletedFiles: [], truncated: false,
+        reason: 'This folder has no Git history, so a per-run diff cannot be computed.' }
+    }
+    const stat = await this.git(root, ['diff', '--stat', baseline.ref])
+    const patch = await this.git(root, ['diff', '--no-color', '--unified=3', baseline.ref])
+    if (stat === null || patch === null) {
+      return { available: false, stat: '', patch: '', newFiles: [], deletedFiles: [], truncated: false,
+        reason: 'Git could not produce a diff for this run.' }
+    }
+    const nowUntracked = await this.untrackedFiles(root)
+    const newFiles = [...nowUntracked].filter(f => !baseline.untracked.has(f)).sort()
+    const deletedFiles = (await this.git(root, ['diff', '--name-only', '--diff-filter=D', baseline.ref]) ?? '')
+      .split('\n').map(l => l.trim()).filter(Boolean)
+    const truncated = patch.length > MAX_PATCH
+    return {
+      available: true,
+      stat: stat || (newFiles.length ? `${newFiles.length} new untracked file${newFiles.length > 1 ? 's' : ''}` : ''),
+      patch: truncated ? patch.slice(0, MAX_PATCH) : patch,
+      newFiles,
+      deletedFiles,
+      truncated
+    }
+  }
+
 
   private async inspect(root: string): Promise<DeveloperProject> {
     const realRoot = fs.realpathSync(root)
@@ -77,8 +149,11 @@ export class DeveloperService {
     if (this.child || this.selecting) throw new Error('Stop the current developer task before switching projects')
     this.selecting = true
     try {
+      const previous = this.state.project?.path
       this.state.project = await this.inspect(root)
       this.state.status = 'idle'; this.state.events = []; this.state.summary = ''; this.state.task = ''
+      // Keep the last run's diff when this is a refresh of the same project.
+      if (previous !== this.state.project.path) this.state.runDiff = null
       this.emit()
       return this.getState()
     } finally { this.selecting = false }
@@ -97,8 +172,11 @@ export class DeveloperService {
     if (!this.state.project) throw new Error('Select a project first')
     const project = this.state.project
     const root = project.path
-    this.state = { ...this.state, status: 'running', mode, task: task.trim(), events: [], summary: '' }
+    this.state = { ...this.state, status: 'running', mode, task: task.trim(), events: [], summary: '', runDiff: null }
     this.add('status', mode === 'plan' ? 'Inspecting project and preparing a plan. File edits are disabled.' : 'Working in the selected project. Review the resulting changes before committing.')
+    // Snapshot the tree first, so the report at the end is this run's diff and not the
+    // user's pre-existing edits. A failure here only costs the diff, never the run.
+    try { this.baseline = project.git ? this.takeBaseline(root) : null } catch { this.baseline = null }
     const args = ['--ask-for-approval', 'never', 'exec', '--json', '--color', 'never', '--sandbox',
       mode === 'plan' ? 'read-only' : 'workspace-write', '--cd', root]
     if (!project.git) args.push('--skip-git-repo-check')
@@ -133,7 +211,14 @@ export class DeveloperService {
       try { this.state.project = await this.inspect(root) } catch {}
       this.child = null
       this.state.status = stopped ? 'stopped' : code === 0 && !hadError ? 'completed' : 'failed'
-      this.add('status', stopped ? 'Task stopped. Review any partial file changes.' : this.state.status === 'completed' ? 'Finished. Review the summary, command results, and working tree.' : 'Task failed. Review the output; Codex may need login or sandbox setup.')
+      // What this run changed, computed against the snapshot taken before it started.
+      try { this.state.runDiff = await this.diffSinceBaseline(root, this.baseline) } catch { this.state.runDiff = null }
+      this.baseline = null
+      const diff = this.state.runDiff
+      const changed = diff?.available
+        ? (diff.stat ? `\n\nChanged in this run:\n${diff.stat}` : '\n\nThis run changed no tracked files.')
+        : ''
+      this.add('status', (stopped ? 'Task stopped. Review any partial file changes.' : this.state.status === 'completed' ? 'Finished. Review the summary, command results, and working tree.' : 'Task failed. Review the output; Codex may need login or sandbox setup.') + changed)
     })
     proc.stdin?.end(`You are working through Goga Developer Mode. ${mode === 'plan' ? 'Inspect the project and propose a concrete plan. Do not edit files.' : 'Inspect the project, implement the requested change, and run appropriate checks.'}\nPreserve existing user changes. Do not read credential files such as .env, publish, deploy, push commits, or delete unrelated files. Do not spawn subagents. Respect repository instructions. End with changes made, checks actually run, and remaining limitations. Never claim a check passed without evidence.\n\nUser task:\n${task.trim()}`)
     return this.getState()

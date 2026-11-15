@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import type { BookMeta } from '@shared/types'
+import { PageHeader, Card, Field, EmptyState, Alert } from '../components/ui'
 
 const FORMAT_ICON: Record<string, string> = { pdf: '📄', txt: '📝', epub: '📖' }
 
@@ -46,66 +47,67 @@ export default function LibraryPage() {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <span style={{ fontWeight: 600 }}>Library</span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {error && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</span>}
-          <button onClick={addBook} disabled={ingesting} style={styles.addBtn}>
-            {ingesting ? '⏳ Reading…' : '+ Add Book'}
-          </button>
-        </div>
-      </div>
+    <div className="g-page">
+      <div className="g-page-inner">
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-        <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addFromUrl() }}
-          placeholder="…or paste a direct link to a PDF / EPUB / TXT" style={{ flex: 1, padding: '6px 10px', fontSize: 13 }} disabled={ingesting} />
-        <button onClick={addFromUrl} disabled={ingesting || !url.trim()} style={styles.addBtn}>Read from web</button>
-      </div>
+        <PageHeader
+          title="Library"
+          purpose="Books Goga has read. Once a book is ingested, ask him anything about it in Chat."
+          actions={
+            <button className="g-btn g-btn--primary" onClick={addBook} disabled={ingesting}>
+              {ingesting ? '⏳ Reading…' : '+ Add book'}
+            </button>
+          }
+        />
 
-      {books.length === 0 ? (
-        <div style={styles.empty}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>📚</div>
-          <p style={{ color: 'var(--text-muted)', marginBottom: 8 }}>No books yet.</p>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Click <strong>+ Add Book</strong> to give Goga a PDF, TXT, or EPUB to read.</p>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>Once ingested, ask him anything about it in the Chat tab.</p>
-        </div>
-      ) : (
-        <div style={styles.list}>
-          {books.map(book => (
-            <div key={book.id} style={styles.card}>
-              <span style={{ fontSize: 28, flexShrink: 0 }}>{FORMAT_ICON[book.format] ?? '📄'}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {book.title}
+        {error && <Alert kind="error">{error}</Alert>}
+
+        <Card title="Read from the web" sub="A direct link to a PDF, EPUB or TXT file">
+          <div className="g-row">
+            <Field label="File URL">
+              <input
+                className="g-input g-input--xl"
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addFromUrl() }}
+                placeholder="https://example.com/book.pdf"
+                disabled={ingesting}
+              />
+            </Field>
+            <button className="g-btn" onClick={addFromUrl} disabled={ingesting || !url.trim()}>Read from web</button>
+          </div>
+        </Card>
+
+        {books.length === 0 ? (
+          <EmptyState
+            icon="📚"
+            title="No books yet"
+            body={<>Click <strong>+ Add book</strong> to give Goga a PDF, TXT or EPUB to read, or paste a direct link above. Once ingested, ask him anything about it in the Chat tab.</>}
+            action={<button className="g-btn g-btn--primary" onClick={addBook} disabled={ingesting}>+ Add book</button>}
+          />
+        ) : (
+          <Card title={`${books.length} book${books.length === 1 ? '' : 's'}`}>
+            {books.map(book => (
+              <div key={book.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 0', borderTop: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 24, flexShrink: 0 }}>{FORMAT_ICON[book.format] ?? '📄'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {book.title}
+                  </div>
+                  <div className="g-caption g-faint" style={{ display: 'flex', gap: 16 }}>
+                    <span>{book.format.toUpperCase()}</span>
+                    <span className="g-mono">{formatBytes(book.sizeBytes)}</span>
+                    <span>{book.chunkCount} chunks</span>
+                    <span>{new Date(book.ingestedAt).toLocaleDateString()}</span>
+                  </div>
                 </div>
-                <div style={{ color: 'var(--text-muted)', fontSize: 12, display: 'flex', gap: 16 }}>
-                  <span>{book.format.toUpperCase()}</span>
-                  <span>{formatBytes(book.sizeBytes)}</span>
-                  <span>{book.chunkCount} chunks</span>
-                  <span>{new Date(book.ingestedAt).toLocaleDateString()}</span>
-                </div>
+                <button className="g-btn g-btn--ghost g-btn--sm" onClick={() => remove(book.id)} title="Remove book" aria-label={`Remove ${book.title}`}>✕</button>
               </div>
-              <button onClick={() => remove(book.id)} style={styles.removeBtn} title="Remove book">✕</button>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </Card>
+        )}
 
-      <div style={styles.hint}>
-        💡 After adding a book, ask Goga about it in Chat — e.g. <em>"What does the book say about leadership?"</em>
       </div>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' },
-  toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
-  addBtn: { background: 'var(--accent)', color: '#fff', fontWeight: 600 },
-  empty: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40 },
-  list: { flex: 1, overflowY: 'auto', padding: '12px 24px', display: 'flex', flexDirection: 'column', gap: 10 },
-  card: { display: 'flex', alignItems: 'center', gap: 14, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px' },
-  removeBtn: { background: 'transparent', color: 'var(--text-muted)', padding: '4px 8px', fontSize: 14, flexShrink: 0 },
-  hint: { padding: '10px 24px', borderTop: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 12, flexShrink: 0 }
 }

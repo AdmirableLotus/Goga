@@ -130,80 +130,72 @@ export default function ChatComposer({ onSend, loading = false, isAgentRunning =
 
   return (
     <div style={{ flexShrink: 0 }}>
-      {(attachments.length > 0 || preparing || mediaError) && <div style={{ padding: '10px 20px', background: '#100d1e', color: '#c8b8f0' }}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{attachments.map(a => <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 270 }}>
-          <img src={a.images[0]} alt={a.name} style={{ width: 58, height: 46, objectFit: 'cover', borderRadius: 5 }} />
-          <span style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{a.name}{a.kind === 'video' && <small style={{ display: 'block' }}>Video · {a.images.length} sampled frames · no audio</small>}</span>
-          <button aria-label={`Remove ${a.name}`} disabled={preparing || sending} onClick={() => setAttachments(prev => prev.filter(item => item.id !== a.id))}>×</button>
-        </div>)}</div>
-        {preparing && <p role="status" style={{ fontSize: 12 }}>Preparing media…</p>}
-        {mediaError && <p role="alert" style={{ fontSize: 12, color: '#ff9fae' }}>{mediaError}</p>}
-      </div>}
-    <div style={{ ...S.row, ...(compact ? S.rowCompact : {}) }}>
-      {allowAttachments && <>
-        <input ref={fileInput} type="file" aria-label="Choose images or videos" accept="image/*,video/*" multiple hidden onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; void attach(files) }} />
-        <button title="Attach images or videos" aria-label="Attach images or videos" disabled={preparing || sending || (loading && !isAgentRunning)} onClick={() => fileInput.current?.click()} style={{ background: '#201631', color: '#c8b8f0', padding: '9px' }}>Attach</button>
-      </>}
-      <button
-        onClick={handleMic}
-        /* Mic always usable during speaking/listening (for barge-in/stop);
-           only disabled during pure LLM generation. */
-        disabled={loading && voiceStatus === 'idle' && !isAgentRunning}
-        title={micAriaLabel}
-        aria-label={micAriaLabel}
-        style={{
-          ...S.micBtn,
-          background: micActive ? '#1a0a2e' : voiceStatus === 'speaking' ? '#aa6600' : '#13101f',
-          color:      micActive ? '#29d9ff' : voiceStatus === 'speaking' ? '#fff'    : '#554477',
-          border:     micActive ? '1px solid #29d9ff55' : '1px solid #2a1f4a',
-          animation:  micActive ? 'pulse 1s infinite' : 'none',
-        }}
-      >{micIcon}</button>
+      {(attachments.length > 0 || preparing || mediaError) && (
+        <div style={{ padding: '10px 14px', background: 'var(--surface-2)', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{attachments.map(a => <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 270 }}>
+            <img src={a.images[0]} alt={a.name} style={{ width: 58, height: 46, objectFit: 'cover', borderRadius: 5 }} />
+            <span style={{ fontSize: 'var(--fs-caption)', overflowWrap: 'anywhere' }}>{a.name}{a.kind === 'video' && <small style={{ display: 'block' }}>Video · {a.images.length} sampled frames · no audio</small>}</span>
+            <button className="g-btn g-btn--ghost g-btn--sm" aria-label={`Remove ${a.name}`} disabled={preparing || sending} onClick={() => setAttachments(prev => prev.filter(item => item.id !== a.id))}>×</button>
+          </div>)}</div>
+          {preparing && <p role="status" style={{ fontSize: 'var(--fs-caption)' }}>Preparing media…</p>}
+          {mediaError && <p role="alert" style={{ fontSize: 'var(--fs-caption)', color: '#ff9fae' }}>{mediaError}</p>}
+        </div>
+      )}
+      <div className={compact ? 'g-composer-row' : 'g-composer-row'} style={compact ? { padding: '8px 10px' } : undefined}>
+        {allowAttachments && <>
+          <input ref={fileInput} type="file" aria-label="Choose images or videos" accept="image/*,video/*" multiple hidden onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; void attach(files) }} />
+          <button
+            className="g-btn g-btn--ghost g-btn--sm"
+            title="Attach images or videos"
+            aria-label="Attach images or videos"
+            disabled={preparing || sending || (loading && !isAgentRunning)}
+            onClick={() => fileInput.current?.click()}
+          >Attach</button>
+        </>}
+        <button
+          onClick={handleMic}
+          /* Mic always usable during speaking/listening (for barge-in/stop);
+             only disabled during pure LLM generation. */
+          disabled={loading && voiceStatus === 'idle' && !isAgentRunning}
+          title={micAriaLabel}
+          aria-label={micAriaLabel}
+          style={{
+            ...S.micBtn,
+            background: micActive ? 'rgba(41,217,255,0.12)' : voiceStatus === 'speaking' ? '#aa6600' : 'var(--surface-2)',
+            color:      micActive ? '#29d9ff' : voiceStatus === 'speaking' ? '#fff'    : 'var(--text-muted)',
+            border:     micActive ? '1px solid rgba(41,217,255,0.4)' : '1px solid var(--border)',
+            animation:  micActive ? 'pulse 1s infinite' : 'none',
+          }}
+        >{micIcon}</button>
 
-      <input
-        style={S.input}
-        value={input}
-        onChange={e => setInput(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
-        placeholder={placeholder}
-        /* Input stays usable during TTS (speaking) and listening — only the
-           LLM generation window (loading, non-agent) disables it. */
-        disabled={(sending && !isAgentRunning) || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
-      />
+        <input
+          className="g-composer-input"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+          placeholder={placeholder}
+          /* Input stays usable during TTS (speaking) and listening — only the
+             LLM generation window (loading, non-agent) disables it. */
+          disabled={(sending && !isAgentRunning) || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
+        />
 
-      <button
-        onClick={handleSend}
-        /* Send stays clickable during TTS/listening; only blocked while the
-           LLM is actively generating (and only if agent isn't multi-step). */
-        disabled={sending || preparing || (!input.trim() && !attachments.length) || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
-        style={S.sendBtn}
-      >Send</button>
-    </div>
+        <button
+          className="g-btn g-btn--primary"
+          onClick={handleSend}
+          /* Send stays clickable during TTS/listening; only blocked while the
+             LLM is actively generating (and only if agent isn't multi-step). */
+          disabled={sending || preparing || (!input.trim() && !attachments.length) || (loading && !isAgentRunning && voiceStatus !== 'speaking' && voiceStatus !== 'listening')}
+        >Send</button>
+      </div>
     </div>
   )
 }
 
 const S: Record<string, React.CSSProperties> = {
-  row: {
-    display: 'flex', gap: 8, padding: '10px 20px',
-    borderTop: '1px solid #1a1428', background: '#0a0816', alignItems: 'center',
-  },
-  rowCompact: {
-    padding: '8px 16px',
-    background: 'rgba(10,8,22,0.85)',
-    backdropFilter: 'blur(12px)',
-    borderTop: '1px solid rgba(91,33,255,0.18)',
-  },
   micBtn: {
-    width: 40, height: 40, minWidth: 40, minHeight: 40,
+    width: 36, height: 36, minWidth: 36, minHeight: 36,
     borderRadius: '50%', fontSize: 15,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     flexShrink: 0, padding: 0, cursor: 'pointer',
-  },
-  input: {
-    flex: 1, background: '#0e0c18', border: '1px solid #2a1f4a', color: '#e8d8ff',
-  },
-  sendBtn: {
-    background: '#5b21ff', color: '#fff', fontWeight: 600, padding: '8px 18px',
   },
 }

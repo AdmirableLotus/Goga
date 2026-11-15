@@ -10,18 +10,20 @@ Goga is a local-first AI agent that runs on your PC. It uses Electron for privil
 src/
 ├── main/               # Electron main process (Node.js, privileged)
 │   ├── index.ts        # App entry, window creation
-│   ├── handlers/       # IPC handlers (chat, actions, memory, logs, settings)
-│   ├── services/       # Orchestrator, ActionStore, Memory, Logs, Settings
-│   ├── adapters/       # Tool adapters (desktop, browser, research, disabled stubs)
+│   ├── handlers/       # IPC handlers (chat, actions, memory, logs, settings, developer)
+│   ├── services/       # Orchestrator, agent loop, ActionStore, Memory, Logs, Settings
+│   ├── tools/          # Tool registry and every registered tool
+│   ├── adapters/       # Desktop, browser and research adapters
 │   └── utils/          # Shared utilities
 ├── preload/
 │   └── index.ts        # contextBridge API exposed to renderer
 ├── renderer/           # React UI (no Node access)
-│   ├── pages/          # Chat, Activity, Approvals, Memory, Settings
-│   ├── components/     # StopButton, shared UI
+│   ├── pages/          # Chat, Library, Memory, Settings, Developer, Markets, Security
+│   ├── components/     # StopButton, ApprovalCard, shared UI
 │   └── styles.css      # Global dark theme
 └── shared/
     ├── types.ts         # Action, ChatMessage, LogEntry, MemoryEntry, AppSettings
+    ├── developer.ts     # Developer Mode state and run-diff contracts
     └── ipc.ts           # Typed IPC channel contracts
 ```
 
@@ -62,7 +64,12 @@ Open **Developer** in the desktop navigation. **Use Goga source** selects this c
 
 This version runs the installed Codex CLI using its existing login (`codex login`), rather than Goga’s local conversation model. Codex usage applies to that account. Plan runs use `read-only`; implementation runs use `workspace-write`. Permission escalation is disabled. Commands or dependencies requiring additional access can fail and will be reported in the output. Goga does not forward its Telegram or voice-provider environment credentials to the coding process.
 
-The screen shows live agent messages, commands, reported file changes, an agent report, and Git working-tree status (including pre-existing edits). It does not automatically commit, deploy, rebuild, or reload itself. Review changes and check results before rebuilding and restarting. Stop cancels the coding process tree on Windows; partial edits remain for review. Tasks and their displayed output are kept in memory for the current app session.
+The screen shows live agent messages, commands, reported file changes, an agent report, and two change views:
+
+- **Changes in this run** — a diff of what this run changed. Before the coding agent starts, Goga snapshots the working tree with `git stash create`, which writes a commit object without touching the index, the working tree or the stash list. When the run ends it diffs against that snapshot and reports a `--stat` summary, any new or deleted files, and the full patch behind a disclosure. Edits that existed before the run are not counted.
+- **Working tree** — everything uncommitted, including pre-existing edits.
+
+Goga does not automatically commit, deploy, rebuild, or reload itself. Review changes and check results before rebuilding and restarting. Stop cancels the coding process tree on Windows; partial edits remain for review. Tasks and their displayed output are kept in memory for the current app session.
 
 ### Telegram connection
 
@@ -78,48 +85,48 @@ npm install
 npm start
 ```
 
-This runs Vite dev server + TypeScript watch + Electron concurrently.
+`npm start` builds the renderer and the main process, then launches Electron. For a watch-mode development loop use `npm run dev`.
 
 ---
 
 ## Phased Roadmap
 
-### Phase 1 — Shell (current)
+### Phase 1 — Shell
 - [x] Electron + React + TypeScript scaffold
-- [x] Chat interface with mock orchestrator
+- [x] Chat interface with the real orchestrator
 - [x] Activity log (audit trail)
 - [x] Approvals panel (approve / reject / stop)
 - [x] Memory store (key-value)
 - [x] Settings page
-- [x] Stub adapters for all tool categories
 - [x] Disabled stubs for trading, wallet, social posting, offensive security
 
 ### Phase 2 — Desktop Control
-- [ ] Screenshot capture via `@nut-tree/nut-js` or `robotjs`
-- [ ] Cursor movement and keyboard input
-- [ ] Active window inspection
-- [ ] Screen region OCR
+- [x] Screenshot capture (`screenshot-desktop`)
+- [x] Cursor movement and keyboard input (`@nut-tree-fork/nut-js`)
+- [x] Active window inspection, window list, UIAutomation element tree
+- [x] Screen region OCR (`computer.readScreenText`, Windows.Media.Ocr)
 
 ### Phase 3 — Browser Automation
-- [ ] Playwright integration in main process
+- [x] Playwright integration in the main process
+- [x] Semantic locators: ARIA snapshot, role/label/text
+- [x] Page content extraction (`browser.getContent`, `web.fetch` readable text)
 - [ ] MCP-compatible browser tool interface
-- [ ] Page content extraction and summarization
 
 ### Phase 4 — Local Model Integration
-- [ ] Ollama API client (default: `http://localhost:11434`)
-- [ ] Streaming responses in chat
-- [ ] Tool-call parsing from model output
-- [ ] Context window management
+- [x] Ollama API client (default: `http://localhost:11434`)
+- [x] Streaming responses in chat
+- [x] Native tool calls plus a JSON-mode fallback
+- [x] Context window management (per-step result budgets, prompt trimming)
 
 ### Phase 5 — Research & Workflows
-- [ ] Web search adapter
-- [ ] Document summarization pipeline
+- [x] Web search adapter (`web.search`, `research.search`)
+- [x] Document summarization pipeline (`research.summarize`, `research.brief`)
 - [ ] Social media draft composer (review-only, no auto-post)
 - [ ] Crypto workflow helpers (read-only, no signing)
 
 ### Phase 6 — Persistence & Packaging
-- [ ] electron-store for settings and memory persistence
-- [ ] electron-builder packaging for Windows/macOS
+- [x] electron-store for settings and memory persistence
+- [x] electron-builder packaging for Windows
 - [ ] Auto-update support
 
 ---
@@ -128,10 +135,27 @@ This runs Vite dev server + TypeScript watch + Electron concurrently.
 
 | Adapter | Status | Notes |
 |---|---|---|
-| Desktop | Stub | Phase 2 |
-| Browser | Stub | Phase 3 |
-| Research | Stub | Phase 5 |
+| Desktop | **Working** | Screenshot, cursor, click/drag/scroll, typing, keys and shortcuts, active window, window list, UIAutomation element tree, clipboard, waits, and screen-region OCR (`computer.readScreenText`, Windows OCR — no vision model) |
+| Browser | **Working** | Playwright in the main process: open, navigate, click, type, read, screenshot, ARIA snapshot, role/label/text locators. Uses Brave when installed (resolved per platform; `GOGA_BRAVE_PATH` overrides) and Playwright's own Chromium otherwise |
+| Research | **Working** | `research.search` (DuckDuckGo via `web.search`), `research.summarize` (fetch a page, chunk it, summarise with the local model, merge), `research.brief` (search → read top pages → cited answer) |
+| Files | **Working** | Read, write, list, search, move, delete, mkdir, with risk levels |
+| Memory | **Working** | `electron-store` for settings, facts and history; conversation notes; semantic recall through `nomic-embed-text` |
 | Trading | **Disabled** | Will not be enabled |
 | Wallet signing | **Disabled** | Will not be enabled |
-| Social posting | **Disabled** | Draft-only in Phase 5 |
+| Social posting | **Disabled** | Draft-only |
 | Offensive security | **Disabled** | Will not be enabled |
+
+### Tool surface
+
+Tools are registered in `src/main/tools/` and dispatched through `ToolRegistry`. Every call is authorised by `services/authorization.ts` before it runs: read-only observation tools are auto-approved, `filesystem.delete`, `process.kill` and `shell.execute` always require approval, and anything at or above the configured risk threshold pauses for the approval card.
+
+- `computer.*` — screen and input control, including `computer.readScreenText` for exact text
+- `browser.*` — Playwright sessions, plus `browser.openExternal` for the user's own browser
+- `web.search` / `web.fetch` — DuckDuckGo search and readable-text page fetch
+- `research.search` / `research.summarize` / `research.brief` — the research pipeline above
+- `filesystem.*`, `process.*`, `shell.execute`, `memory.*`, `vision.*`, `clock.now`
+- `self.*`, `schedule.*`, `library.*`, `trading.*` (read-only), `electronics.*`, `microcontroller.*`
+
+### Screen-region OCR
+
+`computer.readScreenText` takes `x`, `y`, `width`, `height` in the same logical pixels `computer.click` uses, captures that rectangle at the display's real DPI, and runs Windows' own OCR engine over it. It returns the recognised text, its lines, the region read and the display scale. Omit the region to read the whole primary display. It needs no vision model, no network and no extra dependency, and it is auto-approved as a read-only observation. Use it when exact wording, numbers or an error message matter; use `vision.analyze` when you need a description of what is on screen.

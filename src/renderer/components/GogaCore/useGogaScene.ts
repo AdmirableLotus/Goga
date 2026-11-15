@@ -10,6 +10,7 @@ import { buildMembranePoints, buildMembraneGeometry, updateMembraneGeometry, tic
 import { createParticles, tickParticles } from './livingTriangle/particles'
 import { createWaveSystem, tickWaves } from './livingTriangle/energyWaves'
 import { createEdgeFlow, tickEdgeFlow, type EdgeFlow } from './livingTriangle/edgeFlow'
+import { CAMERA_DISTANCE, CAMERA_FOV_DEG } from './sceneCamera'
 import type { AudioReactiveState } from './livingTriangle/types'
 import type { ParticleSystem } from './livingTriangle/particles'
 import type { WaveSystem } from './livingTriangle/energyWaves'
@@ -71,6 +72,8 @@ interface SR {
   bloom: UnrealBloomPass
   clock: THREE.Clock; frameId: number
   vs: GogaVisualState; amp: number
+  /** 0–1 agitation from the Chat status line. 0 = calm, and no extra motion at all. */
+  heat: number
   userRotY: number; userScale: number
   pLight: THREE.PointLight; cLight: THREE.PointLight
   // Living triangle additions
@@ -89,7 +92,9 @@ const CORE_STREAM_Z = 1.2
 export function useGogaScene(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   visualState: GogaVisualState,
-  audioAmplitude: number
+  audioAmplitude: number,
+  /** 0-1 agitation from the Chat status line. Optional: Mission Mode passes nothing. */
+  heat = 0
 ) {
   const r = useRef<SR | null>(null)
 
@@ -113,8 +118,10 @@ export function useGogaScene(
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(C.bg)
 
-    const camera = new THREE.PerspectiveCamera(38, canvas.clientWidth / canvas.clientHeight, 0.1, 100)
-    camera.position.set(0, 0.1, 8.0)
+    // Fixed framing: the fov never follows the container's height, so a short
+    // strip shows the same triangle rather than a wider view of a smaller one.
+    const camera = new THREE.PerspectiveCamera(CAMERA_FOV_DEG, canvas.clientWidth / canvas.clientHeight, 0.1, 100)
+    camera.position.set(0, 0.1, CAMERA_DISTANCE)
 
     // Lights
     scene.add(new THREE.AmbientLight(0x110022, 0.4))
@@ -266,7 +273,7 @@ export function useGogaScene(
       group, layers,
       coreFill, coreMat, halo1, halo1Mat, halo2, halo2Mat, coreRing, coreRingMat,
       particles, pPos, bloom, clock, frameId: 0,
-      vs: 'idle', amp: 0, userRotY: 0, userScale: 1,
+      vs: 'idle', amp: 0, heat: 0, userRotY: 0, userScale: 1,
       pLight, cLight,
       audioState: createAudioState(),
       particleSys,
@@ -281,8 +288,11 @@ export function useGogaScene(
       const w = canvas.clientWidth, h = canvas.clientHeight
       if (w === 0 || h === 0) return
       r.current.camera.aspect = w / h
-      // Adjust FOV so triangle always fits — taller container = narrower FOV
-      r.current.camera.fov = Math.max(28, Math.min(55, 38 * (400 / Math.max(h, 100))))
+      // The fov stays where it was built. It used to be recomputed from the
+      // container height (38 * 400 / h, clamped 28-55), which opened the camera
+      // up as the compact strip got shorter and shrank the triangle exactly when
+      // it had the least room. Only the aspect follows the box now.
+      r.current.camera.fov = CAMERA_FOV_DEG
       r.current.camera.updateProjectionMatrix()
       r.current.renderer.setSize(w, h, false)
       r.current.composer.setSize(w, h)
@@ -423,6 +433,33 @@ export function useGogaScene(
         s.group.position.y *= 0.85
       }
 
+      // ── Agitation ────────────────────────────────────────────────────────────
+      // heat comes from the Chat status line: 0 when nothing is running, so an
+      // idle scene does no extra work and stays perfectly still. It is capped at
+      // 1 by the status line, so a long run never turns into a strobe.
+      //
+      // Heat has to be visible in the state that actually occurs — a two-second
+      // think, then streaming — so it drives brightness, edge turbulence, comet
+      // speed and the core's breathing, not just a sub-pixel jitter.
+      const heat = s.heat
+      if (heat > 0.01) {
+        const jitter = heat * 0.05
+        s.group.position.x += (Math.random() - 0.5) * jitter
+        s.group.position.y += (Math.random() - 0.5) * jitter
+        s.group.rotation.z = Math.sin(t * (2 + heat * 9)) * 0.02 * heat
+        bloomTarget += heat * 0.9
+        // The core breathes harder and the halos open up, so the triangle reads
+        // as "working" from across the room.
+        coreScale *= 1 + heat * 0.10 * Math.sin(t * (3 + heat * 6))
+        h1Opacity += heat * 0.22
+        h2Opacity += heat * 0.12
+        // A warm shift toward the accent, so heat is a colour change too.
+        outerCol.lerp(new THREE.Color(C.elecPurple), heat * 0.35)
+        innerCol.lerp(new THREE.Color(C.cyan), heat * 0.30)
+      } else {
+        s.group.rotation.z *= 0.9
+      }
+
       // ── Update layers ─────────────────────────────────────────────────────
       for (let i = 0; i < LAYERS; i++) {
         const layer = s.layers[i]
@@ -489,7 +526,9 @@ export function useGogaScene(
 
       // ── Energy membrane ──────────────────────────────────────────────────────
       const preset = STATE_PRESETS[vs]
-      const turbulence = preset.edgeTurbulence + (vs === 'speaking' ? audioEnv * 0.12 : 0)
+      // Heat adds to the membrane's own turbulence: the outline visibly shivers
+      // while Goga works, and goes still the moment it stops.
+      const turbulence = preset.edgeTurbulence + (vs === 'speaking' ? audioEnv * 0.12 : 0) + heat * 0.55
       for (let mi = 0; mi < s.membraneLines.length; mi++) {
         const { line, pts } = s.membraneLines[mi]
         tickMembrane(pts, t, turbulence * (1 - mi * 0.2), audioEnv * 0.35)
@@ -512,7 +551,9 @@ export function useGogaScene(
       // ── Edge energy streams ──────────────────────────────────────────────────
       const outerZ = (s.group.children[0] as THREE.Group).position.z
       const flowCol = new THREE.Color(pCol).lerp(new THREE.Color(C.coreWhite), 0.4)
-      tickEdgeFlow(s.edgeFlow, wdt, vs, audioEnv, flowCol, outerZ, CORE_STREAM_Z)
+      // Heat speeds the comets up and brightens them, so the edges are visibly
+      // busier while a run is in flight.
+      tickEdgeFlow(s.edgeFlow, wdt, vs, Math.max(audioEnv, heat * 0.8), flowCol, outerZ, CORE_STREAM_Z)
 
       // Speaking: amplitude drives bloom and outer scale
       if (vs === 'speaking') { bloomTarget = 1.5 + audioEnv * 0.6 }
@@ -534,6 +575,7 @@ export function useGogaScene(
 
   useEffect(() => { if (r.current) r.current.vs  = visualState    }, [visualState])
   useEffect(() => { if (r.current) r.current.amp = audioAmplitude }, [audioAmplitude])
+  useEffect(() => { if (r.current) r.current.heat = heat }, [heat])
 
   return { rotateBy, scaleBy }
 }

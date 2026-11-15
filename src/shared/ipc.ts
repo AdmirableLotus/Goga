@@ -69,9 +69,13 @@ export interface MainHandlers {
   'voice:listenOnce': () => Promise<void>
   'voice:stopListening': () => Promise<void>
   'voice:stopSpeaking': () => Promise<void>
-  'voice:startWakeLoop': () => Promise<void>
-  'voice:stopWakeLoop': () => Promise<void>
+  'voice:startWakeLoop': () => Promise<import('../main/services/wakeWord').WakeStatus>
+  'voice:stopWakeLoop': () => Promise<import('../main/services/wakeWord').WakeStatus>
   'voice:status': () => Promise<import('../main/services/voiceOrchestrator').VoiceStatus>
+  /** The honest state of the always-on listener: off / starting / listening / request / error. */
+  'voice:wakeStatus': () => Promise<import('../main/services/wakeWord').WakeStatus>
+  /** Ask Windows whether a microphone exists and can be opened. Starts nothing. */
+  'voice:probeMic': () => Promise<import('../main/services/wakeWord').MicProbe>
 
   // Library
   'library:ingest': (filePath?: string) => Promise<import('./types').BookMeta>
@@ -98,6 +102,287 @@ export interface MainHandlers {
   'trading:status': () => Promise<import('../main/handlers/trading').TradingStatus>
   'trading:saveKeys': (keyId: string, secret: string) => Promise<import('../main/handlers/trading').TradingStatus>
   'trading:forgetKeys': () => Promise<import('../main/handlers/trading').TradingStatus>
+
+  // Alpaca broker (read-only account data, prepared orders, kill switch)
+  'broker:snapshot': (mode: import('./broker').BrokerMode) => Promise<import('./broker').BrokerSnapshot>
+  'broker:prepare': (input: {
+    mode: import('./broker').BrokerMode
+    symbol: string
+    side: 'buy' | 'sell'
+    qty?: number | null
+    notional?: number | null
+    orderType?: 'market' | 'limit'
+    limitPrice?: number | null
+    reason: string
+  }) => Promise<import('./broker').OrderIntent>
+  'broker:approve': (intentId: string, approved: boolean) => Promise<import('./broker').OrderIntent>
+  'broker:send': (intentId: string) => Promise<import('./broker').BrokerOrderResult>
+  'broker:kill': (mode: import('./broker').BrokerMode, reason: string) => Promise<import('./broker').KillSwitchResult>
+  'broker:clearKill': () => Promise<import('./broker').KillSwitchResult>
+  'broker:setLive': (enabled: boolean, phrase: string) => Promise<{ liveEnabled: boolean; message: string }>
+  'broker:audit': (limit?: number) => Promise<import('./broker').OrderAuditEntry[]>
+  'broker:limits': () => Promise<import('./broker').RiskLimitsView>
+  'broker:savePaperKeys': (keyId: string, secret: string) => Promise<{ ok: boolean; error: string | null }>
+  'broker:saveLiveKeys': (keyId: string, secret: string) => Promise<{ ok: boolean; error: string | null }>
+  'broker:forgetLiveKeys': () => Promise<{ ok: boolean }>
+  'broker:keyState': () => Promise<{ paper: boolean; live: boolean }>
+
+  // The general browser-control layer: attach to Firefox, read and drive a page
+  'browser:status': () => Promise<import('./browser').BrowserStatus>
+  'browser:start': (url?: string) => Promise<import('./browser').BrowserStatus>
+  'browser:attach': () => Promise<import('./browser').BrowserStatus>
+  'browser:detach': () => Promise<import('./browser').BrowserStatus>
+  'browser:tabs': () => Promise<import('./browser').BrowserTab[]>
+  'browser:selectTab': (id: string) => Promise<import('./browser').BrowserTab>
+  'browser:navigate': (url: string) => Promise<{ url: string; title: string }>
+  'browser:readPage': () => Promise<import('./browser').PageRead>
+  'browser:find': (query: import('./browser').ElementQuery) => Promise<import('./browser').FoundElement>
+  'browser:click': (query: import('./browser').ElementQuery) => Promise<{ clicked: string }>
+  'browser:type': (query: import('./browser').ElementQuery, text: string) => Promise<{ typed: string }>
+  'browser:readValue': (query: import('./browser').ElementQuery) => Promise<{ found: boolean; value: string | null; visible: boolean }>
+  'browser:waitForText': (text: string, exact?: boolean, timeoutMs?: number) => Promise<{ found: boolean; firstText: string }>
+  'browser:waitForElement': (query: import('./browser').ElementQuery, timeoutMs?: number) => Promise<import('./browser').FoundElement>
+  'browser:screenshot': () => Promise<{ base64: string; url: string }>
+  'browser:recipes': () => Promise<import('./browser').SiteRecipe[]>
+  'browser:learn': () => Promise<import('./browser').SiteRecipe>
+  'browser:correctRecipe': (host: string, notes: string) => Promise<import('./browser').SiteRecipe>
+  'browser:forgetRecipe': (host: string) => Promise<import('./browser').SiteRecipe[]>
+
+  // The two practice venues, the shared approval gate, the shared learning loop
+  'venue:info': () => Promise<Record<import('./venues').VenueId, import('./venues').VenueInfo>>
+  'venue:halt': (venue: import('./venues').VenueId, halted: boolean, reason: string) => Promise<import('../main/services/venues/state').VenueHalt>
+  'venue:haltState': (venue: import('./venues').VenueId) => Promise<import('../main/services/venues/state').VenueHalt>
+  'venue:events': (limit?: number) => Promise<import('../main/services/venues/state').VenueEvent[]>
+  'venue:pivexRead': () => Promise<import('../main/services/venues/pivex').PivexRead>
+  'venue:pivexQuote': (symbol: string) => Promise<import('./venues').VenueQuote | null>
+  'venue:pivexPrepare': (input: import('../main/services/venues/pivex').PivexPrepareInput) => Promise<import('./venues').VenueTicket>
+  'venue:pivexSend': (ticketId: string) => Promise<import('./venues').VenueSendResult>
+  'venue:alpacaRead': () => Promise<import('../main/services/venues/alpaca').AlpacaRead>
+  'venue:alpacaQuote': (symbol: string) => Promise<import('./venues').VenueQuote | null>
+  'venue:alpacaPrepare': (input: import('../main/services/venues/alpaca').AlpacaPrepareInput) => Promise<import('./venues').VenueTicket>
+  'venue:alpacaSend': (ticketId: string) => Promise<import('./venues').VenueSendResult>
+  'venue:approve': (ticketId: string, approved: boolean) => Promise<{ ok: boolean; message: string; ticket: import('./venues').VenueTicket | null }>
+  'venue:ticket': (ticketId: string) => Promise<{ ticket: import('./venues').VenueTicket; approved: boolean; spent: boolean; expired: boolean } | null>
+  'venue:stats': (venue: import('./venues').VenueId) => Promise<import('./venues').LoopStats>
+  'venue:trades': (limit?: number) => Promise<import('./venues').TradeRecord[]>
+  'venue:closeTrade': (venue: import('./venues').VenueId, symbol: string, exitPrice: number, contractSize?: number) => Promise<{ ok: boolean; message: string; trade: import('./venues').TradeRecord | null }>
+  'venue:studyBase': () => Promise<import('../main/services/venues/study').StudyBase>
+
+  // Bug bounty: programs, scope, one approved request, drafts, study material
+  'security:programs': () => Promise<{
+    programs: import('./security').ProgramImport[]
+    active: import('./security').ProgramImport | null
+    credentials: Record<'hackerone' | 'bugcrowd', { configured: boolean; encryptionAvailable: boolean }>
+    connections: Record<'hackerone' | 'bugcrowd', import('./security').PlatformConnection>
+  }>
+  /** A real, narrow call to the platform. This is what decides connected / rejected / expired. */
+  'security:checkConnection': (source: import('./security').ProgramSource) => Promise<import('./security').PlatformConnection>
+  /** The platform's own directory of programs this account can see. */
+  'security:listPrograms': (source: import('./security').ProgramSource) => Promise<{
+    programs: import('./security').ProgramSummary[]
+    pages: number
+    participating: number
+    connection: import('./security').PlatformConnection
+  }>
+  /** Import several programs in one pass; each one reports its own outcome. */
+  'security:importMany': (source: import('./security').ProgramSource, handles: string[]) => Promise<{
+    results: import('./security').ProgramImportResult[]
+    programs: import('./security').ProgramImport[]
+    active: import('./security').ProgramImport | null
+  }>
+  'security:credentials': (source: import('./security').ProgramSource, user: string, token: string) => Promise<Record<'hackerone' | 'bugcrowd', { configured: boolean; encryptionAvailable: boolean }>>
+  'security:clearCredentials': (source: import('./security').ProgramSource) => Promise<Record<'hackerone' | 'bugcrowd', { configured: boolean; encryptionAvailable: boolean }>>
+  'security:import': (source: import('./security').ProgramSource, handle: string) => Promise<import('./security').ProgramImport>
+  'security:setActive': (id: string | null) => Promise<{ programs: import('./security').ProgramImport[]; active: import('./security').ProgramImport | null }>
+  'security:remove': (id: string) => Promise<{ programs: import('./security').ProgramImport[]; active: import('./security').ProgramImport | null }>
+  'security:program': (id: string) => Promise<import('./security').ProgramImport | null>
+  'security:toolbox': () => Promise<import('./toolboxTypes').ToolboxCatalog>
+  'security:toolboxSearch': (query: string) => Promise<import('./toolboxTypes').ToolboxSearchResult[]>
+  'security:toolboxTool': (identifier: string) => Promise<import('./toolboxTypes').ToolReference | null>
+  'security:checkTarget': (target: string, technique?: string) => Promise<{ decision: import('./security').ScopeDecision; program: { id: string; name: string } | null }>
+  'security:approveRequest': (target: string, method: string) => Promise<{ grantId: string; decision: import('./security').ScopeDecision }>
+  'security:findings': () => Promise<import('./security').Finding[]>
+  'security:addFinding': (input: { title: string; severity: import('./security').Finding['severity']; asset: string; summary: string; steps: string; impact: string; remediation: string; evidence: string }) => Promise<import('./security').Finding>
+  'security:updateFinding': (id: string, patch: Partial<import('./security').Finding>) => Promise<import('./security').Finding>
+  'security:deleteFinding': (id: string) => Promise<void>
+  'security:audit': (limit?: number) => Promise<import('./security').SecurityAuditEntry[]>
+  'security:curriculum': () => Promise<import('./security').Curriculum>
+  'security:lesson': (id: string) => Promise<import('./security').Lesson | null>
+
+  // Grimoire: specialist review, the independent validator, knowledge base, memory
+  'grimoire:specialists': () => Promise<import('./grimoire').Specialist[]>
+  'grimoire:knowledge': () => Promise<import('./grimoire').KnowledgeBase>
+  'grimoire:gate': () => Promise<import('./grimoire').GateQuestion[]>
+  'grimoire:indexTarget': (root: string) => Promise<import('./grimoire').LocalTarget>
+  'grimoire:reviewFile': (input: { root: string; path: string; marker?: string; specialists?: import('./grimoire').SpecialistId[] }) => Promise<import('./grimoire').ReviewRun>
+  'grimoire:reviewText': (input: { text: string; label?: string; marker?: string; specialists?: import('./grimoire').SpecialistId[] }) => Promise<import('./grimoire').ReviewRun>
+  'grimoire:sample': (input: { text: string; marker?: string }) => Promise<import('./grimoire').SampledText>
+  'grimoire:headers': (headers: Record<string, string>) => Promise<import('./grimoire').HeaderOfInterest[]>
+  'grimoire:jsEndpoints': (source: string) => Promise<import('./grimoire').JsEndpoint[]>
+  'grimoire:memory': (programId?: string) => Promise<{ entries: import('./grimoire').MemoryEntry[]; summary: import('./grimoire').MemorySummary }>
+  'grimoire:forget': (key: string) => Promise<{ entries: import('./grimoire').MemoryEntry[]; summary: import('./grimoire').MemorySummary }>
+  'grimoire:gateDecide': (input: { hypothesis: import('./grimoire').Hypothesis; answers: import('./grimoire').GateAnswer[] }) => Promise<import('./grimoire').GateResult>
+  'grimoire:importCantina': (url: string) => Promise<{ program: import('./security').ProgramImport; bar: import('./security').ProgramEntryBar }>
+  'grimoire:bountyFeed': (query?: string) => Promise<import('./bountyFinder').BountyFeed>
+  'grimoire:state': () => Promise<{
+    programs: import('./security').ProgramImport[]
+    active: import('./security').ProgramImport | null
+    specialists: number
+    memory: import('./grimoire').MemorySummary
+  }>
+
+  // OSINT: public-source people and domain research, with an audit trail
+  'osint:state': () => Promise<import('./osint').OsintPageState>
+  'osint:run': (kind: import('./osint').OsintKind, params: Record<string, unknown>) => Promise<{ data: unknown; text: string; audit: import('./osint').OsintAuditEntry }>
+  'osint:history': (limit?: number) => Promise<import('./osint').OsintAuditEntry[]>
+  'osint:saveBreachKey': (key: string) => Promise<import('./osint').OsintBreachKeyState>
+  'osint:clearBreachKey': () => Promise<import('./osint').OsintBreachKeyState>
+
+  // Self-improvement loop and the persistent learning layer
+  'evolution:state': () => Promise<import('./evolution').EvolutionState>
+  'evolution:start': (goal: string) => Promise<import('./evolution').EvolutionRun>
+  'evolution:install': () => Promise<import('./evolution').EvolutionRun>
+  'evolution:discard': () => Promise<unknown>
+  'evolution:notes': () => Promise<import('./evolution').LearningNote[]>
+  'evolution:remember': (kind: import('./evolution').LearningNote['kind'], text: string, source: string) => Promise<import('./evolution').LearningNote>
+  'evolution:forget': (id: string) => Promise<void>
+  'evolution:skills': () => Promise<import('./evolution').SkillRecord[]>
+  'evolution:recordSkill': (input: { name: string; whenToUse: string; steps: string[]; tools?: string[] }) => Promise<import('./evolution').SkillRecord>
+  'evolution:deleteSkill': (id: string) => Promise<void>
+
+  // Goga working on its own source code: read and search freely, write only on approval
+  'selfwork:state': () => Promise<import('./selfwork').SelfWorkState>
+  'selfwork:files': () => Promise<import('./selfwork').RepoFile[]>
+  'selfwork:read': (path: string, start?: number, count?: number) => Promise<import('./selfwork').RepoRead>
+  'selfwork:search': (query: string, max?: number) => Promise<import('./selfwork').RepoHit[]>
+  'selfwork:propose': (input: { path: string; summary: string; after: string; operation?: import('./selfwork').SelfWorkOperation }) => Promise<import('./selfwork').SelfWorkProposalView>
+  'selfwork:proposePatch': (input: { path: string; summary: string; find: string; replace: string }) => Promise<import('./selfwork').SelfWorkProposalView>
+  'selfwork:proposeDelete': (input: { path: string; summary: string }) => Promise<import('./selfwork').SelfWorkProposalView>
+  'selfwork:decide': (id: string, approved: boolean) => Promise<{ ok: boolean; message: string; proposal: import('./selfwork').SelfWorkProposalView | null }>
+  'selfwork:apply': (id: string) => Promise<{ ok: boolean; message: string; proposal: import('./selfwork').SelfWorkProposalView | null }>
+  'selfwork:revert': (id: string) => Promise<{ ok: boolean; message: string }>
+  'selfwork:check': (only?: ('build' | 'typecheck' | 'tests')[]) => Promise<import('./selfwork').SelfWorkCheckReport>
+
+  // Strategy: the rule-based strategies, backtests, journal, review and the paper loop
+  'strategy:state': () => Promise<import('./strategy').StrategyPageState>
+  'strategy:backtest': (input: { strategyId: import('./strategy').StrategyId; symbol: string; params?: import('./strategy').StrategyParams; days?: number }) => Promise<import('./strategy').BacktestResult>
+  'strategy:review': (strategyId: string, symbol: string) => Promise<import('./strategy').ReviewResult>
+  'strategy:saveSettings': (patch: Partial<import('./strategy').StrategySettings>) => Promise<import('./strategy').StrategyPageState>
+  'strategy:setPaperRun': (enabled: boolean) => Promise<import('./strategy').PaperRunState>
+  'strategy:setAutoApprove': (enabled: boolean) => Promise<import('./strategy').PaperRunState>
+  'strategy:runOnce': () => Promise<string>
+  'strategy:approvePending': () => Promise<{ ok: boolean; message: string }>
+  'strategy:discardPending': () => Promise<{ ok: boolean; message: string }>
+  'strategy:journal': (limit?: number) => Promise<import('./strategy').JournalEntry[]>
+
+  // Business: the user's own accounts, drafts, testers, releases and monitoring
+  'business:state': () => Promise<import('./business').BusinessPageState>
+  'business:digest': () => Promise<import('./business').Digest>
+  'business:gmailAuthUrl': (clientId: string, clientSecret: string) => Promise<{ url: string; port: number }>
+  'business:gmailPending': () => Promise<boolean>
+  'business:connectBluesky': (identifier: string, appPassword: string) => Promise<import('./business').BusinessState>
+  'business:connectMastodon': (instance: string, token: string) => Promise<import('./business').BusinessState>
+  'business:connectShopify': (shop: string, token: string) => Promise<import('./business').BusinessState>
+  'business:connectPrintful': (token: string, storeId: string | null) => Promise<import('./business').BusinessState>
+  'business:disconnect': (id: import('./business').ConnectionId) => Promise<import('./business').BusinessState>
+  'business:accounts': () => Promise<Record<string, string | null>>
+  'business:prepareMail': (input: { to: string; subject: string; body: string; threadId?: string }) => Promise<import('./business').BusinessActionResult>
+  'business:preparePost': (platform: 'bluesky' | 'mastodon', text: string, about: string) => Promise<import('./business').BusinessActionResult>
+  'business:prepareListing': (input: {
+    storefront: import('./business').Storefront
+    title: string
+    description: string
+    tags: string[]
+    price: number
+    currency: string
+    shipping: string
+  }) => Promise<import('./business').BusinessActionResult>
+  'business:prepareTesterInvite': (appId: string, candidateId: string, subject: string, body: string) => Promise<import('./business').BusinessActionResult>
+  'business:approve': (pendingId: string) => Promise<import('./business').BusinessActionResult>
+  'business:deny': (pendingId: string) => Promise<import('./business').BusinessActionResult>
+  'business:addCandidate': (input: { appId: string; name: string; email: string; source: string; notes: string }) => Promise<import('./business').TesterCandidate>
+  'business:setCandidateState': (appId: string, id: string, state: import('./business').TesterState, optedInAt?: string | null) => Promise<import('./business').TesterCandidate>
+  'business:forgetCandidate': (appId: string, id: string) => Promise<void>
+  'business:setCandidateOptInDate': (appId: string, id: string, date: string) => Promise<import('./business').TesterCandidate>
+  'business:addTrackedApp': (input: { name: string; packageName: string; track?: import('./business').PlayTrack; required?: number; optInDays?: number; notes?: string }) => Promise<import('./business').TesterApp>
+  'business:editTrackedApp': (appId: string, patch: Partial<Pick<import('./business').TesterApp, 'name' | 'track' | 'required' | 'optInDays' | 'notes'>>) => Promise<import('./business').TesterApp>
+  'business:forgetTrackedApp': (appId: string) => Promise<void>
+  'business:saveCopyDraft': (channel: string, text: string) => Promise<{ id: string; createdAt: string; channel: string; text: string }>
+  'business:forgetCopyDraft': (id: string) => Promise<void>
+  'business:forgetListingDraft': (id: string) => Promise<void>
+  'business:forgetPostDraft': (id: string) => Promise<void>
+  'business:saveProfile': (patch: Record<string, unknown>) => Promise<import('./business').JobProfile>
+  'business:addApp': (input: { name: string; url: string; packageName: string; liveVersion: string; publishedWhere: string }) => Promise<import('./business').MonitoredApp>
+  'business:forgetApp': (id: string) => Promise<void>
+  'business:checkApp': (id: string) => Promise<{ app: import('./business').MonitoredApp; check: import('./business').HealthCheck }>
+  'business:checkAll': () => Promise<{ results: { id: string; check: import('./business').HealthCheck }[] }>
+  'business:build': (id: string) => Promise<import('./business').BuildProject>
+  'business:run': (id: string) => Promise<import('./business').BuildProject>
+  'business:stop': (id: string) => Promise<import('./business').BuildProject>
+  'business:searches': () => Promise<import('./business').SavedSearch[]>
+
+  // Google Play Console: the service account key, the read-only baseline, and the gated upload
+  'business:playState': () => Promise<import('./business').PlayState>
+  'business:playPickKey': () => Promise<{ canceled: boolean; path: string | null }>
+  'business:playUseKeyFile': (filePath: string) => Promise<{ ok: boolean; message: string; state: import('./business').PlayState }>
+  'business:playPasteKey': (text: string) => Promise<{ ok: boolean; message: string; state: import('./business').PlayState }>
+  'business:playCheckAccess': () => Promise<import('./business').PlayState>
+  'business:playReadBaseline': () => Promise<import('./business').PlayBaseline>
+  'business:playForget': () => Promise<import('./business').PlayState>
+  'business:playPickBundle': () => Promise<{ canceled: boolean; path: string | null }>
+  'business:playPrepareUpload': (input: {
+    packageName: string
+    track: string
+    aabPath: string
+    versionCode: string
+    releaseNotes: string
+    language?: string
+  }) => Promise<{ ok: boolean; message: string; submission: import('./business').PlaySubmissionView | null; state: import('./business').PlayState }>
+
+  // Persona: who Goga is, the user's own notes, and what he remembers
+  'persona:state': () => Promise<import('./persona').PersonaState>
+  'persona:save': (text: string) => Promise<import('./persona').PersonaState>
+  'persona:forgetFact': (id: string) => Promise<boolean>
+
+  // Jobs: separate workers with their own goals, questions and reports
+  'jobs:state': () => Promise<import('./jobs').JobsView>
+  'jobs:create': (input: { goal: string; title?: string; maxSteps?: number; maxMinutes?: number }) => Promise<{ job: import('./jobs').Job; view: import('./jobs').JobsView }>
+  'jobs:answer': (jobId: string, answer: string) => Promise<import('./jobs').JobsView>
+  'jobs:cancel': (jobId: string) => Promise<import('./jobs').JobsView>
+  'jobs:resume': (jobId: string) => Promise<import('./jobs').JobsView>
+  'jobs:setCap': (cap: number) => Promise<import('./jobs').JobsView>
+  'jobs:shutdown': () => Promise<void>
+
+  // Setup: the installed-tool catalogue, install proposals, virtualisation and VMs
+  'setup:catalogue': () => Promise<import('./setup').CatalogueReading>
+  'setup:virtualisation': () => Promise<import('./setup').VirtualisationReport>
+  'setup:state': () => Promise<import('./setup').SetupPageState>
+  'setup:audit': (limit?: number) => Promise<import('./setup').SetupAuditEntry[]>
+  'setup:proposeInstall': (input: {
+    package: string
+    task: string
+    why?: string
+    withoutIt?: string
+    vendorUrl?: string
+    version?: string
+  }) => Promise<import('./setup').InstallProposalResult>
+  'setup:decideInstall': (proposalId: string, approved: boolean) => Promise<{ ok: boolean; message: string; proposal: import('./setup').InstallProposal | null }>
+  'setup:runInstall': (proposalId: string) => Promise<import('./setup').InstallRunResult>
+  'setup:vmImages': () => Promise<{ key: string; name: string; url: string; vendorHost: string; verification: string; downloadGb: number }[]>
+  'setup:vmDefaults': () => Promise<import('./setup').VmResources>
+  'setup:proposeVm': (input: {
+    purpose: string
+    usedFor: string
+    name?: string
+    image?: string
+    provider?: import('./setup').VirtualisationProvider
+    cpuCores?: number
+    memoryGb?: number
+    diskGb?: number
+  }) => Promise<import('./setup').VmProposalResult>
+  'setup:decideVm': (proposalId: string, approved: boolean) => Promise<{ ok: boolean; message: string; proposal: import('./setup').VmProposal | null }>
+  'setup:createVm': (proposalId: string) => Promise<{ ok: boolean; message: string }>
+  'setup:explainFeatureEnable': (feature: string) => Promise<{ ok: boolean; message: string }>
 
   // Kokoro model management
   'model:kokoro-status': () => Promise<{ installed: boolean; downloading: boolean }>
@@ -137,6 +422,7 @@ export interface RendererEvents {
   'mission:state': import('./types').Mission
   // Voice
   'voice:status': { status: import('../main/services/voiceOrchestrator').VoiceStatus }
+  'voice:wakeStatus': import('../main/services/wakeWord').WakeStatus
   // Kokoro download progress
   'model:kokoro-progress': import('../main/services/modelManager').DownloadProgress
   'voice:transcript': { text: string }
@@ -144,6 +430,11 @@ export interface RendererEvents {
   'voice:amplitude': { value: number }
   // Whisper model download disclosure (emitted before first recognition if model not cached)
   'whisper:download-required': { model: string; device: string; downloadMB: number; cached: boolean; cacheDir: string; source: string }
+  // Self-improvement progress
+  'evolution:status': string
+  'evolution:update': import('./evolution').EvolutionState
+  // Job board: any change to any job, plus the queue numbers
+  'jobs:update': import('./jobs').JobsView
 }
 
 export type MainChannel = keyof MainHandlers

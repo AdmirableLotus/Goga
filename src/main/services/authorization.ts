@@ -23,6 +23,7 @@ const ALWAYS_AUTO: Set<string> = new Set([
   'computer.snapshot',
   'computer.accessibilityTree',
   'computer.findElement',
+  'computer.readScreenText',
   'computer.wait',
   'computer.focus.state',
   'computer.focus.ensure',
@@ -41,6 +42,9 @@ const ALWAYS_AUTO: Set<string> = new Set([
   'vision.findElement',
   'web.search',
   'web.fetch',
+  'research.search',
+  'research.summarize',
+  'research.brief',
   'memory.search',
 ])
 
@@ -50,6 +54,22 @@ const ALWAYS_APPROVAL: Set<string> = new Set([
   'process.kill',
   // A shell command can do anything, deleting included: the user agrees to each one.
   'shell.execute',
+  // Money: an order is never sent without the user's say-so, on top of the broker's own
+  // per-order confirmation.
+  'broker.sendOrder', 'broker.killSwitch',
+  // One active request against a bug-bounty target, even though it also needs a grant.
+  'security.probe',
+  // OSINT reaches third-party sites about a person or a domain: each run is approved by
+  // the user first, so they see the exact query and the stated purpose.
+  'osint.username', 'osint.email', 'osint.domain', 'osint.profile',
+  // Writing to Goga's own source, and the run that produces such a change.
+  'evolution.install', 'evolution.start',
+  // Installing a program and creating a virtual machine change the machine: each one is
+  // approved by the user, on top of the single-use gate's own binding to that exact install.
+  'setup.runInstall', 'setup.createVm',
+  // Writing Goga's own source: the single-use gate already holds the approval bound to
+  // that exact file and diff, and this makes the loop ask as well, so neither alone is enough.
+  'selfwork.apply',
 ])
 
 
