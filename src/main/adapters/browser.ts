@@ -1,8 +1,60 @@
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+
 import type { ToolAdapter } from './base'
 import type { Browser, BrowserContext, Page } from 'playwright'
 import { LogService } from '../services/logs'
 
-export const BRAVE_PATH ='C:\\Users\\redre\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'
+/**
+ * Where Brave actually is on this machine.
+ *
+ * The path used to be hardcoded to one user profile, which broke the moment the app
+ * ran under a different account or Brave was installed per-machine. Resolution order:
+ * an explicit GOGA_BRAVE_PATH override, then the per-user and per-machine install
+ * locations for this platform, then Brave on PATH. Returns null when Brave is not
+ * installed, so the caller can fall back to Playwright's own Chromium instead of
+ * failing with a confusing launch error.
+ */
+export function resolveBravePath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const override = env.GOGA_BRAVE_PATH?.trim()
+  if (override && fs.existsSync(override)) return override
+
+  const candidates: string[] = []
+  if (process.platform === 'win32') {
+    const local = env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+    const programFiles = env.PROGRAMFILES || 'C:\\Program Files'
+    const programFilesX86 = env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)'
+    candidates.push(
+      path.join(local, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
+      path.join(programFiles, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
+      path.join(programFilesX86, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe')
+    )
+  } else if (process.platform === 'darwin') {
+    candidates.push(
+      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+      path.join(os.homedir(), 'Applications', 'Brave Browser.app', 'Contents', 'MacOS', 'Brave Browser')
+    )
+  } else {
+    candidates.push('/usr/bin/brave-browser', '/usr/bin/brave', '/opt/brave.com/brave/brave', '/snap/bin/brave')
+  }
+
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate } catch { /* keep looking */ }
+  }
+
+  // Last resort: Brave on PATH (a portable or custom install).
+  const exe = process.platform === 'win32' ? 'brave.exe' : 'brave-browser'
+  for (const dir of (env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue
+    const candidate = path.join(dir, exe)
+    try { if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate } catch { /* keep looking */ }
+  }
+  return null
+}
+
+/** The resolved Brave executable, or '' when Brave is not installed on this machine. */
+export const BRAVE_PATH: string = resolveBravePath() ?? ''
 
 export interface BrowserSession {
   sessionId: string
@@ -102,8 +154,12 @@ export class BrowserAdapter implements ToolAdapter {
    * Returns a browser-N session that supports navigate, click, type, evaluate, screenshot. */
   async open(url: string, headless = true): Promise<BrowserSession> {
     const chromium = await this.getPlaywright()
+    // Brave when it is installed, Playwright's own Chromium otherwise — a missing Brave
+    // should not turn every browser task into a launch failure.
+    const bravePath = resolveBravePath()
+    if (!bravePath) this.log.warn('Brave was not found; using Playwright bundled Chromium for this session')
     const browser = await chromium.launch({
-      executablePath: BRAVE_PATH,
+      ...(bravePath ? { executablePath: bravePath } : {}),
       headless,
       args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
     })
