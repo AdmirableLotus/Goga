@@ -269,7 +269,7 @@ export const isCompoundQuestion = (text: string): boolean => (text.match(/\?/g) 
 //   - a bare "do it" with nothing to do it to is handled by the confirmation path, not here
 
 /** Verbs that, at the start of a request, mean "go and do this". */
-const ACTION_VERBS = String.raw`open|go\s+to|visit|navigate|browse|pull\s+up|bring\s+up|check|read|search|look\s+up|find|research|do|run|try|start|launch|click|type|fill|log\s*in|sign\s*in|download|install|set\s+up|prepare|place|book|buy|sell|send|draft|write|save|create|make|build|scan|test|apply|submit|register|enroll|compare|review|look\s+at|show\s+me|walk\s+me|help\s+me\s+with`
+const ACTION_VERBS = String.raw`open|go\s+to|visit|navigate|browse|pull\s+up|bring\s+up|check|read|search|look\s+up|find|research|do|run|try|start|launch|click|type|fill|log\s*in|sign\s*in|download|install|set\s+up|prepare|place|book|buy|sell|send|draft|write|save|create|make|build|scan|test|apply|submit|register|enroll|compare|review|work(?:\s+on)?|hunt|probe|import|look\s+at|show\s+me|walk\s+me|help\s+me\s+with`
 
 /** "let's …", "lets …", "let us …" — a stated intention to do something. */
 const LETS = /^\s*(?:ok(?:ay)?[,\s]+)?(?:let'?s|lets|let\s+us)\s+(?:\w+\s+){0,2}?(?:do|go|try|start|begin|check|look|open|work|run|get|have|tackle|take|handle|dive|start\s+on)\b/i

@@ -437,6 +437,15 @@ describe('agentRouting — show verb and URL triggers', () => {
   it('mentioning a domain without an open verb stays chat', () => {
     expect(looksLikeAgentTask('I read an article on wikipedia.org yesterday')).toBe(false)
   })
+  it('"work the bounty at <url>" is an agent task, not a chat reply', () => {
+    // The live bug: this went to chat, which narrated "I don't have a browser session".
+    expect(looksLikeAgentTask('work the bounty at https://bounties.cantina.xyz/cantina/bug-bounty')).toBe(true)
+    expect(looksLikeAgentTask('work on https://example.com/scope')).toBe(true)
+    expect(looksLikeAgentTask('import https://bounties.cantina.xyz/cantina/bug-bounty')).toBe(true)
+  })
+  it('"work" with no site named stays chat, so ordinary talk is not dispatched', () => {
+    expect(looksLikeAgentTask('work on my resume with me')).toBe(false)
+  })
 })
 
 // ── 10. agentRouting — form/fill/submit routing requirement ─────────────────
