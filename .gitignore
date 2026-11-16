@@ -7,3 +7,28 @@ artifacts/
 .env.local
 scripts/f02-screenshots/
 scripts/f03-screenshots/
+
+# Throwaway debugging & experiment scripts (wake word, chat stage, trading diagnostics).
+# Kept on disk; not part of history. Tracked diag-*/f0*/m*-* scripts are unaffected.
+scripts/diag-*
+scripts/patch-*
+scripts/sw-patch*
+scripts/wake-*
+scripts/make-diag-*
+scripts/tb-verify*
+scripts/fix-*
+scripts/debug-jobs.mjs
+scripts/probe-pivex.js
+scripts/read-aab-manifest.js
+scripts/write-wake-script.js
+scripts/show-settings.py
+scripts/run-diag*.bat
+scripts/verify-alpaca-live.js
+scripts/verify-browser-layer.js
+
+# Loose run outputs / scratch at repo root
+*.out
+shots/
+verify-alpaca-key.cjs
+# Stray 0-byte file from a shell quoting accident
+'
