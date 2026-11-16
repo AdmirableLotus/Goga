@@ -33,6 +33,7 @@ import { registerOsintHandlers } from './handlers/osint'
 import { registerJobsHandlers } from './handlers/jobs'
 import { registerSetupHandlers } from './handlers/setup'
 import { startJobs, stopJobs } from './services/jobs/instance'
+import { reconcileStaleRuns } from './services/lab/runs'
 import { ActionStore } from './services/actionStore'
 import { AgentLoop } from './services/agentLoop'
 import { LocalLlamaService } from './services/localLlama'
@@ -242,6 +243,10 @@ app.whenReady().then(() => {
   // Jobs outlive the window, so the board is loaded here — not when the page opens — and
   // anything that was mid-run when the app last closed is marked interrupted, not lost.
   startJobs()
+
+  // A Lab run left 'running' by a crash is marked stopped, so the record never lies that an
+  // offensive process is still going when no process exists.
+  reconcileStaleRuns()
 
   // Hands-free "hey goga": start the always-on wake listener at launch when
   // enabled, so it works with the window open — not only when asleep in the tray.

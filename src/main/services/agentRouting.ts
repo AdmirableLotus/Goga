@@ -116,7 +116,7 @@ const FLUX_RARELY_NEEDED = /^flux\.(send_feedback|review_knowledge|list_organiza
 export const TRADING_TASK = /\b(trad(e|es|ing|er)|stocks?|shares|etfs?|crypto|bitcoin|btc|eth|ethereum|solana|forex|currency pair|portfolio|backtest\w*|rsi|macd|candlesticks?|paper (account|trad\w+)|practice (account|trad\w+)|alpaca|broker|kill switch|positions?|open orders?|eur\/?usd|gbp\/?usd|usd\/?jpy|[a-z]{2,5}\/usd)\b/i
 
 /** Tasks about bug bounty work: scope, a target, a finding, a report, or the curriculum. */
-export const SECURITY_TASK = /\b(bug ?bounty|bount(y|ies)|hackerone|bugcrowd|scope|in.scope|out.of.scope|probe|xss|cross.site scripting|vulnerabilit(y|ies)|pentest|penetration test|reconnaissance|recon|triager|disclosure|submission|owasp|nmap|subfinder|nuclei|sqlmap|wpscan|toolbox|cheat.?sheet|metasploit|msfconsole|hashcat|john the ripper|hydra|medusa|netexec|nxc|aircrack|ettercap|kismet|mimikatz|wireshark|tshark)\b/i
+export const SECURITY_TASK = /\b(bug ?bounty|bount(y|ies)|hackerone|bugcrowd|scope|in.scope|out.of.scope|probe|xss|cross.site scripting|vulnerabilit(y|ies)|pentest|penetration test|reconnaissance|recon|triager|disclosure|submission|owasp|nmap|subfinder|nuclei|sqlmap|wpscan|toolbox|cheat.?sheet|metasploit|msfconsole|hashcat|john the ripper|hydra|medusa|netexec|nxc|aircrack|ettercap|kismet|mimikatz|wireshark|tshark|idor|ffuf|katana|httpx|port ?scan|password ?spray|credential ?spray|username enumeration|declared? target|the lab)\b/i
 
 /** Tasks about designing or debugging hardware, or the ring project's sensing chain. */
 export const ENGINEERING_TASK = /\b(ads12\d\d|afe|op ?amp|datasheet|bill of materials|bom|power budget|battery life|electrode|impedance|isfet|bioimpedance|filter (cutoff|response)|decoupling|regulator|pcb|schematic|netlist|kicad|solder|bench|oscilloscope|multimeter|viora|alma)\b/i
@@ -180,7 +180,7 @@ function baseOffers(task: string): (name: string) => boolean {
   if (!focused) {
     // Everything except the focused families and the self/evolution tools (offered separately).
     return name => !name.startsWith('flux.') && !HARDWARE_TOOLS.test(name) && !name.startsWith('trading.')
-      && !name.startsWith('broker.') && !name.startsWith('security.') && !name.startsWith('ee.') && !name.startsWith('evolution.')
+      && !name.startsWith('broker.') && !name.startsWith('security.') && !name.startsWith('lab.') && !name.startsWith('ee.') && !name.startsWith('evolution.')
       && !name.startsWith('osint.') && !name.startsWith('strategy.') && !name.startsWith('business.')
       && !name.startsWith('jobs.') && !name.startsWith('setup.')
   }
@@ -190,6 +190,7 @@ function baseOffers(task: string): (name: string) => boolean {
     if (name.startsWith('trading.')) return trading
     if (name.startsWith('broker.')) return trading
     if (name.startsWith('security.')) return security
+    if (name.startsWith('lab.')) return security
     if (name.startsWith('strategy.')) return trading
     if (name.startsWith('business.')) return business
     if (name.startsWith('persona.')) return true
