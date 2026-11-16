@@ -206,6 +206,23 @@ describe('4. the browser is reachable from a chat request', () => {
     expect(AgentLoop.siteToOpen('lets do bounty')).toBe('https://www.hackerone.com/')
   })
 
+  it('does not force HackerOne when the bounty request names a specific page or platform', () => {
+    // The bug this fixes: "test goga on bounty <cantina url>" opened hackerone.com and ignored
+    // the URL. A URL or a named platform in the request now wins over the generic directory.
+    expect(AgentLoop.siteToOpen('test goga on this bounty https://acme.example/scope'))
+      .toBe('https://acme.example/scope')
+    expect(AgentLoop.siteToOpen('lets work the cantina bounty')).toBe('https://cantina.xyz/bounties')
+    expect(AgentLoop.siteToOpen('lets work the bugcrowd bounty')).toBe('https://www.bugcrowd.com/')
+  })
+
+  it('routes a Cantina bounty URL to the scope importer, not a raw browser open', () => {
+    expect(AgentLoop.cantinaBountyUrl('test goga on bounty https://bounties.cantina.xyz/cantina/bug-bounty'))
+      .toBe('https://bounties.cantina.xyz/cantina/bug-bounty')
+    const step = AgentLoop.getHardcodedFirstStep('work the bounty at https://bounties.cantina.xyz/cantina/bug-bounty')
+    expect(step?.tool).toBe('security.importCantina')
+    expect(step?.params.url).toBe('https://bounties.cantina.xyz/cantina/bug-bounty')
+  })
+
   it('does not navigate for a question that merely mentions a site', () => {
     expect(AgentLoop.siteToOpen('what does hackerone.com do?')).toBeNull()
     expect(AgentLoop.siteToOpen('how much does coinbase charge?')).toBeNull()

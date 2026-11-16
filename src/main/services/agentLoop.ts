@@ -779,6 +779,19 @@ What is the next single action to take?`
     // exactly how "I've opened https://www.hackerone.com/" reached the user with nothing
     // opened. A URL or a known site plus an open/read verb is unambiguous, so it is not
     // left to the model to decide.
+    // A Cantina bounty page is read for its SCOPE with the dedicated importer, not merely
+    // opened in a browser: that tool reads the program's assets and entry bar, which is what
+    // working a bounty actually needs. Checked before siteToOpen so a Cantina URL in the
+    // request is not swallowed by the generic bounty→HackerOne shortcut below.
+    const cantina = AgentLoop.cantinaBountyUrl(task)
+    if (cantina) {
+      return {
+        thought: `Reading the Cantina bounty's published scope with the importer rather than only opening the page.`,
+        tool: 'security.importCantina',
+        params: { url: cantina },
+        done: false,
+      }
+    }
     const site = AgentLoop.siteToOpen(task)
     if (site) {
       return {
@@ -870,6 +883,18 @@ What is the next single action to take?`
    * Only fires when the request both names a site and asks to open or read it, so a
    * question that merely mentions a domain is not turned into a navigation.
    */
+  /**
+   * A Cantina bounty page URL named in the task, or null.
+   *
+   * The two shapes Cantina uses: https://bounties.cantina.xyz/<org>/<program> and
+   * https://cantina.xyz/bounties/<id>. When one is present, the task is routed to the scope
+   * importer rather than a raw browser open.
+   */
+  static cantinaBountyUrl(task: string): string | null {
+    const m = String(task ?? '').match(/https?:\/\/(?:bounties\.cantina\.xyz\/[a-z0-9]+\/[a-z0-9-]+|cantina\.xyz\/bounties\/[a-z0-9-]{8,})/i)
+    return m ? m[0].replace(/[.,;:]+$/, '') : null
+  }
+
   static siteToOpen(task: string): string | null {
     const t = String(task ?? '')
     if (!/\b(open|go to|goto|visit|navigate|browse|pull up|bring up|read|check|look at|load)\b/i.test(t)) {
@@ -877,7 +902,21 @@ What is the next single action to take?`
       // the directory where the programs are listed. Anything else returns null as before.
       // A question about the subject is still a question, even when it names the site.
       const isQuestion = /^\s*(?:what|how|why|when|where|who|which|does|do|is|are|can|could|should|would)\b/i.test(t)
-      if (!isQuestion && /\b(?:bug\s?bounty|bount(?:y|ies)|hackerone)\b/i.test(t)) return 'https://www.hackerone.com/'
+      if (!isQuestion && /\b(?:bug\s?bounty|bount(?:y|ies)|hackerone|bugcrowd|cantina|intigriti|yeswehack)\b/i.test(t)) {
+        // A specific page or platform named in the request wins over the generic HackerOne
+        // directory. Only when the request names a bounty but no site at all does Goga fall
+        // back to the directory where programs are listed.
+        const named = t.match(/https?:\/\/[^\s"'<>)]+/i)
+        if (named) return named[0].replace(/[.,;:]+$/, '')
+        const platforms: Record<string, string> = {
+          cantina: 'https://cantina.xyz/bounties', bugcrowd: 'https://www.bugcrowd.com/',
+          intigriti: 'https://www.intigriti.com/programs', yeswehack: 'https://yeswehack.com/programs',
+        }
+        for (const [name, address] of Object.entries(platforms)) {
+          if (new RegExp(`\\b${name}\\b`, 'i').test(t)) return address
+        }
+        return 'https://www.hackerone.com/'
+      }
       return null
     }
     // A full URL wins.
