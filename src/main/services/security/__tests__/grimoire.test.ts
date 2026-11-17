@@ -146,6 +146,32 @@ describe('the independent validator', () => {
     expect(verdict.outcome).toBe('cannot-confirm')
     expect(verdict.why).toMatch(/map, not a defect/i)
   })
+
+  // The validator must recognise Node and Python idioms, not only WordPress/PHP, or the
+  // specialists reason about non-WP code but no candidate ever survives.
+  it('confirms a Node/Express SQL concatenation', () => {
+    const material = `app.get('/u', (req, res) => {\n  const row = db.query('SELECT * FROM users WHERE id = ' + req.params.id)\n})`
+    const verdict = validate({ specialist: 'sqli', line: 2, excerpt: material.split('\n')[1], material, location: 'app.js' })
+    expect(verdict.outcome).toBe('confirmed-observable')
+  })
+
+  it('confirms a Node/Express reflected XSS from req.query', () => {
+    const material = `app.get('/s', (req, res) => {\n  res.send('<h1>' + req.query.q + '</h1>')\n})`
+    const verdict = validate({ specialist: 'xss', line: 2, excerpt: material.split('\n')[1], material, location: 'app.js' })
+    expect(verdict.outcome).toBe('confirmed-observable')
+  })
+
+  it('confirms a Python command injection from request.args', () => {
+    const material = `def run():\n    os.system('convert ' + request.args['file'])`
+    const verdict = validate({ specialist: 'rce', line: 2, excerpt: material.split('\n')[1], material, location: 'views.py' })
+    expect(verdict.outcome).toBe('confirmed-observable')
+  })
+
+  it('still refutes well-written code regardless of language (escaped JS output)', () => {
+    const material = `app.get('/s', (req, res) => {\n  res.send('<h1>' + escapeHtml(req.query.q) + '</h1>')\n})`
+    const verdict = validate({ specialist: 'xss', line: 2, excerpt: material.split('\n')[1], material, location: 'app.js' })
+    expect(verdict.outcome).toBe('refuted')
+  })
 })
 
 /* ───────────────────────── 2. no network, ever ───────────────────────── */

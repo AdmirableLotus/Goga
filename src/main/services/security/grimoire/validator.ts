@@ -35,8 +35,10 @@ export interface ValidationInput {
   location: string
 }
 
-const ESCAPERS = /\b(esc_html|esc_attr|esc_url|esc_textarea|esc_js|wp_kses|wp_kses_post|wp_kses_data|sanitize_text_field|sanitize_key|absint|intval|wp_json_encode|json_encode)\s*\(/
+const ESCAPERS = /\b(esc_html|esc_attr|esc_url|esc_textarea|esc_js|wp_kses|wp_kses_post|wp_kses_data|sanitize_text_field|sanitize_key|absint|intval|wp_json_encode|json_encode|escapeHtml|DOMPurify\.sanitize|escape\s*\(|markupsafe\.escape|bleach\.clean)\s*\(/
 const INPUT_READ = /\$_(GET|POST|REQUEST|COOKIE|FILES|SERVER)\s*\[/
+/** Caller input across stacks: PHP superglobals, Express/Node req.*, Flask/Django request.*. */
+const INPUT_READ_ANY = /\$_(GET|POST|REQUEST|COOKIE|FILES|SERVER)\s*\[|\breq\.(params|query|body|cookies|headers)\b|\brequest\.(args|form|json|values|data|cookies|GET|POST)\b/
 const BOUND_PLACEHOLDER = /prepare\s*\([^)]*,\s*[^)]*\$/
 const CONSTANT_ASSIGN = /^\s*(?:const|let|var|private|public|protected)?\s*\$?[A-Za-z_][A-Za-z0-9_]*\s*=\s*['"][^'"]*['"]\s*;?\s*$/
 
@@ -87,13 +89,13 @@ export function validate(input: ValidationInput): ValidationVerdict {
       if (ESCAPERS.test(subject) || ESCAPERS.test(near)) {
         return refuted('An escaping or sanitising call is applied on or beside this line, so the value is not written raw. If you still suspect a bypass, that is a different claim and needs the crafted encoding named.', check, subject.trim().slice(0, 200))
       }
-      if (!/echo|print|innerHTML|outerHTML|document\.write|insertAdjacentHTML|<\?=/.test(subject)) {
+      if (!/echo|print|innerHTML|outerHTML|document\.write|insertAdjacentHTML|<\?=|res\.(send|write|end)|dangerouslySetInnerHTML|v-html|render_template_string|mark_safe|\.html\s*\(/.test(subject)) {
         return cannot('This line does not itself write anything to output, so there is no sink here to confirm.', check, [
           'The line that actually writes the value out.',
           'The context it lands in: element text, an attribute, an event handler, or a script block.',
         ])
       }
-      const fromInput = INPUT_READ.test(near) || /\$_(GET|POST|REQUEST)/.test(material.slice(0, 4000))
+      const fromInput = INPUT_READ_ANY.test(near) || INPUT_READ_ANY.test(material.slice(0, 4000))
       if (!fromInput) {
         return cannot('There is an unescaped write here, but nothing in the surrounding code shows the value coming from a request. It may be a constant or an internal value.', check, [
           'Where the written variable is assigned, and whether a request value reaches it.',
@@ -118,7 +120,7 @@ export function validate(input: ValidationInput): ValidationVerdict {
           'Whether the value is bound or interpolated.',
         ])
       }
-      if (/\$[a-zA-Z_]+\s*\.\s*['"]|\$[a-zA-Z_]+\s*\.\s*\$|"\s*\.\s*\$[a-zA-Z_]/.test(subject)) {
+      if (/\$[a-zA-Z_]+\s*\.\s*['"]|\$[a-zA-Z_]+\s*\.\s*\$|"\s*\.\s*\$[a-zA-Z_]|['"]\s*\+\s*\w|\$\{|%s|%d|\.format\s*\(|\bf['"]/.test(subject)) {
         return confirmed(subject.trim().slice(0, 300), check, [
           'The variable that is concatenated, and where it is assigned.',
           'Whether that variable came from a request value.',
@@ -140,13 +142,13 @@ export function validate(input: ValidationInput): ValidationVerdict {
           'Whether the route is reachable without logging in.',
         ])
       }
-      if (/current_user_can\s*\(|get_current_user_id\s*\(\s*\)\s*===|wp_get_current_user|user_can\s*\(/.test(near)) {
+      if (/current_user_can\s*\(|get_current_user_id\s*\(\s*\)\s*===|wp_get_current_user|user_can\s*\(|\breq\.user\b|isAuthenticated|@login_required|\brequest\.user\b|permission_classes|IsAuthenticated|\bownerId?\b|userId\s*===?\s*req|WHERE[^;]*user_id\s*=/.test(near)) {
         return cannot('There is a capability or identity check nearby. Whether it is about THIS object is the question, and that needs the object lookup read in full.', check, [
           'The line that loads the object, and the line that decides entitlement to it.',
           'Whether the check tests the object\'s owner or only that someone is logged in.',
         ])
       }
-      if (!/get_post|get_user_by|get_comment|get_term|wp_get_attachment|wpdb->get_row|wpdb->get_results/.test(near)) {
+      if (!/get_post|get_user_by|get_comment|get_term|wp_get_attachment|wpdb->get_row|wpdb->get_results|\.(findById|findByPk|findOne|find|get|load|retrieve)\s*\(|\.objects\.(get|filter)|get_object_or_404|\.(query|execute)\s*\(|SELECT\b/.test(near)) {
         return cannot('No object lookup is visible around this line, so there is no object to be unauthorized about here.', check, [
           'The handler that loads the object by the caller\'s identifier.',
         ])
@@ -161,7 +163,7 @@ export function validate(input: ValidationInput): ValidationVerdict {
     /* ── SSRF: does the address come from outside, and is it re-validated? ── */
     case 'ssrf': {
       const check = 'Looked for a caller-supplied address reaching a fetch, and for a host allow-list or private-range guard between them.'
-      if (!/wp_remote_|curl_exec|file_get_contents|fsockopen/.test(near)) {
+      if (!/wp_remote_|curl_exec|file_get_contents|fsockopen|\bfetch\s*\(|axios\.|requests\.(get|post|put|request|head)|urllib\.request\.urlopen|\bhttp\.(get|request)|\bhttps\.(get|request)|\bgot\s*\(/.test(near)) {
         return cannot('No outbound fetch is visible around this line, so there is no request for the server to be tricked into making here.', check, [
           'The line that performs the outbound request.',
           'Where its URL is built.',
@@ -173,7 +175,7 @@ export function validate(input: ValidationInput): ValidationVerdict {
           'Whether redirects are followed after the check.',
         ])
       }
-      if (INPUT_READ.test(near) || /\$[a-zA-Z_]*(url|uri|host|target|dest)[a-zA-Z_]*\s*=/.test(near)) {
+      if (INPUT_READ_ANY.test(near) || /\$[a-zA-Z_]*(url|uri|host|target|dest)[a-zA-Z_]*\s*=|(req|request)\.[a-z.]*\b(url|uri|host|target|dest|link|next)\b/.test(near)) {
         return confirmed(subject.trim().slice(0, 300), check, [
           'The line where the URL is read or built.',
           'The fetch, with no re-validation between them.',
@@ -189,18 +191,18 @@ export function validate(input: ValidationInput): ValidationVerdict {
     /* ── RCE: is the argument reachable from outside? ── */
     case 'rce': {
       const check = 'Looked for a code-execution or file-write call, and for an allow-list or constant argument beside it.'
-      if (!/eval\s*\(|assert\s*\(|create_function|shell_exec|system\s*\(|passthru|popen|proc_open|unserialize|include|require|file_put_contents|fwrite|move_uploaded_file/.test(subject)) {
+      if (!/eval\s*\(|assert\s*\(|create_function|shell_exec|system\s*\(|passthru|popen|proc_open|unserialize|include|require|file_put_contents|fwrite|move_uploaded_file|child_process|exec(Sync)?\s*\(|execFile|spawn(Sync)?\s*\(|\bos\.(system|popen)|subprocess\.|new\s+Function|pickle\.loads|yaml\.load/.test(subject)) {
         return cannot('This line does not execute code or write a file, so there is nothing here to confirm.', check, [
           'The call that executes or writes.',
           'The chain from an outside value to its argument.',
         ])
       }
-      if (/in_array\s*\(|array_key_exists\s*\(|switch\s*\(/.test(near)) {
+      if (/in_array\s*\(|array_key_exists\s*\(|switch\s*\(|\.includes\s*\(|\bin\s+\[|allowlist|allowList|whitelist/.test(near)) {
         return cannot('An allow-list or switch is nearby. If the value is compared against a fixed set before the call, this is not reachable.', check, [
           'Whether the allow-list is applied to the exact value passed to the call.',
         ])
       }
-      if (INPUT_READ.test(near) || /\$[a-zA-Z_]+\s*=\s*\$_(GET|POST|REQUEST)/.test(near)) {
+      if (INPUT_READ_ANY.test(near) || /\$[a-zA-Z_]+\s*=\s*\$_(GET|POST|REQUEST)/.test(near)) {
         return confirmed(subject.trim().slice(0, 300), check, [
           'The outside value, and every hop to the call\'s argument.',
           'Whether any cast or allow-list sits in that chain.',
@@ -234,13 +236,13 @@ export function validate(input: ValidationInput): ValidationVerdict {
     /* ── Redirect: is the destination validated after parsing? ── */
     case 'redirect': {
       const check = 'Looked for a redirect call, and for host validation applied to the final destination.'
-      if (!/wp_redirect|wp_safe_redirect|header\s*\(\s*['"]Location/.test(subject)) {
+      if (!/wp_redirect|wp_safe_redirect|header\s*\(\s*['"]Location|res\.redirect\s*\(|HttpResponseRedirect|\bredirect\s*\(/.test(subject)) {
         return cannot('No redirect is issued on this line.', check, ['The redirect call and where its destination came from.'])
       }
-      if (/wp_safe_redirect|wp_validate_redirect|allowed_redirect_hosts/.test(subject)) {
+      if (/wp_safe_redirect|wp_validate_redirect|allowed_redirect_hosts|url_has_allowed_host_and_scheme|is_safe_url/.test(subject)) {
         return refuted('The redirect goes through the safe variant, which validates the destination against the allowed hosts.', check, subject.trim().slice(0, 200))
       }
-      if (INPUT_READ.test(near) || /\$[a-zA-Z_]*(redirect|return|next|dest|url)[a-zA-Z_]*\s*=/.test(near)) {
+      if (INPUT_READ_ANY.test(near) || /\$[a-zA-Z_]*(redirect|return|next|dest|url)[a-zA-Z_]*\s*=|(req|request)\.[a-z.]*\b(redirect|return|next|dest|url)\b/.test(near)) {
         return confirmed(subject.trim().slice(0, 300), check, [
           'The destination as it arrives from the request.',
           'Whether any host validation runs on it.',
@@ -450,10 +452,10 @@ export function validate(input: ValidationInput): ValidationVerdict {
     }
     case 'ssti': {
       const check = 'Looked at whether the template SOURCE is dynamic or only its data.'
-      if (!/render|template|Twig|sprintf/.test(near)) {
+      if (!/render|template|Twig|sprintf|Jinja|Handlebars|\$\{/.test(near)) {
         return cannot('No template rendering is visible around this line.', check, ['The render call.'])
       }
-      if (INPUT_READ.test(near)) {
+      if (INPUT_READ_ANY.test(near)) {
         return confirmed(subject.trim().slice(0, 300), check, [
           'Whether the template source, not just its variables, comes from the caller.',
           'A local run where your marker inside template syntax is evaluated or printed literally.',

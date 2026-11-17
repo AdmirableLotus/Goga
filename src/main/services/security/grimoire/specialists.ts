@@ -36,6 +36,10 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'permissive check', pattern: '__return_true|is_user_logged_in\\(\\)\\s*\\?', why: 'a login check is not an ownership check' },
       { label: 'direct get by id', pattern: '(get_post|get_user_by|get_comment|get_term|wp_get_attachment)\\s*\\(', why: 'the object is fetched by a caller-supplied value' },
       { label: 'nonce only', pattern: 'check_ajax_referer|wp_verify_nonce', why: 'a nonce proves intent, never entitlement' },
+      { label: 'id from request (js)', pattern: 'req\\.(params|query|body)\\.(id|userId|user_id|accountId|account_id|orderId|order_id|invoiceId|invoice_id|uuid|_id)\\b', why: 'an identifier arrives from the caller (Express/Node)' },
+      { label: 'fetch by caller id (js)', pattern: '\\.(findById|findByPk|findOne|get|load|retrieve)\\s*\\(\\s*req\\.(params|query|body)', why: 'the object is fetched straight from a caller-supplied id, with no ownership test in the call' },
+      { label: 'id from request (py)', pattern: 'request\\.(args|form|json|values|GET|POST)[\\.\\[][^\\n]{0,40}(id|user_id|account_id|order_id|pk)', why: 'an identifier arrives from the caller (Flask/Django)' },
+      { label: 'orm get by pk (py)', pattern: '\\.objects\\.(get|filter)\\s*\\(\\s*(pk|id)\\s*=|get_object_or_404\\s*\\(', why: 'a record is fetched by primary key — check it is also scoped to the requesting user' },
     ],
     wouldConfirm: [
       'Two accounts of your own on the local copy, each owning one object.',
@@ -65,6 +69,8 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'redirect following', pattern: 'redirection\\s*=>\\s*[1-9]|CURLOPT_FOLLOWLOCATION|CURLOPT_FOLLOW', why: 'following redirects widens the reachable address space' },
       { label: 'weak host check', pattern: 'strpos\\([^,]+,\\s*\\$[a-z_]*host|str_contains\\([^,]+,\\s*\\$[a-z_]*host', why: 'a substring test on a host is bypassable' },
       { label: 'private-address guard', pattern: '127\\.0\\.0\\.1|169\\.254\\.169\\.254|is_private|FILTER_FLAG_NO_PRIV_RANGE', why: 'the code knows about private addresses — check what it does with them' },
+      { label: 'outbound fetch from input (js)', pattern: '(fetch|axios\\.(get|post|put|request)|got|superagent|http\\.(get|request)|https\\.(get|request))\\s*\\(\\s*[^)]{0,80}(req\\.(params|query|body)|\\$\\{|\\+)', why: 'the server fetches a URL built from caller input (Node)' },
+      { label: 'outbound request from input (py)', pattern: 'requests\\.(get|post|put|request|head)\\s*\\([^)]{0,80}(request\\.|\\+|%|\\.format|f[\'"])|urllib\\.request\\.urlopen\\s*\\(', why: 'the server fetches a URL built from caller input (Python requests/urllib)' },
     ],
     wouldConfirm: [
       'The line where the URL is read, and the line where it is fetched, with nothing that re-resolves the host between them.',
@@ -95,6 +101,9 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'concatenated wpdb query', pattern: `\\$wpdb->(query|get_results|get_var|get_row|get_col)\\s*\\([^)]*["']\\s*\\.\\s*\\$`, why: 'a variable is concatenated into the SQL string passed to wpdb, instead of $wpdb->prepare with a placeholder' },
       { label: 'interpolated identifier', pattern: `ORDER BY\\s+\\$|LIMIT\\s+\\$|FROM\\s+\\$wpdb->|->prefix[^'"]*\\$`, why: 'identifiers cannot be bound, so they are the usual hole' },
       { label: 'sanitise not bind', pattern: 'esc_sql|intval|absint', why: 'sanitising is not the same as binding — check the value still reaches the query' },
+      { label: 'sql interpolation (js/py)', pattern: `(SELECT|INSERT|UPDATE|DELETE|WHERE|FROM)[^;\\n]{0,100}(\\$\\{|"\\s*\\+|'\\s*\\+|%s|%d|\\.format\\s*\\()`, why: 'a SQL keyword sits next to a template literal, string concatenation, %-format or .format instead of a bound parameter' },
+      { label: 'cursor.execute built string (py)', pattern: `cursor\\.execute\\s*\\(\\s*(f['"]|[^,)\\n]{0,120}(%|\\.format\\s*\\(|['"]\\s*\\+))`, why: 'a Python DB query built with an f-string, %, .format or concatenation rather than a parameter tuple' },
+      { label: 'raw query (js orm)', pattern: `\\.(query|raw|\\$queryRawUnsafe)\\s*\\(\\s*['"\`][^'"\`]{0,120}(SELECT|INSERT|UPDATE|DELETE)`, why: 'a raw SQL string in a Node ORM — check it is parameterised, not concatenated' },
     ],
     wouldConfirm: [
       'The exact statement, and the preparation call that should have bound the value.',
@@ -124,6 +133,9 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'correct escaper nearby', pattern: 'esc_html|esc_attr|esc_url|wp_kses', why: 'the file knows the escapers — check which outputs skip them' },
       { label: 'attribute context', pattern: 'value=\\\\?"?\\s*<\\?php|\\$[a-zA-Z_]+\\s*=\\\\?\\s*[\'"]' , why: 'markup is being assembled by hand, where context is easy to lose' },
       { label: 'admin screen output', pattern: 'add_(menu|submenu|meta_box)_page|admin_notices|esc_html_e', why: 'output rendered in an admin context' },
+      { label: 'html response from input (js)', pattern: 'res\\.(send|write|end)\\s*\\([^)]{0,120}(req\\.(params|query|body)|\\$\\{|\\+)', why: 'a response body is built from request data without an escaping call (Express)' },
+      { label: 'raw html sink (framework)', pattern: 'dangerouslySetInnerHTML|v-html|mark_safe|render_template_string|\\|\\s*safe\\b', why: 'a framework escape hatch that renders raw, unescaped HTML (React / Vue / Jinja |safe / Django mark_safe)' },
+      { label: 'template literal into markup (js)', pattern: '(innerHTML|outerHTML)\\s*[+]?=\\s*[`\'"]|\\.html\\s*\\(\\s*[`\'"][^`\'"]*\\$\\{', why: 'markup assembled from a template literal or jQuery .html() with interpolation' },
     ],
     wouldConfirm: [
       'The line that writes the value out, and the escaping call it does not have.',
@@ -183,6 +195,8 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'deserialise', pattern: '\\bunserialize\\s*\\(|maybe_unserialize\\s*\\(', why: 'deserialising untrusted data can construct objects with side effects' },
       { label: 'write file', pattern: 'file_put_contents|fwrite\\s*\\(|move_uploaded_file', why: 'a file is written — check who controls the name and the bytes' },
       { label: 'regex eval', pattern: 'preg_replace\\s*\\(\\s*[\'"][^\'"]*/e', why: 'the /e modifier evaluates the replacement as code' },
+      { label: 'command exec (js)', pattern: '(child_process|exec(Sync)?\\s*\\(|execFile(Sync)?\\s*\\(|spawn(Sync)?\\s*\\(|\\beval\\s*\\(|new\\s+Function\\s*\\(|vm\\.runIn)', why: 'a command or code string is executed (Node) — check for caller influence' },
+      { label: 'command exec (py)', pattern: 'os\\.(system|popen)\\s*\\(|subprocess\\.(call|run|Popen|check_output)\\s*\\([^)]{0,120}(shell\\s*=\\s*True|\\+|%|\\.format|f[\'"])|\\bexec\\s*\\(|\\beval\\s*\\(|pickle\\.loads\\s*\\(|yaml\\.load\\s*\\((?![^)]*Loader)', why: 'a command, code or unsafe deserialisation is executed (Python) — check for caller influence' },
     ],
     wouldConfirm: [
       'The call, and the chain from an outside value to its argument, with every hop named.',
@@ -374,6 +388,8 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'destination from input', pattern: '\\$_(GET|POST|REQUEST)\\s*\\[\\s*[\'"](redirect_to|return|next|url|callback|continue|dest)[\'"]', why: 'the destination comes from the caller' },
       { label: 'host check', pattern: 'wp_validate_redirect|allowed_redirect_hosts|parse_url\\s*\\(', why: 'validation exists — check it runs on the parsed host' },
       { label: 'string surgery on url', pattern: 'str_replace\\s*\\(|str_contains\\s*\\(|strpos\\s*\\(', why: 'manual string checks on URLs are the usual bypass' },
+      { label: 'redirect from input (js)', pattern: 'res\\.redirect\\s*\\([^)]{0,80}(req\\.(params|query|body)|\\$\\{|\\+)', why: 'a redirect destination built from request data (Express)' },
+      { label: 'redirect from input (py)', pattern: '(redirect|HttpResponseRedirect)\\s*\\([^)]{0,80}(request\\.|\\+|%|\\.format|f[\'"])', why: 'a redirect destination built from request data (Flask/Django)' },
     ],
     wouldConfirm: [
       'The redirect call and where its destination came from.',
