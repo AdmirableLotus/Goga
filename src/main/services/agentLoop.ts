@@ -2,7 +2,7 @@ import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
 import { parseFileWrite } from './fileCommand'
-import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl, parseInstallRequest } from './agentRouting'
+import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl, parseInstallRequest, parseSelfFixRequest } from './agentRouting'
 
 const LIBRARY_HINT = `- Reading books/documents: to add one from the web, call library.import with a DIRECT https link ending in .pdf/.epub/.txt — never a github.com page link and never a hand-built URL. For a GitHub repo, call library.listRepo FIRST and use the exact "url" it returns for each file. Import only freely/legally shared documents (OWASP guides, author-released free books); skip copyrighted commercial books (tell the user to buy those). After importing, the user can ask about the book in chat.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before any trade, call trading.plan to build the plan (entry, ATR stop, 1R/2R/3R targets, size, reward-to-risk), show the plan, and wait for the user to approve. Only then place it with trading.order using that plan\'s stop and target. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
@@ -812,6 +812,20 @@ What is the next single action to take?`
         thought: `Working out an install for ${install.package} and showing exactly what it would change — nothing is downloaded or run until you approve.`,
         tool: 'setup.proposeInstall',
         params: { package: install.package, task },
+        done: false,
+      }
+    }
+    // "fix this bug in your code: <paste>" — begin the self-fix flow by searching Goga's OWN
+    // source for the symbol named in the bug, so the patch is proposed from real code, not from
+    // memory. The flow then reads, proposes a diff, and STOPS: selfwork.apply is critical and
+    // gated, so nothing is written to Goga's source without the user's approval. Only fired when
+    // a concrete search term could be pulled from the request; otherwise the planner drives.
+    const selfFix = parseSelfFixRequest(task)
+    if (selfFix?.term) {
+      return {
+        thought: `Looking in my own source for "${selfFix.term}" before proposing any change — the patch should come from the real code, not memory. Nothing will be written without your approval.`,
+        tool: 'selfwork.search',
+        params: { query: selfFix.term },
         done: false,
       }
     }

@@ -311,7 +311,52 @@ export function parseInstallRequest(message: string): InstallRequest | null {
   return { package: pkg, raw: pkg }
 }
 
+/**
+ * A "fix your own bug / change your own code" request aimed at Goga's own source — or null.
+ *
+ * The user's standing ask: "be able to rewrite his own code if need be, fix his own bugs with
+ * my help." Self-fix is inherently multi-step (search → read → proposePatch → the user approves
+ * → apply → check), so the reliability win is a strong FIRST step: search Goga's own source for
+ * the symbol named in the bug, so the patch is proposed from real code rather than from memory.
+ * selfwork.apply stays critical and single-use-gated, so nothing is written without approval, and
+ * the honesty layer stops any premature "fixed it".
+ *
+ * Requires a self-reference (your/yourself/goga's/own code), so ordinary "fix my project" or
+ * help with the user's other code is NOT hijacked into editing Goga's own source.
+ */
+const SELF_FIX_INTENT = /\b(fix|debug|patch|repair|correct|resolve|solve|rewrite|refactor)\b/i
+const SELF_REFERENCE = /\b(?:your ?self|(?:in\s+|fix\s+)?your (?:own\s+)?(?:code|source|codebase|bug|bugs|function|method|handler|parser|tool|regex|logic|routing)|your (?:own\s+)?[\w$.-]{2,40}\s+(?:function|method|handler|parser|regex|routing|logic|loop|step|command)|goga'?s (?:own\s+)?(?:code|source|bug|bugs|function|handler)|own (?:code|source))\b/i
+
+export interface SelfFixRequest { term: string | null; raw: string }
+
+/** Pull a searchable code anchor from a bug description: a path, a quoted fragment, a symbol. */
+function extractSelfFixTerm(text: string): string | null {
+  const path = text.match(/\b(?:src\/[\w./-]+|[\w-]+\.(?:ts|tsx|js|cjs|mjs))\b/)
+  if (path) return path[0]
+  const quoted = text.match(/["'`]([^"'`\n]{3,60})["'`]/)
+  if (quoted) return quoted[1].trim()
+  const dotted = text.match(/\b([a-zA-Z_$][\w$]*\.[a-zA-Z_$][\w$]+)\b/)
+  if (dotted && !/\.(?:ts|tsx|js|cjs|mjs|com|org|net|io)$/i.test(dotted[1])) return dotted[1]
+  const camel = text.match(/\b([a-z][a-z0-9]*[A-Z][a-zA-Z0-9]{2,})\b/)
+  if (camel) return camel[1]
+  const notA = text.match(/\b([\w$.]{3,})\s+is\s+not\s+(?:a\s+function|defined)/i)
+  if (notA) return notA[1]
+  return null
+}
+
+export function parseSelfFixRequest(message: string): SelfFixRequest | null {
+  const t = String(message ?? '').trim()
+  // Larger cap than LONG_MESSAGE_CHARS on purpose: a self-fix request often carries a pasted
+  // stack trace, and the self-reference + fix-intent pair is a strong enough signal to route it.
+  if (!t || t.length > 6000) return null
+  if (!SELF_FIX_INTENT.test(t) || !SELF_REFERENCE.test(t)) return null
+  return { term: extractSelfFixTerm(t), raw: t }
+}
+
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
+  // Checked before the length guard: a "fix your own bug" paste is a legitimate task even when
+  // it is long, and parseSelfFixRequest has its own cap and a double requirement.
+  if (parseSelfFixRequest(message)) return true
   if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false
   if (isWritingRequest(message)) return false

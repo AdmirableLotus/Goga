@@ -29,7 +29,7 @@ import {
   CAPABILITY_STATEMENT, NOTHING_DONE_STATEMENT, claimsAction, disclaimsCapability,
   enforceHonestReply, groundAgentReply, pageEvidence,
 } from '../replyHonesty'
-import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl, parseInstallRequest } from '../agentRouting'
+import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl, parseInstallRequest, parseSelfFixRequest } from '../agentRouting'
 import { AgentLoop } from '../agentLoop'
 
 /**
@@ -282,5 +282,31 @@ describe('controlling an app on the PC — close/open it, do not narrate it', ()
     expect(parseInstallRequest('install confidence in the team')).toBeNull() // trailing prose, not a package
     expect(parseInstallRequest('install the app')).toBeNull() // "app" → NOT_A_PACKAGE
     expect(parseInstallRequest('install it')).toBeNull()
+  })
+
+  it('starts self-fix by searching Goga\'s own source for the named symbol', () => {
+    // selfwork.apply is critical + gated, so the first step only READS the source; nothing is
+    // written without approval. The point is proposing from real code, not from memory.
+    expect(parseSelfFixRequest('fix this bug in your code: parseWingetShow returns null')).toMatchObject({ term: 'parseWingetShow' })
+    expect(parseSelfFixRequest('debug your own code, the file src/main/services/replyHonesty.ts')).toMatchObject({ term: 'src/main/services/replyHonesty.ts' })
+    expect(parseSelfFixRequest('fix your bug where it says "Cannot read property of undefined"')).toMatchObject({ term: 'Cannot read property of undefined' })
+    expect(parseSelfFixRequest('fix your own parseAppControl function')).toMatchObject({ term: 'parseAppControl' })
+    const step = AgentLoop.getHardcodedFirstStep('fix this bug in your code: parseWingetShow returns null')
+    expect(step?.tool).toBe('selfwork.search')
+    expect(step?.params.query).toBe('parseWingetShow')
+    expect(looksLikeAgentTask('fix this bug in your code: parseWingetShow is not a function')).toBe(true)
+  })
+
+  it('does not treat help with the user\'s own code as editing Goga\'s source', () => {
+    // No self-reference → not a self-fix. These must fall through so the planner (or ordinary
+    // coding help) handles them, never Goga editing its own source.
+    expect(parseSelfFixRequest('fix this bug in my project')).toBeNull()
+    expect(parseSelfFixRequest('can you fix the login form')).toBeNull()
+    expect(parseSelfFixRequest('how do I debug a memory leak')).toBeNull()
+    // Self-reference but no extractable symbol → routes, but no hardcoded first step (planner drives).
+    const vague = parseSelfFixRequest('fix your bugs please')
+    expect(vague).not.toBeNull()
+    expect(vague?.term).toBeNull()
+    expect(AgentLoop.getHardcodedFirstStep('fix your bugs please')).toBeNull()
   })
 })
