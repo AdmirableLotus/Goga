@@ -111,6 +111,16 @@ $out = winget show --id ${psQuote(id)} --exact --accept-source-agreements --disa
 Write-Output $out
 `
 
+// The query form: resolves a friendly name or moniker ("nmap", "wireshark") to the exact
+// package id, which "--id --exact" cannot. winget returns one "Found <name> [<id>]" block for a
+// single match and a "Multiple packages found" list for an ambiguous one — the latter does not
+// match parseWingetShow's "Found … [id]" line, so an ambiguous name stays unresolved on purpose.
+const WINGET_QUERY_SCRIPT = (query: string) => `
+$ErrorActionPreference = 'Continue'
+$out = winget show ${psQuote(query)} --accept-source-agreements --disable-interactivity 2>&1 | Out-String
+Write-Output $out
+`
+
 /** Parse `winget show`'s plain-text output. It is a labelled list, not JSON. */
 export function parseWingetShow(text: string): WingetShow {
   const empty: WingetShow = {
@@ -139,10 +149,20 @@ export function parseWingetShow(text: string): WingetShow {
   }
 }
 
-/** Ask winget about one package. Read-only: `winget show` installs nothing. */
+/**
+ * Ask winget about one package. Read-only: `winget show` installs nothing.
+ *
+ * Tries the exact-id form first (so a precise id like "Insecure.Nmap" is honoured), then falls
+ * back to the query form, which resolves a friendly name or moniker ("nmap" → "Insecure.Nmap").
+ * The friendly name is what a user actually types, so without the fallback every "install nmap"
+ * would wrongly report no package.
+ */
 export async function showPackage(id: string, signal?: AbortSignal): Promise<WingetShow> {
-  const result = await runPowerShell(WINGET_SHOW_SCRIPT(id), { timeoutMs: 60_000, signal })
-  return parseWingetShow(result.stdout)
+  const exact = await runPowerShell(WINGET_SHOW_SCRIPT(id), { timeoutMs: 60_000, signal })
+  const byId = parseWingetShow(exact.stdout)
+  if (byId.found) return byId
+  const query = await runPowerShell(WINGET_QUERY_SCRIPT(id), { timeoutMs: 60_000, signal })
+  return parseWingetShow(query.stdout)
 }
 
 export interface ProposeInstallInput {

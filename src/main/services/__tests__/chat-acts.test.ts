@@ -29,7 +29,7 @@ import {
   CAPABILITY_STATEMENT, NOTHING_DONE_STATEMENT, claimsAction, disclaimsCapability,
   enforceHonestReply, groundAgentReply, pageEvidence,
 } from '../replyHonesty'
-import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl } from '../agentRouting'
+import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl, parseInstallRequest } from '../agentRouting'
 import { AgentLoop } from '../agentLoop'
 
 /**
@@ -258,5 +258,29 @@ describe('controlling an app on the PC — close/open it, do not narrate it', ()
     expect(parseAppControl('close the window')).toBeNull()
     expect(parseAppControl('close the deal with john')).toBeNull()
     expect(parseAppControl('open youtube')).toBeNull() // a website, handled by the browser path
+  })
+
+  it('turns "install <package>" into a real setup.proposeInstall, not a chat claim', () => {
+    // The point: proposeInstall is read-only (shows what WOULD be installed); nothing is
+    // downloaded or run until the user approves, so routing here cannot install anything.
+    expect(parseInstallRequest('install nmap')).toMatchObject({ package: 'nmap' })
+    expect(parseInstallRequest('can you install wireshark for me')).toMatchObject({ package: 'wireshark' })
+    expect(parseInstallRequest('download and install 7zip.7zip')).toMatchObject({ package: '7zip.7zip' })
+    expect(parseInstallRequest('I need python installed')).toMatchObject({ package: 'python' })
+    const step = AgentLoop.getHardcodedFirstStep('install nmap')
+    expect(step?.tool).toBe('setup.proposeInstall')
+    expect(step?.params.package).toBe('nmap')
+    expect(step?.params.task).toBe('install nmap')
+    expect(looksLikeAgentTask('install nmap')).toBe(true)
+  })
+
+  it('does not treat a VM, a state question, or prose as a package install', () => {
+    expect(parseInstallRequest('is nmap installed?')).toBeNull()
+    expect(parseInstallRequest('do you have docker installed')).toBeNull()
+    expect(parseInstallRequest('what\'s installed on this machine')).toBeNull()
+    expect(parseInstallRequest('set up a virtual machine for recon')).toBeNull()
+    expect(parseInstallRequest('install confidence in the team')).toBeNull() // trailing prose, not a package
+    expect(parseInstallRequest('install the app')).toBeNull() // "app" → NOT_A_PACKAGE
+    expect(parseInstallRequest('install it')).toBeNull()
   })
 })

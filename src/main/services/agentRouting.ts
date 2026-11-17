@@ -274,11 +274,49 @@ export function parseAppControl(message: string): AppControl | null {
   return { action, name: resolved, launch: APP_LAUNCH[resolved], raw: name }
 }
 
+/**
+ * An "install this program" request, resolved to the exact package name — or null.
+ *
+ * "install nmap", "download and install wireshark", "I need python installed" are the
+ * install-on-demand requests the chat path would otherwise narrate ("I've installed nmap")
+ * or leave to the local model to translate into a setup.proposeInstall call it rarely gets
+ * right. Resolving the package name here lets the agent run setup.proposeInstall deterministically.
+ * That tool is read-only — it only shows what WOULD be installed — so a false positive at most
+ * yields an honest "there is no winget package called X"; nothing is downloaded until the user
+ * approves. Virtual machines and Windows features are excluded: those go through setup.proposeVm.
+ */
+const NOT_A_PACKAGE = /^(it|that|this|them|one|thing|stuff|anything|something|everything|all|more|some|the|a|an|my|package|tool|program|app|application|software|cli|environment|dependencies|dependency|requirements|updates?|upgrades?)$/i
+
+export interface InstallRequest { package: string; raw: string }
+
+export function parseInstallRequest(message: string): InstallRequest | null {
+  const t = String(message ?? '').trim()
+  if (!t || t.length > 120) return null
+  // "is nmap installed?", "do you have docker installed", "what's installed" — a question
+  // about the current state, not a request to install anything.
+  if (/\b(is|are|do\s+you\s+have|have\s+you|did\s+you|what'?s|whats|which)\b.{0,40}\binstall(ed|ing)?\b/i.test(t)) return null
+  // Virtual machines and Windows features are a different setup path (setup.proposeVm), not a package.
+  if (/\b(virtual\s*machine|\bvm\b|hyper-?v|virtualbox|vmware|wsl2?|sandbox|windows\s+feature)\b/i.test(t)) return null
+  // Strong, unambiguous install verbs. The package is a single whitespace-free token
+  // (a program name or a dotted winget id like "7zip.7zip"), never a phrase of prose.
+  const active = t.match(/^(?:please\s+|hey\s+goga,?\s+|goga,?\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|i\s+(?:need|want)\s+(?:you\s+to\s+)?|i'?d\s+like\s+(?:you\s+to\s+)?)?(?:install|download\s+and\s+install|pip\s+install|npm\s+install|winget\s+install)\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][\w.+-]{0,40}?)(?:\s+(?:package|tool|program|app|application|cli|for\s+me|please|now))?\s*(?:please|now|for\s+me|thanks?|thank\s+you)?\s*[.!?]*$/i)
+  // The passive form: "I need nmap installed", "get wireshark installed for me".
+  const passive = t.match(/^(?:please\s+|hey\s+goga,?\s+|goga,?\s+)?(?:i\s+(?:need|want)\s+|(?:can\s+you\s+|could\s+you\s+)?get\s+(?:me\s+)?)(?:the\s+|a\s+|an\s+)?([a-z0-9][\w.+-]{0,40}?)\s+installed\b[^.!?\n]*[.!?]*$/i)
+  const m = active ?? passive
+  if (!m) return null
+  const pkg = m[1].trim().replace(/[.,!?]+$/, '').trim()
+  if (!pkg || NOT_A_PACKAGE.test(pkg)) return null
+  // A bare domain or URL is a navigation, not a package to install.
+  if (/https?:\/\/|www\.|\b[a-z0-9-]+\.(com|org|net|io|ai|dev|app|co|edu|gov|xyz)\b/i.test(pkg)) return null
+  return { package: pkg, raw: pkg }
+}
+
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
   if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false
   if (isWritingRequest(message)) return false
   if (parseAppControl(message)) return true
+  if (parseInstallRequest(message)) return true
   if (isImperativeRequest(message)) return true
   if (AGENT_TRIGGERS.some(r => r.test(message))) return true
   if (CONFIRM_TRIGGERS.test(message.trim()) && lastAssistantMsg) {
