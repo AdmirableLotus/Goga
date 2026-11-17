@@ -269,12 +269,12 @@ export class DesktopAdapter implements ToolAdapter {
           public static List<long[]> All() {
             var r = new List<long[]>();
             EnumerationSucceeded = EnumWindows((h, l) => {
-              if (${tracing ? 'true' : 'false'}) {
+              ${tracing ? `{
                 int observedPid; GetWindowThreadProcessId(h, out observedPid);
                 var observedTitle = new StringBuilder(512); GetWindowText(h, observedTitle, 512);
                 var observedClass = new StringBuilder(256); GetClassName(h, observedClass, 256);
                 Observations.Add(new Observation { hwnd=h.ToInt64(), pid=observedPid, title=observedTitle.ToString(), className=observedClass.ToString(), visible=IsWindowVisible(h), timestamp=DateTime.UtcNow.ToString("o") });
-              }
+              }` : ''}
               if (IsWindowVisible(h)) {
                 int p2 = 0; GetWindowThreadProcessId(h, out p2);
                 var sb = new StringBuilder(512); GetWindowText(h, sb, 512);
