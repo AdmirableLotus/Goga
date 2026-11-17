@@ -353,10 +353,54 @@ export function parseSelfFixRequest(message: string): SelfFixRequest | null {
   return { term: extractSelfFixTerm(t), raw: t }
 }
 
+/**
+ * An "in-app action" request — "type X into Word", "click Save in Notepad" — or null.
+ *
+ * These go to the compound computer.typeIntoApp / computer.clickInApp tools, which resolve the
+ * window and act under the focus guard in one step. The model used to have to chain
+ * discovery→focus→keystroke itself and often typed into the wrong window. The target app must be
+ * a KNOWN app (WINDOW_TITLES), so "type a reply to john" / "write a note in the journal" do not
+ * become keystrokes into some window.
+ */
+const WINDOW_TITLES: Record<string, string> = {
+  notepad: 'Notepad', wordpad: 'WordPad', 'notepad++': 'Notepad++', word: 'Word',
+  excel: 'Excel', powerpoint: 'PowerPoint', outlook: 'Outlook',
+  chrome: 'Chrome', edge: 'Edge', firefox: 'Firefox', brave: 'Brave',
+  vscode: 'Visual Studio Code', 'vs code': 'Visual Studio Code', code: 'Visual Studio Code',
+  terminal: 'Terminal', cmd: 'Command Prompt', powershell: 'Windows PowerShell',
+  explorer: 'File Explorer', paint: 'Paint', calculator: 'Calculator',
+  slack: 'Slack', discord: 'Discord', telegram: 'Telegram', teams: 'Teams', spotify: 'Spotify',
+}
+function appWindowTitle(app: string): string | null {
+  const key = app.toLowerCase().replace(/\.exe$/, '').replace(/\s+(?:window|app|application|document|editor|file)$/, '').trim()
+  return Object.prototype.hasOwnProperty.call(WINDOW_TITLES, key) ? WINDOW_TITLES[key] : null
+}
+
+export interface InAppAction { kind: 'type' | 'click'; text?: string; label?: string; title: string; raw: string }
+
+export function parseInAppAction(message: string): InAppAction | null {
+  const t = String(message ?? '').trim()
+  if (!t || t.length > 200) return null
+  const typeM = t.match(/^(?:please\s+|hey\s+goga,?\s+|goga,?\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:type|write|enter|input|paste)\s+(?:the\s+(?:text|words?|phrase)\s+)?(?:"([^"]+)"|'([^']+)'|(.+?))\s+(?:into|in\s+to|in|to)\s+(?:the\s+|my\s+)?([a-z0-9][\w .+#-]{0,40}?)(?:\s+(?:window|app|application|document|file|editor))?\s*[.!?]*$/i)
+  if (typeM) {
+    const text = (typeM[1] ?? typeM[2] ?? typeM[3] ?? '').trim()
+    const title = appWindowTitle(typeM[4].trim())
+    if (text && title) return { kind: 'type', text, title, raw: typeM[4].trim() }
+  }
+  const clickM = t.match(/^(?:please\s+|hey\s+goga,?\s+|goga,?\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:click|press|tap|hit)\s+(?:on\s+)?(?:the\s+)?(?:"([^"]+)"|'([^']+)'|([a-z0-9][\w .+#-]{0,40}?))\s*(?:button|menu(?:\s+item)?|item|tab|link|option|icon)?\s+(?:in|on|inside|within)\s+(?:the\s+|my\s+)?([a-z0-9][\w .+#-]{0,40}?)(?:\s+(?:window|app|application|document))?\s*[.!?]*$/i)
+  if (clickM) {
+    const label = (clickM[1] ?? clickM[2] ?? clickM[3] ?? '').trim()
+    const title = appWindowTitle(clickM[4].trim())
+    if (label && title) return { kind: 'click', label, title, raw: clickM[4].trim() }
+  }
+  return null
+}
+
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
   // Checked before the length guard: a "fix your own bug" paste is a legitimate task even when
   // it is long, and parseSelfFixRequest has its own cap and a double requirement.
   if (parseSelfFixRequest(message)) return true
+  if (parseInAppAction(message)) return true
   if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false
   if (isWritingRequest(message)) return false

@@ -29,7 +29,7 @@ import {
   CAPABILITY_STATEMENT, NOTHING_DONE_STATEMENT, claimsAction, disclaimsCapability,
   enforceHonestReply, groundAgentReply, pageEvidence,
 } from '../replyHonesty'
-import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl, parseInstallRequest, parseSelfFixRequest } from '../agentRouting'
+import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl, parseInstallRequest, parseSelfFixRequest, parseInAppAction } from '../agentRouting'
 import { AgentLoop } from '../agentLoop'
 
 /**
@@ -308,5 +308,32 @@ describe('controlling an app on the PC — close/open it, do not narrate it', ()
     expect(vague).not.toBeNull()
     expect(vague?.term).toBeNull()
     expect(AgentLoop.getHardcodedFirstStep('fix your bugs please')).toBeNull()
+  })
+
+  it('turns "type X into <app>" into a guarded computer.typeIntoApp', () => {
+    // The compound tool resolves the window and types under the focus guard, so keystrokes
+    // cannot land in the wrong window.
+    expect(parseInAppAction('type hello world into notepad')).toMatchObject({ kind: 'type', text: 'hello world', title: 'Notepad' })
+    expect(parseInAppAction('type "Dear Sir" into Word')).toMatchObject({ kind: 'type', text: 'Dear Sir', title: 'Word' })
+    expect(parseInAppAction('write a note in notepad')).toMatchObject({ kind: 'type', text: 'a note', title: 'Notepad' })
+    const step = AgentLoop.getHardcodedFirstStep('type hello world into notepad')
+    expect(step?.tool).toBe('computer.typeIntoApp')
+    expect(step?.params).toMatchObject({ text: 'hello world', title: 'Notepad' })
+    expect(looksLikeAgentTask('type hello into notepad')).toBe(true)
+  })
+
+  it('turns "click <label> in <app>" into a guarded computer.clickInApp', () => {
+    expect(parseInAppAction('click the Save button in Notepad')).toMatchObject({ kind: 'click', label: 'Save', title: 'Notepad' })
+    expect(parseInAppAction('click "File" in Word')).toMatchObject({ kind: 'click', label: 'File', title: 'Word' })
+    const step = AgentLoop.getHardcodedFirstStep('click the Save button in Notepad')
+    expect(step?.tool).toBe('computer.clickInApp')
+    expect(step?.params).toMatchObject({ label: 'Save', title: 'Notepad' })
+  })
+
+  it('does not treat prose as an in-app action when the app is unknown', () => {
+    expect(parseInAppAction('type a reply to john')).toBeNull()      // "john" is not a known app
+    expect(parseInAppAction('write a note in my journal')).toBeNull() // "journal" is not a known app
+    expect(parseInAppAction('put the milk in the fridge')).toBeNull()
+    expect(parseInAppAction('click the deal in the office')).toBeNull()
   })
 })

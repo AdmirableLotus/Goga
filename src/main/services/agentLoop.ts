@@ -2,7 +2,7 @@ import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
 import { parseFileWrite } from './fileCommand'
-import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl, parseInstallRequest, parseSelfFixRequest } from './agentRouting'
+import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl, parseInstallRequest, parseSelfFixRequest, parseInAppAction } from './agentRouting'
 
 const LIBRARY_HINT = `- Reading books/documents: to add one from the web, call library.import with a DIRECT https link ending in .pdf/.epub/.txt — never a github.com page link and never a hand-built URL. For a GitHub repo, call library.listRepo FIRST and use the exact "url" it returns for each file. Import only freely/legally shared documents (OWASP guides, author-released free books); skip copyrighted commercial books (tell the user to buy those). After importing, the user can ask about the book in chat.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before any trade, call trading.plan to build the plan (entry, ATR stop, 1R/2R/3R targets, size, reward-to-risk), show the plan, and wait for the user to approve. Only then place it with trading.order using that plan\'s stop and target. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
@@ -828,6 +828,15 @@ What is the next single action to take?`
         params: { query: selfFix.term },
         done: false,
       }
+    }
+    // "type X into Word" / "click Save in Notepad" — a real in-app action, done in one guarded
+    // step: resolve the window, bring it to the foreground, then type/click under the focus guard
+    // so input cannot land in the wrong window. The model used to narrate these or mis-target them.
+    const inApp = parseInAppAction(task)
+    if (inApp) {
+      return inApp.kind === 'type'
+        ? { thought: `Typing into the ${inApp.raw} window under the focus guard, so the keystrokes can only land there.`, tool: 'computer.typeIntoApp', params: { text: inApp.text, title: inApp.title }, done: false }
+        : { thought: `Clicking "${inApp.label}" in the ${inApp.raw} window under the focus guard.`, tool: 'computer.clickInApp', params: { label: inApp.label, title: inApp.title }, done: false }
     }
     const site = AgentLoop.siteToOpen(task)
     if (site) {

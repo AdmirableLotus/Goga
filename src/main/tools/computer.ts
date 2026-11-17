@@ -629,6 +629,85 @@ reg.register({
   return { success: true, data: r }
 })
 
+// ── Compound in-app actions ─────────────────────────────────────────────────
+//
+// "type X into Word" / "click Save in Notepad" used to narrate or mis-fire because the model
+// had to chain window-discovery → focus → keystroke itself and rarely got the pid+hwnd right,
+// so keystrokes could land in the wrong window. These two tools do the whole chain in one call,
+// through the SAME focus guard as computer.type/click: they resolve the window by title, bring
+// it to the foreground, and only then act — sending zero input if the wrong window is in front.
+
+reg.register({
+  name: 'computer.typeIntoApp',
+  description: 'Type text into a named application window in ONE step: resolves the window by a title substring, brings it to the foreground, verifies focus, then types under the same focus guard as computer.type (zero keystrokes if the wrong window is in front). Use this for "type X into <app>" so keystrokes cannot land in the wrong window. Open the app first with process.start if it is not running. Reversible: only types text.',
+  parameters: {
+    type: 'object',
+    properties: {
+      text:  { type: 'string', description: 'The text to type.' },
+      title: { type: 'string', description: 'A substring of the target window title, e.g. "Notepad", "Word", "Untitled".' }
+    },
+    required: ['text', 'title']
+  },
+  riskLevel: 'medium', reversible: true, category: 'computer'
+}, async (p, ctx) => {
+  const title = String(p.title ?? '').trim()
+  const text = String(p.text ?? '')
+  if (!title) return { success: false, error: 'computer.typeIntoApp: title is required to find the target window.' }
+  const win = await desktop.windowByTitleDiff(title, new Set())
+  if (!win) return { success: false, error: `computer.typeIntoApp: no visible window whose title contains "${title}". Open the app first (process.start), then retry.` }
+  const focused = await focus.focusWindow({ title, pid: win.pid }, ctx.abortSignal)
+  if (!focused.success) return { success: false, error: `computer.typeIntoApp: could not bring "${win.title}" to the foreground (${focused.error ?? focused.action}); nothing was typed.` }
+  const guard = await focus.focusGuardedType(
+    { pid: win.pid, hwnd: win.hwnd, title: win.title },
+    () => desktop.typeText(text).then(() => {}),
+    ctx.abortSignal,
+    'input'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.typeIntoApp blocked: ${guard.reason}; nothing was typed.` }
+  return { success: true, data: { typed: text, window: win.title, pid: win.pid, hwnd: win.hwnd } }
+})
+
+reg.register({
+  name: 'computer.clickInApp',
+  description: 'Click a named control inside a named application window in ONE step: resolves the window by a title substring, brings it to the foreground, finds the control by its visible label (UIAutomation), then clicks its centre under the same focus guard as computer.click (no click if the wrong window is in front). Use this for "click <label> in <app>". Open the app first if it is not running.',
+  parameters: {
+    type: 'object',
+    properties: {
+      label: { type: 'string', description: 'The visible name of the control to click, e.g. "Save", "OK", "File".' },
+      title: { type: 'string', description: 'A substring of the target window title, e.g. "Notepad", "Word".' },
+      role:  { type: 'string', description: 'Optional role to disambiguate, e.g. "Button", "MenuItem".' }
+    },
+    required: ['label', 'title']
+  },
+  riskLevel: 'medium', reversible: false, category: 'computer'
+}, async (p, ctx) => {
+  const title = String(p.title ?? '').trim()
+  const label = String(p.label ?? '').trim()
+  if (!title) return { success: false, error: 'computer.clickInApp: title is required to find the target window.' }
+  if (!label) return { success: false, error: 'computer.clickInApp: label is required to find the control.' }
+  const win = await desktop.windowByTitleDiff(title, new Set())
+  if (!win) return { success: false, error: `computer.clickInApp: no visible window whose title contains "${title}". Open the app first, then retry.` }
+  const focused = await focus.focusWindow({ title, pid: win.pid }, ctx.abortSignal)
+  if (!focused.success) return { success: false, error: `computer.clickInApp: could not foreground "${win.title}" (${focused.error ?? focused.action}); nothing was clicked.` }
+  const elements = await desktop.uiElements(win.title)
+  const wantRole = String(p.role ?? '').trim().toLowerCase()
+  const norm = (s: string) => s.trim().toLowerCase()
+  const roleOk = (e: typeof elements[number]) => !wantRole || norm(e.role) === wantRole
+  const match = elements.find(e => e.enabled && norm(e.name) === norm(label) && roleOk(e))
+    ?? elements.find(e => e.enabled && norm(e.name).includes(norm(label)) && roleOk(e))
+  if (!match) return { success: false, error: `computer.clickInApp: no enabled control named "${label}"${wantRole ? ` (role ${wantRole})` : ''} in "${win.title}". Call computer.uiElements to see what is there.` }
+  const cx = Math.round(match.x + match.width / 2)
+  const cy = Math.round(match.y + match.height / 2)
+  const guard = await focus.focusGuardedType(
+    { pid: win.pid, hwnd: win.hwnd, title: win.title },
+    () => desktop.click(cx, cy, 'left').then(() => {}),
+    ctx.abortSignal,
+    'coordinate'
+  )
+  if (!guard.allowed) return { success: false, error: `computer.clickInApp blocked: ${guard.reason}; nothing was clicked.` }
+  return { success: true, data: { clicked: match.name, role: match.role, x: cx, y: cy, window: win.title } }
+})
+
 export function registerComputerTools() {
   // Side-effect: all registrations above run on import
   return ToolRegistry.getInstance()
