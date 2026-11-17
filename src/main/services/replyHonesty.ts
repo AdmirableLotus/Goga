@@ -1,14 +1,19 @@
 // A chat answer has not touched the computer. The local brain still writes "I've opened it",
 // "I'm downloading it" — so such claims are caught in code, not left to the prompt.
 
-const DONE = /\bI(?:['’]ve| have| just| already)?\s+(?:now\s+|just\s+|already\s+)?(opened|clicked|typed|navigated|launched|downloaded|installed|uploaded|sent|emailed|saved|deleted|moved|renamed|fetched|cloned|scanned|browsed|executed|submitted|posted|logged in|signed in|pulled up|went to|looked it up|searched (?:the web|online|for)|checked|added|authori[sz]ed|blocked|allowed|whitelisted|approved|configured|scheduled|set up|verified|updated|registered|enabled|disabled)\b/i
+const DONE = /\bI(?:['’]ve| have| just| already)?\s+(?:now\s+|just\s+|already\s+)?(opened|closed|clicked|typed|navigated|launched|quit|killed|shut down|terminated|restarted|rebooted|turned (?:off|on)|minimi[sz]ed|maximi[sz]ed|downloaded|installed|uninstalled|uploaded|sent|emailed|saved|deleted|removed|moved|renamed|fetched|cloned|scanned|browsed|executed|submitted|posted|logged in|signed in|pulled up|went to|looked it up|searched (?:the web|online|for)|checked|added|authori[sz]ed|blocked|allowed|whitelisted|approved|configured|scheduled|set up|verified|updated|registered|enabled|disabled)\b/i
 // "I'll keep checking the account hourly" — a promise of a schedule the chat reply can't create.
 const RECURRING_PROMISE = /\bI(?:['’]ll| will)\s+(?:keep|continue to|be)\s+\w+ing\b[^.!?\n]{0,80}\b(hourly|every (?:hour|day|morning|night|\d+ ?(?:minutes?|hours?))|daily|each (?:hour|day))\b/i
-const DOING = /\bI(?:['’]m| am)\s+(?:now\s+)?(opening|clicking|typing|navigating|launching|downloading|installing|uploading|sending|saving|deleting|fetching|cloning|scanning|searching|running|executing|initiating|pulling up)\b/i
+const DOING = /\bI(?:['’]m| am)\s+(?:now\s+)?(opening|closing|clicking|typing|navigating|launching|quitting|killing|downloading|installing|uploading|sending|saving|deleting|removing|fetching|cloning|scanning|searching|running|executing|initiating|pulling up)\b/i
+// The passive completion claim: "The Brave browser window is now closed." No "I", so the two
+// patterns above miss it, which is exactly how a false "done" reached the user. Requires a
+// now/already/successfully, so a conditional description ("the file is saved to Downloads") is
+// not swept in.
+const PASSIVE_DONE = /\b(?:the|that|your|it|this|everything|all)\b[^.!?\n]{0,50}\b(?:is|are|was|were|has been|have been|['’]s been)\s+(?:now|already|successfully)\s+(closed|opened|killed|stopped|deleted|removed|installed|uninstalled|saved|downloaded|uploaded|sent|submitted|launched|terminated|disabled|enabled|done)\b/i
 
 /** True when a reply says it did, or is doing, something on the computer. */
 export function claimsAction(reply: string): boolean {
-  return DONE.test(reply) || DOING.test(reply)
+  return DONE.test(reply) || DOING.test(reply) || PASSIVE_DONE.test(reply)
 }
 
 /** The note added to a chat answer that claims an action no tool performed, or ''. */

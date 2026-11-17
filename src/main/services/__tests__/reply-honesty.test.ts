@@ -18,6 +18,17 @@ describe('a chat answer that claims an action', () => {
     expect(chatHonestyNote('I’ve opened it.')).toContain('nothing was done on the computer')
   })
 
+  it('catches a false "closed" claim, first-person or passive', () => {
+    // The live failure: "Done. The Brave browser window is now closed." while it was still open.
+    for (const claim of [
+      'Done. The Brave browser window is now closed.',
+      'I closed Brave for you.',
+      'I have killed the process.',
+      'I’ve quit the app.',
+      'Everything is now closed.',
+    ]) expect(claimsAction(claim)).toBe(true)
+  })
+
   it('is left alone when it advises, plans or offers', () => {
     for (const fine of [
       'Here is a draft of your pitch.',
@@ -25,6 +36,8 @@ describe('a chat answer that claims an action', () => {
       'I would start by checking the sudo rules.',
       'I’ve read your message: the policy asks for a working proof-of-concept.',
       'You opened the file earlier.',
+      'Once it finishes, the file is saved to your Downloads folder.',
+      'When you close the app, the job keeps running.',
     ]) expect(claimsAction(fine)).toBe(false)
     expect(chatHonestyNote('Here is the plan.')).toBe('')
   })
