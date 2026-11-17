@@ -2,7 +2,7 @@ import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
 import { parseFileWrite } from './fileCommand'
-import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers } from './agentRouting'
+import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl } from './agentRouting'
 
 const LIBRARY_HINT = `- Reading books/documents: to add one from the web, call library.import with a DIRECT https link ending in .pdf/.epub/.txt — never a github.com page link and never a hand-built URL. For a GitHub repo, call library.listRepo FIRST and use the exact "url" it returns for each file. Import only freely/legally shared documents (OWASP guides, author-released free books); skip copyrighted commercial books (tell the user to buy those). After importing, the user can ask about the book in chat.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before any trade, call trading.plan to build the plan (entry, ATR stop, 1R/2R/3R targets, size, reward-to-risk), show the plan, and wait for the user to approve. Only then place it with trading.order using that plan\'s stop and target. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
@@ -791,6 +791,15 @@ What is the next single action to take?`
         params: { url: cantina },
         done: false,
       }
+    }
+    // "close brave" / "quit spotify" / "open notepad" — a desktop-app action, run as a real
+    // process action so it actually happens instead of being narrated. Closing force-kills, so
+    // it is process.kill (high risk → the agent loop makes the user approve the exact target).
+    const app = parseAppControl(task)
+    if (app) {
+      return app.action === 'close'
+        ? { thought: `Closing ${app.raw} by terminating its process (${app.name}).`, tool: 'process.kill', params: { name: app.name }, done: false }
+        : { thought: `Launching ${app.raw}.`, tool: 'process.start', params: { executable: app.launch ?? app.name }, done: false }
     }
     const site = AgentLoop.siteToOpen(task)
     if (site) {

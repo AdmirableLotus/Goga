@@ -697,7 +697,9 @@ describe('AgentLoop.getHardcodedFirstStep — file-write pre-flight override', (
   })
 
   it('non-save task → returns null', () => {
-    expect(AgentLoop.getHardcodedFirstStep('open Notepad')).toBeNull()
+    // "open Notepad" is now a real app launch (process.start), so it is no longer a null case;
+    // a task with no hardcoded override at all is.
+    expect(AgentLoop.getHardcodedFirstStep('tell me a joke about cats')).toBeNull()
   })
 
   it('conversational save question → returns null', () => {

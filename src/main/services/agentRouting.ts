@@ -222,10 +222,63 @@ export function isConversationalQuestion(message: string): boolean {
   return CONVERSATIONAL_PREFIX.test(message)
 }
 
+/**
+ * An "open/close an app" request, resolved to a process action — or null.
+ *
+ * "close brave", "quit spotify", "open notepad" are the Rabbit-OS-style PC-control requests the
+ * chat path used to narrate instead of doing ("Done, Brave is closed" while it was still open).
+ * Resolving them to a concrete process action lets the agent run process.kill / process.start
+ * rather than talk about it. Closing is force-killing a process, so it stays approval-gated.
+ */
+const APP_ALIASES: Record<string, string> = {
+  edge: 'msedge', 'microsoft edge': 'msedge', word: 'winword', 'microsoft word': 'winword',
+  excel: 'excel', powerpoint: 'powerpnt', outlook: 'outlook', 'vs code': 'Code', vscode: 'Code',
+  'visual studio code': 'Code', chrome: 'chrome', 'google chrome': 'chrome', brave: 'brave',
+  firefox: 'firefox', spotify: 'spotify', discord: 'discord', slack: 'slack', teams: 'ms-teams',
+  telegram: 'telegram', steam: 'steam', notepad: 'notepad', calculator: 'Calculator',
+  terminal: 'WindowsTerminal', cmd: 'cmd', powershell: 'powershell', explorer: 'explorer',
+  'file explorer': 'explorer', paint: 'mspaint', obs: 'obs64', zoom: 'Zoom',
+}
+/** What can launch each known app, when the bare name is not on PATH. */
+const APP_LAUNCH: Record<string, string> = {
+  msedge: 'msedge', winword: 'winword', powerpnt: 'powerpnt', Code: 'code', chrome: 'chrome',
+  brave: 'brave', firefox: 'firefox', spotify: 'spotify', discord: 'discord', notepad: 'notepad',
+  Calculator: 'calc', WindowsTerminal: 'wt', cmd: 'cmd', powershell: 'powershell',
+  explorer: 'explorer', mspaint: 'mspaint',
+}
+const NOT_AN_APP = /^(the|a|an|my|it|this|that|them|app|application|window|windows|tab|tabs|file|files|folder|program|programs|process|everything|all|computer|pc|laptop|machine|system|desktop|screen|session|down|up|out|off)$/i
+
+export interface AppControl { action: 'open' | 'close'; name: string; launch?: string; raw: string }
+
+export function parseAppControl(message: string): AppControl | null {
+  const t = String(message ?? '').trim()
+  if (!t || t.length > 120) return null
+  // "shut down the computer / restart the pc" is an OS action, never a process to kill here.
+  if (/\b(shut\s*down|turn\s*off|restart|reboot|log\s*off|sign\s*out|put\s+to\s+sleep)\b[^.!?\n]{0,30}\b(computer|pc|laptop|machine|system|windows|everything)\b/i.test(t)) return null
+  const close = t.match(/^(?:please\s+|hey\s+goga,?\s+|goga,?\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:close|quit|kill|exit|terminate|force\s*quit|shut\s*down|end)\s+(?:the\s+|my\s+)?([a-z0-9][\w .+-]{0,40}?)(?:\s+(?:browser|app|application|window|program|process))?\s*(?:please|now|for\s+me|thanks?|thank\s+you)?\s*[.!?]*$/i)
+  const open = t.match(/^(?:please\s+|hey\s+goga,?\s+|goga,?\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:open|launch|start|fire\s*up|boot\s*up|bring\s*up)\s+(?:the\s+|my\s+)?([a-z0-9][\w .+-]{0,40}?)(?:\s+(?:browser|app|application|program|for\s+me))?\s*(?:please|now|for\s+me|thanks?)?\s*[.!?]*$/i)
+  const m = close ?? open
+  if (!m) return null
+  const action: 'open' | 'close' = close ? 'close' : 'open'
+  const name = m[1].trim().toLowerCase().replace(/\.exe$/i, '').replace(/[.!?]+$/, '').trim()
+  if (!name || NOT_AN_APP.test(name)) return null
+  // A URL or domain is a browser navigation, not a desktop app — leave it to siteToOpen.
+  if (/https?:\/\/|www\.|\b[a-z0-9-]+\.(com|org|net|io|ai|dev|app|co|edu|gov|xyz)\b/i.test(name)) return null
+  // A multi-word target that is not a known app is almost always ordinary prose
+  // ("close the deal with john"), not an app — don't turn it into a kill.
+  const known = name in APP_ALIASES
+  if (!known && /\s/.test(name)) return null
+  const resolved = APP_ALIASES[name] ?? name
+  // Opening is only reliable for apps we know how to launch (bare names rarely resolve on PATH).
+  if (action === 'open' && !(resolved in APP_LAUNCH)) return null
+  return { action, name: resolved, launch: APP_LAUNCH[resolved], raw: name }
+}
+
 export function looksLikeAgentTask(message: string, lastAssistantMsg?: string): boolean {
   if (message.length > LONG_MESSAGE_CHARS) return false
   if (CONVERSATIONAL_PREFIX.test(message)) return false
   if (isWritingRequest(message)) return false
+  if (parseAppControl(message)) return true
   if (isImperativeRequest(message)) return true
   if (AGENT_TRIGGERS.some(r => r.test(message))) return true
   if (CONFIRM_TRIGGERS.test(message.trim()) && lastAssistantMsg) {

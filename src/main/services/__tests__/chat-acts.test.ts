@@ -29,7 +29,7 @@ import {
   CAPABILITY_STATEMENT, NOTHING_DONE_STATEMENT, claimsAction, disclaimsCapability,
   enforceHonestReply, groundAgentReply, pageEvidence,
 } from '../replyHonesty'
-import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget } from '../agentRouting'
+import { isImperativeRequest, looksLikeAgentTask, namesAnActionTarget, parseAppControl } from '../agentRouting'
 import { AgentLoop } from '../agentLoop'
 
 /**
@@ -232,5 +232,31 @@ describe('4. the browser is reachable from a chat request', () => {
     const step = AgentLoop.getHardcodedFirstStep('open the Coinbase bug bounty page and tell me what it says')
     expect(step?.tool).toBe('browser.goto')
     expect(step?.params.url).toBe('https://www.coinbase.com/bugbounty')
+  })
+})
+
+describe('controlling an app on the PC — close/open it, do not narrate it', () => {
+  it('turns "close <app>" into a real process.kill, not a chat reply', () => {
+    // The live failure: "Done, Brave is closed" while it was still open.
+    expect(parseAppControl('close brave')).toMatchObject({ action: 'close', name: 'brave' })
+    expect(parseAppControl('close the brave browser')).toMatchObject({ action: 'close', name: 'brave' })
+    expect(parseAppControl('quit spotify')).toMatchObject({ action: 'close', name: 'spotify' })
+    const step = AgentLoop.getHardcodedFirstStep('close brave')
+    expect(step?.tool).toBe('process.kill')
+    expect(step?.params.name).toBe('brave')
+  })
+
+  it('turns "open <known app>" into process.start', () => {
+    const step = AgentLoop.getHardcodedFirstStep('open notepad')
+    expect(step?.tool).toBe('process.start')
+    expect(step?.params.executable).toBe('notepad')
+    expect(looksLikeAgentTask('close brave')).toBe(true)
+  })
+
+  it('does not fire on OS actions or ordinary prose', () => {
+    expect(parseAppControl('shut down the computer')).toBeNull()
+    expect(parseAppControl('close the window')).toBeNull()
+    expect(parseAppControl('close the deal with john')).toBeNull()
+    expect(parseAppControl('open youtube')).toBeNull() // a website, handled by the browser path
   })
 })
