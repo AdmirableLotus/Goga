@@ -92,6 +92,7 @@ export const SPECIALISTS: Specialist[] = [
       { label: 'query interpolation', pattern: `(SELECT|INSERT|UPDATE|DELETE|WHERE|ORDER BY)[^'"\\n]{0,80}(\\.\\s*\\$|\\$[a-zA-Z_]+\\s*\\.)`, why: 'a SQL keyword sits next to a concatenated variable' },
       { label: 'prepare then interpolate', pattern: '(prepare|esc_sql)\\s*\\(', why: 'preparation is the right tool — check what goes into it' },
       { label: 'double query', pattern: '\\$wpdb->(query|get_results|get_var|get_row)\\s*\\(\\s*\\$[a-z_]', why: 'a variable is passed straight to the query method' },
+      { label: 'concatenated wpdb query', pattern: `\\$wpdb->(query|get_results|get_var|get_row|get_col)\\s*\\([^)]*["']\\s*\\.\\s*\\$`, why: 'a variable is concatenated into the SQL string passed to wpdb, instead of $wpdb->prepare with a placeholder' },
       { label: 'interpolated identifier', pattern: `ORDER BY\\s+\\$|LIMIT\\s+\\$|FROM\\s+\\$wpdb->|->prefix[^'"]*\\$`, why: 'identifiers cannot be bound, so they are the usual hole' },
       { label: 'sanitise not bind', pattern: 'esc_sql|intval|absint', why: 'sanitising is not the same as binding — check the value still reaches the query' },
     ],
