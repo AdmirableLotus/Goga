@@ -201,6 +201,7 @@ export interface MainHandlers {
   'security:toolboxTool': (identifier: string) => Promise<import('./toolboxTypes').ToolReference | null>
   'security:checkTarget': (target: string, technique?: string) => Promise<{ decision: import('./security').ScopeDecision; program: { id: string; name: string } | null }>
   'security:approveRequest': (target: string, method: string) => Promise<{ grantId: string; decision: import('./security').ScopeDecision }>
+  'security:startBounty': (focus?: string) => Promise<{ jobId: string; declared: { host: string; targetId: string }[]; program: { id: string; name: string } }>
   'security:findings': () => Promise<import('./security').Finding[]>
   'security:addFinding': (input: { title: string; severity: import('./security').Finding['severity']; asset: string; summary: string; steps: string; impact: string; remediation: string; evidence: string }) => Promise<import('./security').Finding>
   'security:updateFinding': (id: string, patch: Partial<import('./security').Finding>) => Promise<import('./security').Finding>

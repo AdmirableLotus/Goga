@@ -50,7 +50,7 @@ export class JobTransitionError extends Error {
   }
 }
 
-export function newJob(input: { title: string; goal: string; id: string; now: number; bounds?: Partial<JobBounds> }): Job {
+export function newJob(input: { title: string; goal: string; id: string; now: number; bounds?: Partial<JobBounds>; mode?: 'normal' | 'bounty' }): Job {
   const title = String(input.title ?? '').trim() || firstLine(input.goal)
   return {
     id: input.id,
@@ -61,6 +61,7 @@ export function newJob(input: { title: string; goal: string; id: string; now: nu
     progress: 'waiting for a free slot',
     steps: [],
     bounds: { ...DEFAULT_JOB_BOUNDS, ...(input.bounds ?? {}) },
+    mode: input.mode ?? 'normal',
     resumedCount: 0,
   }
 }

@@ -21,8 +21,8 @@ import { runJob, type WorkerStepResult } from './worker'
 export interface ToolGate {
   /** Null when the tool is not registered. */
   definition: (name: string) => { name: string; riskLevel: string } | null
-  /** The existing authorization decision for this exact call. */
-  decide: (name: string, params: Record<string, unknown>) => { allowed: boolean; requiresApproval: boolean; reason: string }
+  /** The existing authorization decision for this exact call, under the job's gating mode. */
+  decide: (name: string, params: Record<string, unknown>, mode: 'normal' | 'bounty') => { allowed: boolean; requiresApproval: boolean; reason: string }
   run: (name: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<{ success: boolean; data?: unknown; error?: string }>
 }
 
@@ -132,7 +132,7 @@ export class JobsManager {
   }
 
   /** Create a job. It starts as soon as a slot is free. */
-  create(input: { goal: string; title?: string; bounds?: Partial<JobBounds> }): Job {
+  create(input: { goal: string; title?: string; bounds?: Partial<JobBounds>; mode?: 'normal' | 'bounty' }): Job {
     const now = this.now()
     const goal = String(input.goal ?? '').trim()
     if (goal.length < 4) throw new Error('a job needs a goal — say what it should achieve')
@@ -142,6 +142,7 @@ export class JobsManager {
       goal,
       now,
       bounds: { ...DEFAULT_JOB_BOUNDS, ...(input.bounds ?? {}) },
+      mode: input.mode ?? 'normal',
     })
     this.commit(job, 'created')
     this.pump()
@@ -339,7 +340,8 @@ export class JobsManager {
     const def = this.deps.tools.definition(tool)
     if (!def) return { ok: false, detail: `there is no tool called "${tool}"` }
 
-    const decision = this.deps.tools.decide(tool, params)
+    const mode = this.get(jobId)?.mode ?? 'normal'
+    const decision = this.deps.tools.decide(tool, params, mode)
     if (!decision.allowed) return { ok: false, detail: `refused: ${decision.reason}` }
 
     if (decision.requiresApproval) {

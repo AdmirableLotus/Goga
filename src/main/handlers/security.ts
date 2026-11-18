@@ -11,6 +11,9 @@ import {
 } from '../services/security/store'
 import { curriculum, lessonById } from '../services/security/curriculum'
 import { decideScope } from '../services/security/scope'
+import { BOUNTY_BOUNDS, buildBountyGoal, inScopeHosts } from '../services/security/bounty'
+import { declareTarget } from '../services/lab/targets'
+import { jobs } from '../services/jobs/instance'
 import { toolboxCatalog } from '../services/security/toolbox'
 import { findTool, searchToolbox } from '../services/security/toolboxQuery'
 
@@ -122,6 +125,40 @@ export function registerSecurityHandlers(ipcMain: IpcMain) {
     const grantId = issueGrant(target, method || 'GET')
     audit('approve', `user approved one ${(method || 'GET').toUpperCase()} to ${target} (${decision.matchedRule})`)
     return { grantId, decision }
+  })
+  // Start one watched, hands-off bounty run on the active program. This is the handoff the
+  // Security page was missing: it declares ONLY the hosts decideScope proves are in scope,
+  // then creates a 'bounty'-mode job so the scope-checked tools run without a per-step prompt
+  // while every step streams to the Jobs board. Out-of-scope hosts are never declared, so the
+  // run can reach nothing the program did not authorize.
+  ipcMain.handle('security:startBounty', async (_e, focus?: string) => {
+    const program = activeProgram()
+    if (!program) throw new Error('select and activate a program first — there is nothing to run against')
+
+    const hosts = inScopeHosts(program)
+    const declared: { host: string; targetId: string }[] = []
+    for (const h of hosts) {
+      const result = declareTarget({
+        host: h.host,
+        ports: '',
+        kind: 'authorized-engagement',
+        note: `in scope for "${program.name}" (${program.source}) — autonomous bounty run`,
+      })
+      if (result.ok && result.target) {
+        declared.push({ host: h.host, targetId: result.target.id })
+        audit('approve', `declared in-scope target ${h.host} for autonomous run on "${program.name}"`)
+      }
+    }
+
+    const goal = buildBountyGoal(program, hosts, typeof focus === 'string' ? focus.trim() : undefined)
+    const job = jobs().create({
+      goal,
+      title: `Bounty run — ${program.name}`,
+      mode: 'bounty',
+      bounds: BOUNTY_BOUNDS,
+    })
+    audit('note', `started hands-off bounty run "${job.id}" on "${program.name}" — ${declared.length} host(s) declared in scope`)
+    return { jobId: job.id, declared, program: { id: program.id, name: program.name } }
   })
   ipcMain.handle('security:findings', async () => listFindings())
   ipcMain.handle('security:addFinding', async (_e, input: Omit<Finding, 'id' | 'status' | 'createdAt' | 'updatedAt' | 'programId'>) => {

@@ -10,8 +10,34 @@ export interface AuthDecision {
 }
 
 export interface AuthContext {
-  mode: 'normal'
+  /**
+   * 'normal' is the everyday gate. 'bounty' is a watched, hands-off bug-bounty run the user
+   * started for ONE selected program: the structured, scope-checked security tools below run
+   * without a per-step approval, because the run itself was approved and every one of those
+   * tools enforces the program's scope (or a live Lab declaration) inside itself. Nothing
+   * else is loosened — a shell, an order, a file delete or a self-edit still asks, even in a
+   * bounty run.
+   */
+  mode: 'normal' | 'bounty'
 }
+
+/**
+ * The only tools a 'bounty' run may fire without asking. Each one is safe to auto-run ONLY
+ * because it refuses out-of-scope work on its own, deterministically, whatever the planner
+ * intended:
+ *  - security.probe re-checks the active program's scope and the forbidden-host rule itself;
+ *  - every active lab.* tool refuses any host not covered by a live declaration, and the
+ *    bounty handler declares ONLY in-scope hosts at launch, so a scan can reach nothing else;
+ *  - setup.runInstall is bound by the single-use gate to the exact package it offered.
+ * lab.declareTarget is deliberately NOT here: declaring a new host is the one thing that could
+ * widen scope, so even a hands-off run stops and asks before it declares anything new.
+ */
+const BOUNTY_AUTO: Set<string> = new Set([
+  'security.probe',
+  'lab.listTargets', 'lab.tools', 'lab.runs', 'lab.stop', 'lab.revokeTarget',
+  'lab.portScan', 'lab.scan', 'lab.idor', 'lab.enumerateUsers',
+  'setup.runInstall',
+])
 
 // Tools that are ALWAYS auto-approved regardless of settings — purely observational, read-only
 const ALWAYS_AUTO: Set<string> = new Set([
@@ -88,6 +114,23 @@ export class AuthorizationService {
     // 1. Always-auto tools (observational / read-only)
     if (ALWAYS_AUTO.has(tool.name) && tool.name !== 'computer.clipboard.read') {
       return { allowed: true, requiresApproval: false, reason: 'read-only observation' }
+    }
+
+    // 1b. A watched, hands-off bounty run.
+    if (ctx.mode === 'bounty') {
+      // Declaring a NEW target is the one act that can widen what a run may reach — a Lab
+      // declaration is the Lab's own gate, not the program's scope. It is 'medium' risk, so
+      // the auto-approve threshold below would otherwise pass it silently; in a bounty run it
+      // must always stop and ask, whatever the threshold is.
+      if (tool.name === 'lab.declareTarget') {
+        return { allowed: true, requiresApproval: true, reason: 'a bounty run asks before declaring any new target' }
+      }
+      // The scope-checked security tools run without a per-step approval. This is the ONLY
+      // place a critical tool is auto-approved, and it is limited to the BOUNTY_AUTO allowlist,
+      // each member of which enforces scope (or a live, in-scope declaration) itself.
+      if (BOUNTY_AUTO.has(tool.name)) {
+        return { allowed: true, requiresApproval: false, reason: 'bounty run — scope-enforcing tool, authorized by the run' }
+      }
     }
 
     // 2. Critical risk — always requires approval

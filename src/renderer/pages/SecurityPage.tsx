@@ -4,6 +4,7 @@ import type { ToolboxCatalog } from '../../shared/toolboxTypes'
 import { PageHeader, Card, Field, EmptyState, Alert, Chip } from '../components/ui'
 import { ToolboxSection } from '../components/Toolbox'
 import { GrimoireSection } from '../components/Grimoire'
+import type { DestinationId } from '../nav'
 
 /**
  * Security page: bug bounty.
@@ -14,7 +15,7 @@ import { GrimoireSection } from '../components/Grimoire'
  * anything, and the tool that sends is still behind the approval gate.
  */
 
-export default function SecurityPage() {
+export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: DestinationId, section?: string) => void } = {}) {
   const [programs, setPrograms] = useState<ProgramImport[]>([])
   const [active, setActive] = useState<ProgramImport | null>(null)
   const [creds, setCreds] = useState<Record<'hackerone' | 'bugcrowd', { configured: boolean; encryptionAvailable: boolean }> | null>(null)
@@ -316,6 +317,28 @@ export default function SecurityPage() {
             </div>
           )}
           {grantId && <p className="g-mono g-caption">grant: {grantId}</p>}
+        </Card>
+
+        {/* ── Hands-off run you watch ──────────────────────────────────────── */}
+        <Card
+          title="Run the active program, hands-off"
+          sub="Goga declares only the in-scope hosts, then recons, installs what it needs, and tests — you watch it live on the Jobs board"
+        >
+          {!active
+            ? <EmptyState title="No active program" body="Activate a program above first — the run tests only that program's in-scope assets." />
+            : <>
+              <p className="g-caption">
+                Starts an autonomous run on <strong>{active.name}</strong>. In-scope requests fire without asking you —
+                out-of-scope or local/private/metadata targets are refused automatically, and declaring any <em>new</em> host still stops to ask.
+                Watch every step on the Jobs board and cancel it there at any time.
+              </p>
+              <button className="g-btn g-btn--risk" disabled={busy} onClick={() => void work(async () => {
+                const r = await window.goga.invoke('security:startBounty')
+                setNotice(`Started a hands-off run on ${r.program.name} — ${r.declared.length} in-scope host(s) declared. Watch it on the Jobs board.`)
+                setAudit(await window.goga.invoke('security:audit', 40))
+                onNavigate?.('work', 'jobs')
+              })}>Start autonomous run</button>
+            </>}
         </Card>
 
         {/* ── Grimoire: specialist review, validator, gate, memory ─────────── */}

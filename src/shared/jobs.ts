@@ -79,6 +79,12 @@ export interface Job {
   report?: JobReport
   error?: string
   bounds: JobBounds
+  /**
+   * How this job's tool calls are gated. 'bounty' is a watched, hands-off bug-bounty run:
+   * the scope-checked security tools run without a per-step approval (see AuthContext). Any
+   * other job is 'normal' and nothing is loosened. Absent on old saved jobs, read as 'normal'.
+   */
+  mode?: 'normal' | 'bounty'
   /** When the app closed on this job, so the board can say so. */
   interruptedAt?: number
   /** How many times it has been picked up again after an interruption. */

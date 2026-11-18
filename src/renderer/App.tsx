@@ -118,7 +118,7 @@ export default function App() {
           {!missionMode && section === 'approvals' && <ApprovalsPage />}
           {!missionMode && section === 'settings' && <SettingsPage />}
 
-          {!missionMode && section === 'security' && <SecurityPage />}
+          {!missionMode && section === 'security' && <SecurityPage onNavigate={go} />}
           {!missionMode && section === 'osint' && <OsintPage />}
           {!missionMode && section === 'engineering' && <EngineeringPage />}
 

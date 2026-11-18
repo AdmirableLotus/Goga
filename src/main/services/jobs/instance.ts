@@ -61,10 +61,10 @@ export function jobs(): JobsManager {
         const t = registry.get(name)?.definition
         return t ? { name: t.name, riskLevel: t.riskLevel } : null
       },
-      decide: (name, params) => {
+      decide: (name, params, mode) => {
         const t = registry.get(name)?.definition
         if (!t) return { allowed: false, requiresApproval: false, reason: `there is no tool called "${name}"` }
-        return auth.evaluateAndLog(t, params, { mode: 'normal' })
+        return auth.evaluateAndLog(t, params, { mode: mode ?? 'normal' })
       },
       run: (name, params, signal) => registry.execute(name, params, { abortSignal: signal }),
     },
