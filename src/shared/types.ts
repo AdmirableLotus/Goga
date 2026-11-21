@@ -243,6 +243,11 @@ export interface AppSettings {
   // public pages, summarises them locally, and remembers source-grounded notes. Off = never browse.
   // Search queries and page fetches go to the internet; summarising and storage stay local.
   webLearnEnabled: boolean
+  // Which browser Goga drives for interactive automation. 'firefox' uses the built-in
+  // WebDriver BiDi layer against installed Firefox; 'brave' uses the Playwright/Chromium
+  // tools against installed Brave. This is the user's browsing preference only — it does NOT
+  // relax any bug-bounty scope check, approval, or program rule.
+  browserEngine: 'firefox' | 'brave'
   ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
   // Sleep mode: closing the window keeps Goga in the tray, watching and listening
   sleepOnClose: boolean
@@ -403,6 +408,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mediaFastModel: 'medium',
   videoReadFrames: true,
   webLearnEnabled: true,
+  browserEngine: 'firefox',
   ttsProvider: 'sapi',
   sleepOnClose: true,
   startWithWindows: true,

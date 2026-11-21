@@ -26,10 +26,12 @@ export default function SettingsPage() {
   const [kokoroPhase, setKokoroPhase] = useState<KokoroPhase>('idle')
   const [preflight, setPreflight] = useState<Awaited<ReturnType<typeof window.goga.invoke<'model:kokoro-preflight'>>> | null>(null)
   const [progress, setProgress] = useState<DownloadProgress | null>(null)
+  const [browserReady, setBrowserReady] = useState<Awaited<ReturnType<typeof window.goga.invoke<'browser:readiness'>>> | null>(null)
   const unsubRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     window.goga.invoke('settings:get').then(setSettings)
+    window.goga.invoke('browser:readiness').then(setBrowserReady).catch(() => {})
     window.goga.invoke('tts:voices').then(setVoices)
     checkOllama()
     window.goga.invoke('model:kokoro-status').then(s => setKokoroInstalled(s.installed))
@@ -578,6 +580,27 @@ export default function SettingsPage() {
         <Field label="Learn from the web when asked ('research X online' — searches, reads, and summarizes pages locally; never browses on its own)">
           <input type="checkbox" checked={settings.webLearnEnabled ?? true} onChange={e => update({ webLearnEnabled: e.target.checked })} />
         </Field>
+        <Field label="Browser Goga drives for interactive automation">
+          <select
+            value={settings.browserEngine ?? 'firefox'}
+            onChange={e => update({ browserEngine: e.target.value as AppSettings['browserEngine'] })}
+            style={styles.select}
+          >
+            <option value="firefox">Firefox (WebDriver BiDi — installed Firefox)</option>
+            <option value="brave">Brave (Playwright/Chromium — installed Brave)</option>
+          </select>
+        </Field>
+        {browserReady && (() => {
+          const chosen = (settings.browserEngine ?? 'firefox') === 'brave' ? browserReady.brave : browserReady.firefox
+          return (
+            <div style={{ fontSize: 12, color: chosen.installed ? '#6a9955' : '#c08040', marginTop: -6, marginBottom: 6, maxWidth: 560 }}>
+              {chosen.installed ? '✓ ' : '✗ '}{chosen.message}
+              <div style={{ color: '#888', marginTop: 2 }}>
+                This preference is for browsing only. It never relaxes a bug-bounty scope check, an approval, or a program rule.
+              </div>
+            </div>
+          )
+        })()}
 
         <Section label="General" />
         <Field label="Log Retention (days)">

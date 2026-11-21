@@ -25,7 +25,7 @@ const reg = ToolRegistry.getInstance()
 const layer = () => browserLayer()
 
 /** Firefox takes a few seconds to come up; a chat request must not fail on that. */
-async function ensureAttached(): Promise<{ ok: true } | { ok: false; message: string }> {
+export async function ensureAttached(): Promise<{ ok: true } | { ok: false; message: string }> {
   const l = layer()
   if (l.isAttached) return { ok: true }
   const status = await l.status()

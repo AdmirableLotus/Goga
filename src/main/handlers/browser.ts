@@ -2,6 +2,9 @@ import type { IpcMain } from 'electron'
 import type { ElementQuery } from '../../shared/browser'
 import type { VenueId } from '../../shared/venues'
 import { browserLayer } from '../services/browser/layer'
+import { braveCantinaSession } from '../services/browser/braveSession'
+import { asBrowserEngine, browserReadiness } from '../services/browser/engine'
+import { SettingsService } from '../services/settings'
 import { correctRecipe, forgetRecipe, learnCurrentPage, readRecipes } from '../services/browser/recipes'
 import { approvalGate } from '../services/venues/guard'
 import { readHalt, readVenueEvents, setHalt } from '../services/venues/state'
@@ -22,6 +25,13 @@ import { VENUES } from '../../shared/venues'
 export function registerBrowserHandlers(ipcMain: IpcMain) {
   const layer = browserLayer()
 
+  // Which engine is chosen, and whether each is actually installed — so the UI can show an
+  // actionable status for Brave and Firefox and the user can pick between them. Read-only; it
+  // launches nothing and reaches no network, and it carries no bounty/scope authorization.
+  ipcMain.handle('browser:readiness', async () => {
+    const engine = asBrowserEngine(SettingsService.getInstance().get().browserEngine)
+    return { engine, firefox: browserReadiness('firefox'), brave: browserReadiness('brave') }
+  })
   ipcMain.handle('browser:status', async () => layer.status())
   ipcMain.handle('browser:start', async (_e, url?: string) => layer.start(typeof url === 'string' ? url : undefined))
   ipcMain.handle('browser:attach', async () => layer.attach())
@@ -39,6 +49,14 @@ export function registerBrowserHandlers(ipcMain: IpcMain) {
   ipcMain.handle('browser:waitForElement', async (_e, query: ElementQuery, timeoutMs?: number) =>
     layer.waitForElement(query, Number(timeoutMs) || undefined))
   ipcMain.handle('browser:screenshot', async () => layer.screenshot())
+
+  // One persistent Brave window the user signs in to Cantina by hand. Dedicated Goga profile;
+  // no credentials, no scraping, no scope authorization — just opening the page for sign-in.
+  const brave = braveCantinaSession()
+  ipcMain.handle('brave:openForCantina', async () => brave.open())
+  ipcMain.handle('brave:status', async () => brave.status())
+  ipcMain.handle('brave:confirmSignedIn', async () => brave.confirmSignedIn())
+  ipcMain.handle('brave:closeCantina', async () => brave.close())
 
   // Site learning
   ipcMain.handle('browser:recipes', async () => readRecipes())

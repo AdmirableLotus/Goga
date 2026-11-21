@@ -38,6 +38,7 @@ export class BidiClient {
   private nextId = 1
   private pending = new Map<number, Pending>()
   private closed = false
+  private onClosedCbs = new Set<() => void>()
 
   private constructor(
     private socket: WebSocket,
@@ -47,6 +48,26 @@ export class BidiClient {
     socket.on('message', (data: WebSocket.RawData) => this.onMessage(data))
     socket.on('close', () => this.failAll(new BidiError('the browser closed the connection', 'close')))
     socket.on('error', err => this.failAll(new BidiError(`browser connection error: ${err.message}`, 'socket')))
+  }
+
+  /** False once the socket has closed or errored, or the session was ended. */
+  get isAlive(): boolean { return !this.closed }
+
+  /**
+   * Register a callback for when this connection dies — whether the browser closed the socket,
+   * the socket errored, or the session was ended here. Fires exactly once. If the connection is
+   * already dead, the callback runs now, so a caller can never miss the edge. This is how the
+   * layer above drops a dead session instead of holding a corpse and failing every later call.
+   */
+  onClosed(cb: () => void): void {
+    if (this.closed) { try { cb() } catch { /* a listener's own fault */ } return }
+    this.onClosedCbs.add(cb)
+  }
+
+  private notifyClosed(): void {
+    const cbs = [...this.onClosedCbs]
+    this.onClosedCbs.clear()
+    for (const cb of cbs) { try { cb() } catch { /* a listener's own fault */ } }
   }
 
   /**
@@ -145,12 +166,20 @@ export class BidiClient {
       this.pending.delete(id)
       entry.reject(err)
     }
+    this.notifyClosed()
   }
 
   async close(): Promise<void> {
-    if (this.closed) return
+    if (this.closed) {
+      // Already dead from a socket close/error. Still make sure the socket is released and
+      // listeners were told, so an explicit close() after a crash is not a silent no-op.
+      try { this.socket.close() } catch { /* already closed */ }
+      this.notifyClosed()
+      return
+    }
     this.closed = true
     try { await this.send('session.end') } catch { /* the socket is going anyway */ }
     try { this.socket.close() } catch { /* already closed */ }
+    this.notifyClosed()
   }
 }

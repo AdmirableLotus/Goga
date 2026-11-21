@@ -144,6 +144,17 @@ export class BrowserLayer {
         browserVersion: caps.browserVersion ?? 'unknown',
         contextId: null,
       }
+      // When the browser dies — it crashed, the user closed the window, the socket dropped —
+      // drop the attachment instead of holding a corpse. Without this, isAttached stays true,
+      // every later command rejects with "the browser connection is closed", and the only cure
+      // is a manual re-attach. With it, the next action finds no session and relaunches cleanly.
+      client.onClosed(() => {
+        if (this.attached && this.attached.client === client) {
+          this.attached = null
+          this.lastMessage = `The Firefox session on port ${this.port} closed. Goga will relaunch it on the next browser action.`
+          log().warn(`Browser: BiDi session closed; dropped the dead attachment on port ${this.port}`)
+        }
+      })
       log().info(`Browser: attached to ${this.attached.browserName} ${this.attached.browserVersion} on port ${this.port}`)
       return this.status()
     } catch (err) {
@@ -162,6 +173,9 @@ export class BrowserLayer {
   }
 
   private require(): Attached {
+    // A session whose socket has died is not a session. Reap it here too, in case a command
+    // raced the close callback, so a caller never acts through a dead connection.
+    if (this.attached && !this.attached.client.isAlive) this.attached = null
     if (!this.attached) {
       throw new Error('Goga is not attached to Firefox. Press "Attach" on the Browser page, or start Firefox from there first.')
     }
@@ -518,8 +532,8 @@ export class BrowserLayer {
   /** The last thing the layer said about itself, for a caller that wants the reason. */
   get message(): string { return this.lastMessage }
 
-  /** True when a session is held. Used by consumers that must not act without one. */
-  get isAttached(): boolean { return this.attached !== null }
+  /** True when a LIVE session is held. A dead socket is not attached, so a consumer relaunches. */
+  get isAttached(): boolean { return this.attached !== null && this.attached.client.isAlive }
 }
 
 let instance: BrowserLayer | null = null
