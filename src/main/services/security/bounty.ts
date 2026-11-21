@@ -1,4 +1,4 @@
-import type { ProgramImport, ScopeAsset } from '../../../shared/security'
+import type { ProgramImport, ScopeAsset, ScopeExclusion } from '../../../shared/security'
 import type { JobBounds } from '../../../shared/jobs'
 import { decideScope } from './scope'
 
@@ -78,6 +78,50 @@ export function inScopeHosts(program: ProgramImport): BountyHost[] {
   return out
 }
 
+/**
+ * The program's own rule about automated testing, when it states one, else null.
+ *
+ * Some programs — Cantina's own bug bounty among them — ask testers to be careful with
+ * automated, multi-request scans. A run against such a program must not start until the user
+ * has seen that rule and acknowledged it, and the goal must carry it. This is read straight
+ * from the imported entry bar; nothing is inferred.
+ */
+export function automationRule(program: ProgramImport): string | null {
+  const rule = program.entryBar?.automatedTestingRule
+  return rule && rule.trim() ? rule.trim() : null
+}
+
+/** The effective, server-validated scope a run WOULD use, for the user to confirm before launch. */
+export interface BountyScopePreview {
+  program: { id: string; name: string; source: string }
+  /** Hosts decideScope proves in scope — exactly what the run will declare. */
+  hosts: BountyHost[]
+  /** Assets the program lists but marks not eligible — deny rules, never touched. */
+  outOfScope: string[]
+  exclusions: ScopeExclusion[]
+  /** The program's automated-testing rule, quoted, when it states one. */
+  automatedTestingRule: string | null
+  /** True when the program restricts automation, so launch needs an explicit acknowledgement. */
+  requiresAck: boolean
+}
+
+/**
+ * Assemble the preview for a program, using the same deterministic scope check the launch and
+ * every tool action use. Pure: tool/runner availability is attached by the caller, since that
+ * is IO.
+ */
+export function bountyPreview(program: ProgramImport): BountyScopePreview {
+  const rule = automationRule(program)
+  return {
+    program: { id: program.id, name: program.name, source: program.source },
+    hosts: inScopeHosts(program),
+    outOfScope: program.assets.filter(a => !a.eligibleForSubmission).map(a => a.identifier),
+    exclusions: program.exclusions ?? [],
+    automatedTestingRule: rule,
+    requiresAck: rule !== null,
+  }
+}
+
 /** A longer leash than a chat-born job: a real run recons, installs, scans and verifies. */
 export const BOUNTY_BOUNDS: JobBounds = { maxSteps: 40, maxMinutes: 90 }
 
@@ -94,10 +138,12 @@ export function buildBountyGoal(program: ProgramImport, hosts: BountyHost[], foc
     : '  (none could be auto-declared — declare an in-scope target yourself before any active Lab tool will run)'
   const outOfScope = program.assets.filter(a => !a.eligibleForSubmission).map(a => a.identifier)
   const exclusions = (program.exclusions ?? []).map(e => `${e.category}: ${e.details}`)
+  const rule = automationRule(program)
 
   return [
     `Carry out an authorized bug-bounty run on the program "${program.name}" (${program.source}). This is a real, watched engagement: work through it on your own and keep going without asking me to approve each step — I am watching the board.`,
     focus ? `Focus this run on: ${focus}` : '',
+    rule ? `\nTHIS PROGRAM RESTRICTS AUTOMATED TESTING. Its own words: "${rule}"\nRespect it: go low and slow, prefer single targeted requests (security.probe) over high-volume scanners, and do NOT run broad automated scans (nuclei, ffuf, many-request pipelines) against its assets. If a check would mean heavy automated traffic, skip it and say so rather than risk being flagged.` : '',
     '',
     'ALREADY DECLARED IN SCOPE (the Lab will accept these hosts, and only these):',
     hostList,

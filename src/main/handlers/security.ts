@@ -11,8 +11,9 @@ import {
 } from '../services/security/store'
 import { curriculum, lessonById } from '../services/security/curriculum'
 import { decideScope } from '../services/security/scope'
-import { BOUNTY_BOUNDS, buildBountyGoal, inScopeHosts } from '../services/security/bounty'
+import { BOUNTY_BOUNDS, automationRule, bountyPreview, buildBountyGoal, inScopeHosts } from '../services/security/bounty'
 import { declareTarget } from '../services/lab/targets'
+import { toolAvailability } from '../services/lab/scanner'
 import { jobs } from '../services/jobs/instance'
 import { toolboxCatalog } from '../services/security/toolbox'
 import { findTool, searchToolbox } from '../services/security/toolboxQuery'
@@ -126,14 +127,34 @@ export function registerSecurityHandlers(ipcMain: IpcMain) {
     audit('approve', `user approved one ${(method || 'GET').toUpperCase()} to ${target} (${decision.matchedRule})`)
     return { grantId, decision }
   })
+  // The effective, server-validated scope a run WOULD use, so the user can review and confirm
+  // it before anything starts. Read-only: it declares nothing and reaches no network. The
+  // scope here is computed with the same decideScope the launch and every tool action use, so
+  // what the user confirms is exactly what the run can reach — never wider.
+  ipcMain.handle('security:previewBounty', async () => {
+    const program = activeProgram()
+    if (!program) throw new Error('select and activate a program first — there is nothing to preview')
+    const preview = bountyPreview(program)
+    let tools: { id: string; name: string; installed: boolean }[] = []
+    try { tools = (await toolAvailability()).map(t => ({ id: t.id, name: t.name, installed: t.installed })) } catch { tools = [] }
+    return { ...preview, tools }
+  })
   // Start one watched, hands-off bounty run on the active program. This is the handoff the
   // Security page was missing: it declares ONLY the hosts decideScope proves are in scope,
   // then creates a 'bounty'-mode job so the scope-checked tools run without a per-step prompt
   // while every step streams to the Jobs board. Out-of-scope hosts are never declared, so the
   // run can reach nothing the program did not authorize.
-  ipcMain.handle('security:startBounty', async (_e, focus?: string) => {
+  ipcMain.handle('security:startBounty', async (_e, focus?: string, acknowledgeAutomationRule?: boolean) => {
     const program = activeProgram()
     if (!program) throw new Error('select and activate a program first — there is nothing to run against')
+
+    // A program that restricts automated testing (Cantina states one) must not start a
+    // hands-off run until the user has seen that rule and acknowledged it. Enforced on the
+    // server at launch, not only in the UI.
+    const rule = automationRule(program)
+    if (rule && acknowledgeAutomationRule !== true) {
+      throw new Error(`"${program.name}" restricts automated testing — its rule is: "${rule}". Review the scope and acknowledge this rule before starting a run.`)
+    }
 
     const hosts = inScopeHosts(program)
     const declared: { host: string; targetId: string }[] = []

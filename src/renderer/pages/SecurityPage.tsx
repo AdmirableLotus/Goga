@@ -6,6 +6,20 @@ import { ToolboxSection } from '../components/Toolbox'
 import { GrimoireSection } from '../components/Grimoire'
 import type { DestinationId } from '../nav'
 
+/** The server-validated scope a run would use, as security:previewBounty returns it. */
+interface BountyPreview {
+  program: { id: string; name: string; source: string }
+  hosts: { host: string; asset: string }[]
+  outOfScope: string[]
+  exclusions: { category: string; details: string }[]
+  automatedTestingRule: string | null
+  requiresAck: boolean
+  tools: { id: string; name: string; installed: boolean }[]
+}
+
+/** The persistent Brave/Cantina sign-in session status, as brave:status returns it. */
+type BraveStatus = Awaited<ReturnType<typeof window.goga.invoke<'brave:status'>>>
+
 /**
  * Security page: bug bounty.
  *
@@ -37,11 +51,15 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
   const [decision, setDecision] = useState<ScopeDecision | null>(null)
   const [grantId, setGrantId] = useState<string | null>(null)
 
+  const [preview, setPreview] = useState<BountyPreview | null>(null)
+  const [ackRule, setAckRule] = useState(false)
+
   const [findings, setFindings] = useState<Finding[]>([])
   const [audit, setAudit] = useState<SecurityAuditEntry[]>([])
   const [curriculum, setCurriculum] = useState<Curriculum | null>(null)
   const [lesson, setLesson] = useState<Lesson | null>(null)
   const [toolbox, setToolbox] = useState<ToolboxCatalog | null>(null)
+  const [brave, setBrave] = useState<BraveStatus | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +77,7 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
       const s = await load()
       window.goga.invoke('security:curriculum').then(setCurriculum).catch(() => {})
       window.goga.invoke('security:toolbox').then(setToolbox).catch(() => {})
+      window.goga.invoke('brave:status').then(setBrave).catch(() => {})
       // Honest state: a stored token is not a working one, and yesterday's "connected" is
       // not today's. If a token is stored, ask HackerOne once with the narrowest read there
       // is, so the row shows what the API says now rather than what the file on disk suggests.
@@ -133,6 +152,42 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
 
         {error && <Alert kind="error">{error}</Alert>}
         {notice && <Alert kind="ok">{notice}</Alert>}
+
+        {/* ── Brave for Cantina (manual sign-in) ───────────────────────────── */}
+        <Card title="Open Brave for Cantina" sub="Goga's own Brave profile — you sign in by hand">
+          <p className="g-muted" style={{ marginTop: 0 }}>
+            Goga opens the Cantina bug-bounty page in a Brave window that uses a profile of its own —
+            never your everyday Brave, passwords or cookies. You sign in yourself in that window; Goga
+            never enters credentials and does not touch CAPTCHA or MFA. The login is remembered across
+            restarts. Being signed in is not permission to test — every request still passes the scope gate.
+          </p>
+          <div className="g-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button className="g-btn g-btn--primary" disabled={busy} onClick={() => void work(async () => {
+              setBrave(await window.goga.invoke('brave:openForCantina'))
+            })}>Open Brave for Cantina</button>
+            <button className="g-btn" disabled={busy || !brave || (brave.state !== 'login-required' && brave.state !== 'open')} onClick={() => void work(async () => {
+              setBrave(await window.goga.invoke('brave:confirmSignedIn'))
+            })}>I've signed in</button>
+            <button className="g-btn g-btn--ghost" disabled={busy || !brave || brave.state === 'stopped'} onClick={() => void work(async () => {
+              setBrave(await window.goga.invoke('brave:closeCantina'))
+            })}>Close window</button>
+            <button className="g-btn g-btn--ghost g-btn--sm" disabled={busy} onClick={() => void work(async () => {
+              setBrave(await window.goga.invoke('brave:status'))
+            })}>Refresh</button>
+          </div>
+          {brave && (
+            <div style={{ marginTop: 10 }}>
+              <Chip tone={brave.state === 'open' ? 'ok' : brave.state === 'login-required' || brave.state === 'launching' ? 'warn' : brave.state === 'disconnected' ? 'bad' : undefined}>
+                {brave.state === 'open' ? 'signed in (your confirmation)'
+                  : brave.state === 'login-required' ? 'open — sign in'
+                  : brave.state === 'disconnected' ? 'window closed'
+                  : brave.state === 'launching' ? 'starting…' : 'not open'}
+              </Chip>
+              <p className="g-muted" style={{ marginBottom: 0 }}>{brave.message}</p>
+              {!brave.braveExecutable && <Alert kind="error">Brave was not found. Install it, or set GOGA_BRAVE_PATH to brave.exe.</Alert>}
+            </div>
+          )}
+        </Card>
 
         {/* ── Toolbox ──────────────────────────────────────────────────────── */}
         <ToolboxSection catalog={toolbox} unreadable={toolbox?.unreadable ?? []} />
@@ -319,25 +374,85 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
           {grantId && <p className="g-mono g-caption">grant: {grantId}</p>}
         </Card>
 
-        {/* ── Hands-off run you watch ──────────────────────────────────────── */}
+        {/* ── Review scope, then run hands-off, watching the board ──────────── */}
         <Card
           title="Run the active program, hands-off"
-          sub="Goga declares only the in-scope hosts, then recons, installs what it needs, and tests — you watch it live on the Jobs board"
+          sub="Review the effective scope first. Goga then declares only the in-scope hosts, recons, installs what it needs, and tests — you watch it live on the Jobs board"
         >
           {!active
             ? <EmptyState title="No active program" body="Activate a program above first — the run tests only that program's in-scope assets." />
             : <>
               <p className="g-caption">
-                Starts an autonomous run on <strong>{active.name}</strong>. In-scope requests fire without asking you —
+                An autonomous run on <strong>{active.name}</strong>. In-scope requests fire without asking you —
                 out-of-scope or local/private/metadata targets are refused automatically, and declaring any <em>new</em> host still stops to ask.
                 Watch every step on the Jobs board and cancel it there at any time.
               </p>
-              <button className="g-btn g-btn--risk" disabled={busy} onClick={() => void work(async () => {
-                const r = await window.goga.invoke('security:startBounty')
-                setNotice(`Started a hands-off run on ${r.program.name} — ${r.declared.length} in-scope host(s) declared. Watch it on the Jobs board.`)
-                setAudit(await window.goga.invoke('security:audit', 40))
-                onNavigate?.('work', 'jobs')
-              })}>Start autonomous run</button>
+
+              <button className="g-btn" disabled={busy} onClick={() => void work(async () => {
+                const p = await window.goga.invoke('security:previewBounty')
+                setPreview(p); setAckRule(false)
+              })}>Review scope for a run</button>
+
+              {preview && preview.program.id === active.id && (
+                <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+                  <div>
+                    <div className="g-section-title">In scope — the run will declare and test only these ({preview.hosts.length})</div>
+                    {preview.hosts.length
+                      ? <ul style={{ fontSize: 'var(--fs-caption)', paddingLeft: 16, margin: '4px 0' }}>
+                          {preview.hosts.map(h => <li key={h.host}><span className="g-mono">{h.host}</span> <span className="g-faint">— from {h.asset}</span></li>)}
+                        </ul>
+                      : <p className="g-caption g-faint">No host could be auto-declared from this scope. Goga can still send single in-scope GETs (each re-checked), but the multi-request Lab scanners need a declared host — declare one yourself first, or the run will stay probe-only.</p>}
+                  </div>
+
+                  {preview.outOfScope.length > 0 && (
+                    <div>
+                      <div className="g-section-title">Out of scope — never touched</div>
+                      <ul style={{ fontSize: 'var(--fs-caption)', paddingLeft: 16, margin: '4px 0' }}>{preview.outOfScope.map(a => <li key={a} className="g-mono">{a}</li>)}</ul>
+                    </div>
+                  )}
+
+                  {preview.exclusions.length > 0 && (
+                    <div>
+                      <div className="g-section-title">Prohibited techniques</div>
+                      <ul style={{ fontSize: 'var(--fs-caption)', paddingLeft: 16, margin: '4px 0' }}>{preview.exclusions.map((e, i) => <li key={i}>{e.category}: {e.details}</li>)}</ul>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="g-section-title">Scanner tools (local) — missing ones are skipped, never faked</div>
+                    <div style={{ fontSize: 'var(--fs-caption)' }}>
+                      {preview.tools.length
+                        ? preview.tools.map(t => <span key={t.id} style={{ marginRight: 10 }}>{t.installed ? '✓' : '✗'} {t.name}</span>)
+                        : <span className="g-faint">tool availability could not be read</span>}
+                    </div>
+                    <p className="g-caption g-faint" style={{ marginTop: 2 }}>
+                      Single in-scope GETs and the built-in port check always work. The external scanners above run only where installed; there is no remote VM runner, so a missing tool is reported as skipped, not completed.
+                    </p>
+                  </div>
+
+                  {preview.automatedTestingRule && (
+                    <Alert kind="error">
+                      <strong>This program restricts automated testing.</strong> Its own rule: “{preview.automatedTestingRule}”. The run is told to go low-and-slow and avoid broad scans, but you must confirm you will respect this rule.
+                      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                        <input type="checkbox" checked={ackRule} onChange={e => setAckRule(e.target.checked)} />
+                        I will respect this program's automated-testing rule.
+                      </label>
+                    </Alert>
+                  )}
+
+                  <button
+                    className="g-btn g-btn--risk"
+                    disabled={busy || (preview.requiresAck && !ackRule)}
+                    onClick={() => void work(async () => {
+                      const r = await window.goga.invoke('security:startBounty', undefined, preview.requiresAck ? ackRule : undefined)
+                      setNotice(`Started a hands-off run on ${r.program.name} — ${r.declared.length} in-scope host(s) declared. Watch it on the Jobs board.`)
+                      setAudit(await window.goga.invoke('security:audit', 40))
+                      setPreview(null)
+                      onNavigate?.('work', 'jobs')
+                    })}
+                  >Start autonomous run</button>
+                </div>
+              )}
             </>}
         </Card>
 

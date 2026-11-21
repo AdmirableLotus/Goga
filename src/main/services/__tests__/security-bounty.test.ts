@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ProgramImport, ScopeAsset } from '../../../shared/security'
-import { buildBountyGoal, declarableHost, inScopeHosts } from '../security/bounty'
+import type { ProgramEntryBar } from '../../../shared/security'
+import { automationRule, bountyPreview, buildBountyGoal, declarableHost, inScopeHosts } from '../security/bounty'
 
 /**
  * The bounty run builder is the handoff from "a program is selected" to "a watched run is
@@ -89,5 +90,62 @@ describe('buildBountyGoal', () => {
   it('threads a focus note through when given', () => {
     const goal = buildBountyGoal(program([asset('*.acme.com', true, 'wildcard')]), [], 'the checkout flow')
     expect(goal).toContain('the checkout flow')
+  })
+})
+
+/* A Cantina-shaped program: eligible web assets plus an entry bar that states an automated-
+ * testing rule. The run must surface that rule, gate launch on acknowledging it, and carry it
+ * into the goal. */
+const CANTINA_RULE = 'Please be extremely cautious when performing any automated scans or tests that involve multiple requests.'
+
+function entryBar(automatedTestingRule: string | null): ProgramEntryBar {
+  return {
+    kycRequired: false, kycQuote: null, depositUsd: null, findingsSubmitted: null, liveSince: null,
+    assetCount: 1, scopeKind: 'web', automatedTestingRule, topReward: '$5,000', rewards: [],
+    entry: { level: 'open', why: 'web scope, no deposit stated' },
+  }
+}
+
+function cantinaProgram(rule: string | null) {
+  return { ...program([asset('https://cantina.xyz', true), asset('https://cantina.security', true)]), source: 'cantina' as const, name: 'Cantina Bug Bounty Program', entryBar: entryBar(rule) }
+}
+
+describe('automationRule', () => {
+  it('returns the program\'s stated automated-testing rule', () => {
+    expect(automationRule(cantinaProgram(CANTINA_RULE))).toBe(CANTINA_RULE)
+  })
+  it('is null when the program states no such rule', () => {
+    expect(automationRule(cantinaProgram(null))).toBeNull()
+    expect(automationRule(program([asset('*.acme.com', true, 'wildcard')]))).toBeNull()
+  })
+})
+
+describe('bountyPreview', () => {
+  it('reports the in-scope hosts, the automated-testing rule, and that it needs acknowledgement', () => {
+    const p = bountyPreview(cantinaProgram(CANTINA_RULE))
+    expect(p.program.source).toBe('cantina')
+    expect(p.hosts.map(h => h.host)).toContain('cantina.xyz')
+    expect(p.automatedTestingRule).toBe(CANTINA_RULE)
+    expect(p.requiresAck).toBe(true)
+  })
+  it('does not require acknowledgement for a program with no automation rule', () => {
+    expect(bountyPreview(cantinaProgram(null)).requiresAck).toBe(false)
+  })
+  it('lists out-of-scope deny rules', () => {
+    const p = { ...cantinaProgram(null), assets: [asset('https://cantina.xyz', true), asset('https://admin.cantina.xyz', false)] }
+    expect(bountyPreview(p).outOfScope).toContain('https://admin.cantina.xyz')
+  })
+})
+
+describe('buildBountyGoal with an automation rule', () => {
+  it('carries the program\'s automated-testing rule and tells the run to go low and slow', () => {
+    const goal = buildBountyGoal(cantinaProgram(CANTINA_RULE), inScopeHosts(cantinaProgram(CANTINA_RULE)))
+    expect(goal).toContain('RESTRICTS AUTOMATED TESTING')
+    expect(goal).toContain(CANTINA_RULE)
+    expect(goal.toLowerCase()).toContain('low and slow')
+  })
+  it('says nothing about automation limits when the program states none', () => {
+    const goal = buildBountyGoal(cantinaProgram(null), [])
+    expect(goal).not.toContain('RESTRICTS AUTOMATED TESTING')
   })
 })
