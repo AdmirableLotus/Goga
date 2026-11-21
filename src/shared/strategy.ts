@@ -65,14 +65,35 @@ export interface Trade {
   exitReason: 'signal' | 'stop' | 'end-of-test'
 }
 
+/**
+ * How trading fees are charged in a backtest.
+ *   - 'per-share': a fixed dollar amount per share on each side — the right shape for US
+ *     equities (e.g. $0.005/share). On crypto this is near-zero and understates real cost.
+ *   - 'percent': a percent of the fill's notional value on each side, in basis points — the
+ *     right shape for crypto exchanges (e.g. 10 bps = 0.10% taker).
+ * Default is 'per-share', so existing stock backtests are unchanged.
+ */
+export type FeeMode = 'per-share' | 'percent'
+
 export interface BacktestConfig {
   strategyId: StrategyId
   params: StrategyParams
   startingCapital: number
-  /** Dollars per share, charged on entry and on exit. */
+  /** Dollars per share, charged on entry and on exit. Used when feeMode is 'per-share'. */
   commissionPerShare: number
+  /** How fees are charged. Omitted means 'per-share' (the historical default). */
+  feeMode?: FeeMode
+  /** Fee as basis points of notional on each side, used only when feeMode is 'percent' (10 = 0.10%). */
+  feeBps?: number
   /** Adverse price move on every fill, in basis points (10 = 0.10%). */
   slippageBps: number
+  /**
+   * Bid/ask spread in basis points (the full spread, e.g. 20 = 0.20%). A buy fills half the
+   * spread above the mid and a sell half below it, so one round trip pays the full spread. This
+   * is a separate cost from `slippageBps` (price impact) and from fees. Omitted means 0 — the
+   * documented default — which models no spread and understates real cost, especially on crypto.
+   */
+  spreadBps?: number
   /** Percent of equity risked between entry and the ATR stop. */
   riskPct: number
   /** Hard cap: percent of equity in one position. */
@@ -99,6 +120,12 @@ export interface BacktestResult {
   profitFactor: number
   tradeCount: number
   exposure: number
+  /** The bid/ask spread assumption used, in basis points. */
+  spreadBps: number
+  /** Total fees charged across all fills (entry + exit), in account currency. */
+  totalFees: number
+  /** Total cost attributable to the bid/ask spread across all fills, reported separately from fees. */
+  totalSpreadCost: number
   trades: Trade[]
   equityCurve: { t: string; equity: number }[]
   /** What the numbers assume. Shown in the UI next to the result. */
@@ -161,7 +188,13 @@ export interface StrategySettings {
   riskPct: number
   maxPositionPct: number
   commissionPerShare: number
+  /** How fees are charged for this symbol's backtests and the paper loop. Defaults to 'per-share'. */
+  feeMode: FeeMode
+  /** Fee in basis points of notional, used only when feeMode is 'percent' (10 = 0.10%). */
+  feeBps: number
   slippageBps: number
+  /** Bid/ask spread in basis points (full spread; half is paid on each fill). Default 0. */
+  spreadBps: number
   stopAtrMultiple: number
   atrPeriod: number
   startingCapital: number

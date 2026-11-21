@@ -239,9 +239,27 @@ export default function StrategyPage() {
                         defaultValue={settings?.slippageBps}
                         onBlur={e => void saveSettings({ slippageBps: Number(e.target.value) })} />
                     </Field>
+                    <Field label="Spread (bps)">
+                      <input className="g-input g-input--xs" type="number" min={0} max={500}
+                        defaultValue={settings?.spreadBps}
+                        onBlur={e => void saveSettings({ spreadBps: Number(e.target.value) })} />
+                    </Field>
+                    <Field label="Fee mode">
+                      <select className="g-input g-input--xs" value={settings?.feeMode ?? 'per-share'}
+                        onChange={e => void saveSettings({ feeMode: e.target.value === 'percent' ? 'percent' : 'per-share' })}>
+                        <option value="per-share">Per share (stocks)</option>
+                        <option value="percent">% of notional (crypto)</option>
+                      </select>
+                    </Field>
+                    <Field label="Fee (bps, % mode)">
+                      <input className="g-input g-input--xs" type="number" min={0} max={100}
+                        defaultValue={settings?.feeBps}
+                        disabled={(settings?.feeMode ?? 'per-share') !== 'percent'}
+                        onBlur={e => void saveSettings({ feeBps: Number(e.target.value) })} />
+                    </Field>
                   </div>
                   <p className="g-caption g-faint" style={{ marginTop: 6 }}>
-                    A stop of 0 turns the stop off. These are the same numbers the Trading page limits sit on top of; nothing here raises them.
+                    A stop of 0 turns the stop off. Fee mode is per-share for stocks and % of notional for crypto — a crypto backtest left on per-share is flagged, never silently changed. Spread is the full bid/ask in basis points (default 0): a buy fills half above the mid and a sell half below, reported separately from fees. These are the same numbers the Trading page limits sit on top of; nothing here raises them.
                   </p>
                 </details>
               </>

@@ -1,7 +1,22 @@
 import type {
-  BacktestConfig, BacktestResult, Bar, Signal, StrategyDefinition, StrategyId, StrategyParams, Trade,
+  BacktestConfig, BacktestResult, Bar, FeeMode, Signal, StrategyDefinition, StrategyId, StrategyParams, Trade,
 } from '../../../shared/strategy'
 import { atr, rsi, sma } from '../trading/indicators'
+import { instrument } from '../trading/marketData'
+
+/**
+ * A disclosure, not a correction: if a crypto symbol is backtested with per-share fees — the
+ * stock-shaped default — the modelled cost is near zero and the result overstates returns. We
+ * never silently switch the mode (that would change existing numbers); we say so plainly.
+ */
+export function cryptoFeeWarning(symbol: string, feeMode: FeeMode | undefined): string | null {
+  if (feeMode === 'percent') return null
+  let market: string
+  try { market = instrument(symbol).market } catch { return null }
+  if (market !== 'crypto') return null
+  return 'This is a crypto symbol, but fees are modelled per-share — crypto fees are a percent of notional, '
+    + 'so the per-share cost here is near zero and overstates returns. Set fee mode to "percent" (feeBps) for a realistic test.'
+}
 
 /**
  * The strategy engine.
@@ -151,6 +166,8 @@ export function signals(id: StrategyId, params: StrategyParams, bars: Bar[]): Si
 export const DEFAULT_BACKTEST: Omit<BacktestConfig, 'strategyId' | 'params'> = {
   startingCapital: 10_000,
   commissionPerShare: 0.005,
+  feeMode: 'per-share',
+  feeBps: 10,
   slippageBps: 5,
   riskPct: 1,
   maxPositionPct: 25,
@@ -205,6 +222,18 @@ export function runBacktest(bars: Bar[], config: BacktestConfig, symbol = ''): B
   const params = resolveParams(id, cfg.params)
   const slip = Math.max(0, cfg.slippageBps) / 10_000
   const commission = Math.max(0, cfg.commissionPerShare)
+  const feeMode: FeeMode = cfg.feeMode === 'percent' ? 'percent' : 'per-share'
+  const feeRate = Math.max(0, cfg.feeBps ?? 0) / 10_000
+  // Fee for a fill of `shares` at `fill`: a flat amount per share for stocks, or a percent of
+  // the notional traded for crypto. Charged on entry and on exit, the same way for both.
+  const feeFor = (shares: number, fill: number): number =>
+    feeMode === 'percent' ? shares * fill * feeRate : shares * commission
+  // Bid/ask spread, a cost separate from slippage and fees. Missing or invalid falls back to the
+  // documented default of 0 (no spread) rather than being silently coerced; negatives clamp to 0.
+  const spreadBps = Number.isFinite(cfg.spreadBps) ? Math.min(500, Math.max(0, Number(cfg.spreadBps))) : 0
+  const halfSpread = spreadBps / 10_000 / 2   // a buy pays this above the mid, a sell this below
+  let totalFees = 0
+  let totalSpreadCost = 0
   const warmup = warmupBars(id, params)
 
   let cash = cfg.startingCapital
@@ -219,9 +248,14 @@ export function runBacktest(bars: Bar[], config: BacktestConfig, symbol = ''): B
   let barsInMarket = 0
 
   const closePosition = (i: number, price: number, reason: Trade['exitReason']) => {
-    const fill = price * (1 - slip)
-    const proceeds = qty * fill - qty * commission
+    const mid = price * (1 - slip)
+    const spreadPerShare = mid * halfSpread      // a sell fills half the spread BELOW the mid
+    const fill = mid - spreadPerShare
+    const fee = feeFor(qty, fill)
+    const proceeds = qty * fill - fee
     cash += proceeds
+    totalFees += fee
+    totalSpreadCost += qty * spreadPerShare
     const pnl = proceeds - entryCost
     trades.push({
       entryIndex, entryTime: bars[entryIndex].t, entryPrice,
@@ -237,14 +271,17 @@ export function runBacktest(bars: Bar[], config: BacktestConfig, symbol = ''): B
 
     // 1. Act on yesterday's close decision at today's open.
     if (pending?.action === 'enter' && qty === 0) {
-      const fill = bar.o * (1 + slip)
+      const mid = bar.o * (1 + slip)
+      const spreadPerShare = mid * halfSpread    // a buy fills half the spread ABOVE the mid
+      const fill = mid + spreadPerShare
       const a = atr(bars.slice(0, i), cfg.atrPeriod)
       const lastAtr = a[a.length - 1]
       const stopDistance = cfg.stopAtrMultiple > 0 && Number.isFinite(lastAtr) ? lastAtr * cfg.stopAtrMultiple : 0
       const equityNow = cash
       const size = sizePosition({ equity: equityNow, price: fill, stopDistance, riskPct: cfg.riskPct, maxPositionPct: cfg.maxPositionPct })
       if (size > 0) {
-        const cost = size * fill + size * commission
+        const fee = feeFor(size, fill)
+        const cost = size * fill + fee
         if (cost <= cash) {
           cash -= cost
           qty = size
@@ -252,6 +289,8 @@ export function runBacktest(bars: Bar[], config: BacktestConfig, symbol = ''): B
           entryIndex = i
           entryCost = cost
           stopPrice = stopDistance > 0 ? fill - stopDistance : 0
+          totalFees += fee
+          totalSpreadCost += size * spreadPerShare
         }
       }
     } else if (pending?.action === 'exit' && qty > 0) {
@@ -285,6 +324,8 @@ export function runBacktest(bars: Bar[], config: BacktestConfig, symbol = ''): B
   if (trades.length < 10) warnings.push(`Only ${trades.length} trade${trades.length === 1 ? '' : 's'} — far too few to tell skill from luck. Test more history or more symbols.`)
   if (bars.length < 200) warnings.push(`${bars.length} bars is a short test. A year of daily bars is about 250.`)
   if (trades.length > 0 && grossLoss === 0) warnings.push('No losing trades at all, which usually means the test is too short or too kind.')
+  const feeDisclosure = cryptoFeeWarning(symbol, feeMode)
+  if (feeDisclosure) warnings.push(feeDisclosure)
 
   return {
     strategyId: id,
@@ -303,12 +344,20 @@ export function runBacktest(bars: Bar[], config: BacktestConfig, symbol = ''): B
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0),
     tradeCount: trades.length,
     exposure: bars.length ? barsInMarket / bars.length : 0,
+    spreadBps,
+    totalFees,
+    totalSpreadCost,
     trades,
     equityCurve,
     assumptions: [
       `Signals are decided on a bar's close and filled at the next bar's open — a decision never uses a bar it could not have seen.`,
       `Slippage ${cfg.slippageBps} basis points against you on every fill (${(cfg.slippageBps / 100).toFixed(2)}%).`,
-      `Commission $${commission.toFixed(4)} per share on entry and on exit.`,
+      feeMode === 'percent'
+        ? `Fee ${cfg.feeBps ?? 0} basis points of notional (${((cfg.feeBps ?? 0) / 100).toFixed(2)}%) on entry and on exit.`
+        : `Commission $${commission.toFixed(4)} per share on entry and on exit.`,
+      spreadBps > 0
+        ? `Bid/ask spread ${spreadBps} basis points (${(spreadBps / 100).toFixed(2)}%): a buy fills ${spreadBps / 2} bps above the mid and a sell ${spreadBps / 2} bps below, so a round trip pays the full spread. Counted separately from fees (${totalSpreadCost > 0 ? `$${totalSpreadCost.toFixed(2)} this test` : 'none charged — no round trip'}).`
+        : 'No bid/ask spread assumed (spread 0, the default). Real spreads are nonzero and wider on crypto — set a spread to model it.',
       cfg.stopAtrMultiple > 0
         ? `Stop ${cfg.stopAtrMultiple}× ATR(${cfg.atrPeriod}) below entry, filled at the stop or at the open if the bar gapped through it.`
         : 'No stop loss — a losing position is held until the exit rule fires.',
