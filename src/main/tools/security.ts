@@ -7,6 +7,13 @@ import { curriculum, lessonById } from '../services/security/curriculum'
 import { toolboxCatalog } from '../services/security/toolbox'
 import { findTool, searchToolbox } from '../services/security/toolboxQuery'
 import { classifyRunRequest, refusalFor, VERDICT_LABEL } from '../services/security/toolboxVerdicts'
+import { startXssLab } from '../services/security/xssLab'
+import { runXssPractice, layerDriver } from '../services/security/xssPractice'
+import { runXssLive, type LiveGet } from '../services/security/xssLive'
+import { allowedTool, runSecurityTool, ALLOWED_TOOLS, type ExecResult } from '../services/security/toolRunner'
+import { execFile } from 'child_process'
+import { browserLayer } from '../services/browser/layer'
+import { ensureAttached } from './browserFirefox'
 import type { ToolReference } from '../../shared/toolboxTypes'
 
 /**
@@ -319,6 +326,91 @@ reg.register({
   return { success: true, data: entries.map(e => `${e.time.slice(0, 19).replace('T', ' ')} [${e.kind}] ${e.detail}`).join('\n') }
 })
 
+// ── Real, scope-gated tool execution for an allow-list ──────────────────────
+//
+// Goga builds the whole command; the caller supplies only an in-scope target. Everything is
+// gated exactly like a probe: active program, in scope, not a forbidden host, and the critical
+// approval. Installing is a separate opt-in. Non-allow-listed tools still hit security.runTool.
+
+/** execFile with an arg array (no shell) → the runner's ExecResult. */
+function realExec(bin: string, args: string[], opts: { timeoutMs: number }): Promise<ExecResult> {
+  return new Promise(resolve => {
+    execFile(bin, args, { timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      const e = err as (NodeJS.ErrnoException & { code?: number | string; killed?: boolean }) | null
+      const timedOut = !!(e && e.killed)
+      const code = e && typeof e.code === 'number' ? e.code : e ? 1 : 0
+      resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), timedOut })
+    })
+  })
+}
+
+/** Locate a binary without a shell. Returns its path or null. */
+function realWhich(bin: string): Promise<string | null> {
+  return new Promise(resolve => {
+    const cmd = process.platform === 'win32' ? 'where' : 'which'
+    execFile(cmd, [bin], { windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null)
+      const first = String(stdout).split(/\r?\n/).map(s => s.trim()).find(Boolean)
+      resolve(first || null)
+    })
+  })
+}
+
+reg.register({
+  name: 'security.useTool',
+  description: `Run ONE allow-listed security tool against a single in-scope target, and show its output. Allowed tools: ${ALLOWED_TOOLS.map(t => t.id).join(', ')}. Goga builds the whole command itself (you give only the tool and the target URL); it refuses unless a program is active, the target is covered by that program's eligible scope, and the host is not local/private/metadata. Tools run bounded (hard timeout, rate-limited where supported, one target). If the tool is missing it is only installed when you pass install:true. For anything NOT on the allow-list, use security.runTool (which explains why Goga will not run it). This is critical: it runs only after you approve this exact tool+target.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      tool: { type: 'string', description: `Which allow-listed tool: ${ALLOWED_TOOLS.map(t => t.id).join(', ')}.` },
+      target: { type: 'string', description: 'Full in-scope URL, e.g. https://app.example.com/.' },
+      install: { type: 'boolean', description: 'Allow Goga to install the tool if it is missing (default false).' },
+    },
+    required: ['tool', 'target'],
+  },
+  riskLevel: 'critical', reversible: false, category: 'web',
+}, async p => {
+  try {
+    const toolId = String(p.tool ?? '').trim()
+    const target = String(p.target ?? '').trim()
+    if (!toolId || !target) return { success: false, error: 'give both the tool and the target URL' }
+
+    const tool = allowedTool(toolId)
+    if (!tool) {
+      audit('blocked', `useTool refused — "${toolId}" is not on the allow-list`)
+      return { success: false, error: `"${toolId}" is not on Goga's allow-list (${ALLOWED_TOOLS.map(t => t.id).join(', ')}). Use security.runTool for the verdict on it; nothing was run.` }
+    }
+
+    // Same authorization gate as a probe. Nothing runs until all of it passes.
+    const program = activeProgram()
+    if (!program) {
+      audit('blocked', `useTool refused — no active program for ${target}`)
+      return { success: false, error: 'no program is active — import and activate one first, so the target is checked against a known scope. Nothing was run.' }
+    }
+    let host: string
+    try {
+      host = parseTarget(target).host
+      const forbidden = forbiddenTarget(host)
+      if (forbidden) { audit('blocked', `useTool refused — ${forbidden} (${target})`); return { success: false, error: `${forbidden} Nothing was run.` } }
+    } catch (err) { return { success: false, error: err instanceof Error ? err.message : String(err) } }
+    const decision = decideScope(program, target)
+    if (!decision.inScope) {
+      audit('blocked', `useTool refused — out of scope: ${target} (${decision.reason})`)
+      return { success: false, error: `out of scope — ${decision.reason}. Nothing was run.` }
+    }
+
+    const allowInstall = p.install === true
+    audit('approve', `chat-authorized ${tool.id} on ${target} — in scope by ${decision.matchedRule ?? 'program rule'}${allowInstall ? ' (install permitted)' : ''}`)
+    const outcome = await runSecurityTool({ tool, target, exec: realExec, which: realWhich, allowInstall })
+    if (!outcome.ran) {
+      audit('note', `${tool.id} did not run on ${host} — ${outcome.error ?? 'stopped'}`)
+      return { success: false, error: [outcome.error, ...outcome.log].filter(Boolean).join('\n') }
+    }
+    audit('request', `ran ${tool.id} against ${host}${outcome.installed ? '' : ' (pre-installed)'}`)
+    return { success: true, data: [...outcome.log, '', '— output —', outcome.output].join('\n') }
+  } catch (err) { return failure(err) }
+})
+
 // Exposed so the Security page can hand the user a grant after they approve one request.
 export function grantFor(target: string, method = 'GET'): string {
   return issueGrant(target, method)
@@ -419,4 +511,95 @@ reg.register({
   }
   setActiveProgram(match.id)
   return { success: true, data: `${match.name} (${match.handle}) is now the active program. Scope checks use it.` }
+})
+
+reg.register({
+  name: 'security.xssPractice',
+  description: 'Do ONE complete reflected-XSS exercise, end to end, on Goga\'s own offline practice lab — and prove it honestly. It starts a deliberately-vulnerable page that runs only on this machine (127.0.0.1, never the internet), drives Goga\'s real browser to inject a payload, confirms the script ACTUALLY executed (not just reflected) by watching the page title change to a value only the running script could set, checks the same payload is defeated by the escaped control, and saves a draft finding when confirmed. It takes no target: it can only ever touch the local lab, so it cannot be aimed at a real site. Use this to practise or to demonstrate a working XSS without touching any real program.',
+  parameters: { type: 'object', properties: {}, required: [] },
+  riskLevel: 'medium', reversible: false, category: 'web',
+}, async () => {
+  const ready = await ensureAttached()
+  if (!ready.ok) return { success: false, error: ready.message }
+  const lab = await startXssLab()
+  try {
+    const result = await runXssPractice(layerDriver(browserLayer()), lab)
+    const lines = [...result.log]
+    if (result.confirmed && result.finding) {
+      const saved = addFinding({ programId: 'xss-practice-lab', ...result.finding })
+      audit('finding', `practice XSS confirmed on the offline lab — draft finding saved (${saved.id})`)
+      lines.push('', `Saved a draft finding: "${saved.title}". It is marked [Practice] and is not a real program submission.`)
+    } else {
+      audit('note', `practice XSS run finished without a confirmed result (reflected=${result.reflected}, executed=${result.executedOnVulnerable})`)
+    }
+    return { success: true, data: lines.join('\n') }
+  } catch (err) {
+    return failure(err)
+  } finally {
+    await lab.stop()
+  }
+})
+
+reg.register({
+  name: 'security.xssAttempt',
+  description: 'Attempt ONE reflected-XSS confirmation against a LIVE, in-scope target parameter, and report it honestly. Give the full URL (with the parameter) and the parameter name. It refuses unless a program is active, the target is covered by that program\'s eligible scope, and the host is not local/private/metadata. It sends the single scoped GETs to check reflection and encoding, then drives Goga\'s real browser to prove the payload ACTUALLY executes (the page title changes to a value only the injected script could set), checks a benign control, and saves a DRAFT finding only when execution is proven. It never submits anything. Reflected-but-escaped or non-reflected inputs are reported as such, never as a working exploit. This is critical: it runs only after you approve this exact target.',
+  parameters: {
+    type: 'object',
+    properties: {
+      target: { type: 'string', description: 'Full URL including the parameter to test, e.g. https://app.example.com/search?q=TEST.' },
+      param: { type: 'string', description: 'The query parameter to inject into, e.g. q.' },
+    },
+    required: ['target', 'param'],
+  },
+  riskLevel: 'critical', reversible: false, category: 'web',
+}, async p => {
+  try {
+    const target = String(p.target ?? '').trim()
+    const param = String(p.param ?? '').trim()
+    if (!target || !param) return { success: false, error: 'give both the full URL and the parameter name to test' }
+
+    // Authorization: active program, in scope, not a forbidden host. Enforced before anything is sent.
+    const program = activeProgram()
+    if (!program) {
+      audit('blocked', `xssAttempt refused — no active program for ${target}`)
+      return { success: false, error: 'no program is active — import and activate one first, so the target is checked against a known scope. Nothing was sent.' }
+    }
+    let host: string
+    try {
+      host = parseTarget(target).host
+      const forbidden = forbiddenTarget(host)
+      if (forbidden) { audit('blocked', `xssAttempt refused — ${forbidden} (${target})`); return { success: false, error: `${forbidden} Nothing was sent.` } }
+    } catch (err) { return { success: false, error: err instanceof Error ? err.message : String(err) } }
+    const decision = decideScope(program, target)
+    if (!decision.inScope) {
+      audit('blocked', `xssAttempt refused — out of scope: ${target} (${decision.reason})`)
+      return { success: false, error: `out of scope — ${decision.reason}. Nothing was sent.` }
+    }
+
+    // The browser is about to render this live. Make sure it is attached before any request goes out.
+    const ready = await ensureAttached()
+    if (!ready.ok) return { success: false, error: ready.message }
+
+    // A scoped GET: probe() re-checks scope and the forbidden-host rule for EVERY url it is given
+    // (marker and payload are the same in-scope host), so no request can slip out of scope here.
+    const get: LiveGet = async (url) => {
+      const grantId = issueGrant(url, 'GET')
+      const res = await probe({ target: url, grantId })
+      if (!res.ok) throw new Error(res.blockedReason ?? 'the request was refused')
+      audit('request', `GET ${res.url} → ${res.status}, ${res.bytes} bytes`)
+      return { status: res.status ?? 0, body: res.bodyExcerpt ?? '' }
+    }
+
+    audit('approve', `chat-authorized live XSS attempt on ${target} ("${param}") — in scope by ${decision.matchedRule ?? 'program rule'}`)
+    const result = await runXssLive({ target, param, get, driver: layerDriver(browserLayer()) })
+    const lines = [...result.log]
+    if (result.confirmed && result.finding) {
+      const saved = addFinding({ programId: program.id, ...result.finding })
+      audit('finding', `live reflected XSS confirmed on ${host} ("${param}") — draft finding saved (${saved.id})`)
+      lines.push('', `Saved a DRAFT finding: "${saved.title}". Nothing was submitted — review and submit it yourself.`)
+    } else {
+      audit('note', `live XSS attempt on ${host} finished without a confirmed result (reflected=${result.reflected}, unescaped=${result.unescapedInResponse}, executed=${result.executed})`)
+    }
+    return { success: true, data: lines.join('\n') }
+  } catch (err) { return failure(err) }
 })

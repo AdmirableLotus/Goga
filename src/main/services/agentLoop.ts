@@ -2,7 +2,7 @@ import { getMainWindow } from '../index'
 import { ToolRegistry } from '../tools/registry'
 import { FLUX_HINT } from './fluxLink'
 import { parseFileWrite } from './fileCommand'
-import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl, parseInstallRequest, parseSelfFixRequest, parseInAppAction } from './agentRouting'
+import { FLUX_TASK, TRADING_TASK, LIBRARY_TASK, plannerOffers, parseAppControl, parseInstallRequest, parseSelfFixRequest, parseInAppAction, parseXssPractice } from './agentRouting'
 
 const LIBRARY_HINT = `- Reading books/documents: to add one from the web, call library.import with a DIRECT https link ending in .pdf/.epub/.txt — never a github.com page link and never a hand-built URL. For a GitHub repo, call library.listRepo FIRST and use the exact "url" it returns for each file. Import only freely/legally shared documents (OWASP guides, author-released free books); skip copyrighted commercial books (tell the user to buy those). After importing, the user can ask about the book in chat.`
 const TRADING_HINT = '- Trading: never state a price, level or indicator from memory; get it with trading.quote / trading.analyze / trading.news. Before any trade, call trading.plan to build the plan (entry, ATR stop, 1R/2R/3R targets, size, reward-to-risk), show the plan, and wait for the user to approve. Only then place it with trading.order using that plan\'s stop and target. Test an idea with trading.backtest before trusting it. Say plainly that nothing guarantees profit.'
@@ -789,6 +789,18 @@ What is the next single action to take?`
         thought: `Reading the Cantina bounty's published scope with the importer rather than only opening the page.`,
         tool: 'security.importCantina',
         params: { url: cantina },
+        done: false,
+      }
+    }
+    // "do one xss bounty" / "show me an xss" with no site named — run the offline practice lab
+    // end to end in one tool call, rather than letting the planner flail at browser.goto with no
+    // authorized target (which is exactly how the last run stalled). It touches only 127.0.0.1.
+    // A request that NAMES a real host is not caught here and goes down the scope-gated path.
+    if (parseXssPractice(task)) {
+      return {
+        thought: 'Running one complete reflected-XSS exercise on my own offline practice lab — a deliberately-vulnerable page that runs only on this machine. I will inject a payload, confirm the script actually executes (not just reflects), and check the escaped control defeats it. Nothing here touches a real site.',
+        tool: 'security.xssPractice',
+        params: {},
         done: false,
       }
     }

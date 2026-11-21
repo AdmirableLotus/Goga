@@ -248,6 +248,28 @@ const APP_LAUNCH: Record<string, string> = {
 }
 const NOT_AN_APP = /^(the|a|an|my|it|this|that|them|app|application|window|windows|tab|tabs|file|files|folder|program|programs|process|everything|all|computer|pc|laptop|machine|system|desktop|screen|session|down|up|out|off)$/i
 
+/**
+ * A request to actually DO or practise an XSS, with NO real target named.
+ *
+ * When someone says "do one xss bounty" or "show me an xss" without naming a site, the safe and
+ * useful answer is to run Goga's own offline practice lab end to end — not to reach for a host he
+ * is not authorized on. So this fires ONLY when the request means to perform an XSS and names no
+ * hostname, URL or bounty platform. The moment a real target IS named, this returns false and the
+ * normal scope-gated path takes over (which correctly refuses without an authorized program). This
+ * never hijacks a real engagement into the local lab.
+ */
+export function parseXssPractice(message: string): boolean {
+  const t = String(message ?? '').trim().toLowerCase()
+  if (!/\bxss\b|cross[-\s.]?site scripting/.test(t)) return false
+  // Collapse the phrase so a literal "cross.site" cannot look like a hostname below.
+  const cleaned = t.replace(/cross[-\s.]?site scripting/g, 'xss')
+  if (/\bhttps?:\/\//.test(cleaned)) return false                 // an explicit URL
+  if (/(?:[a-z0-9-]+\.)+[a-z]{2,}\b/.test(cleaned)) return false  // a bare hostname like shop.example.com
+  if (/\b(hackerone|bugcrowd|cantina|intigriti|yeswehack|immunefi)\b/.test(cleaned)) return false // a real platform
+  // An intent to perform it, not merely mention it. (Plain questions are routed to chat earlier.)
+  return /\b(do|run|try|perform|practi[cs]e|prove|show|demonstrate|complete|land|pop|execute|exploit|find)\b/.test(cleaned)
+}
+
 export interface AppControl { action: 'open' | 'close'; name: string; launch?: string; raw: string }
 
 export function parseAppControl(message: string): AppControl | null {

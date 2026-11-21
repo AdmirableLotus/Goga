@@ -707,6 +707,31 @@ describe('AgentLoop.getHardcodedFirstStep — file-write pre-flight override', (
   })
 })
 
+// ── 18. getHardcodedFirstStep — XSS practice deterministic route ─────────────
+// Regression for the live failure: "do one xss bounty" reached the planner and failed with
+// "the model did not return a valid tool call". With the deterministic route, step 1 must be the
+// one-call security.xssPractice tool — the model is never asked. A request naming a real target
+// must NOT be hijacked into the local lab and returns null here (the scope-gated path handles it).
+
+describe('AgentLoop.getHardcodedFirstStep — XSS practice route', () => {
+  it('"do one xss bounty" → security.xssPractice, no planner needed', () => {
+    const result = AgentLoop.getHardcodedFirstStep('do one xss bounty')
+    expect(result?.tool).toBe('security.xssPractice')
+    expect(result?.done).toBe(false)
+    expect(result?.params).toEqual({})
+  })
+
+  it('"practice xss" and "show me an xss" also take the route', () => {
+    expect(AgentLoop.getHardcodedFirstStep('practice xss')?.tool).toBe('security.xssPractice')
+    expect(AgentLoop.getHardcodedFirstStep('show me an xss')?.tool).toBe('security.xssPractice')
+  })
+
+  it('a request naming a real host is NOT hijacked into the local lab', () => {
+    const result = AgentLoop.getHardcodedFirstStep('find an xss on shop.example.com')
+    expect(result?.tool).not.toBe('security.xssPractice')
+  })
+})
+
 // ── 9. browser.open → browser.openExternal rewrite for simple tasks ────────────
 
 describe('agentLoop tool rewrite — browser.open → browser.openExternal on simple tasks', () => {
