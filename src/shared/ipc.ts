@@ -128,6 +128,11 @@ export interface MainHandlers {
   'broker:keyState': () => Promise<{ paper: boolean; live: boolean }>
 
   // The general browser-control layer: attach to Firefox, read and drive a page
+  'browser:readiness': () => Promise<{
+    engine: 'firefox' | 'brave'
+    firefox: { engine: 'firefox' | 'brave'; installed: boolean; executable: string | null; message: string; overrideVar: string }
+    brave: { engine: 'firefox' | 'brave'; installed: boolean; executable: string | null; message: string; overrideVar: string }
+  }>
   'browser:status': () => Promise<import('./browser').BrowserStatus>
   'browser:start': (url?: string) => Promise<import('./browser').BrowserStatus>
   'browser:attach': () => Promise<import('./browser').BrowserStatus>
@@ -147,6 +152,12 @@ export interface MainHandlers {
   'browser:learn': () => Promise<import('./browser').SiteRecipe>
   'browser:correctRecipe': (host: string, notes: string) => Promise<import('./browser').SiteRecipe>
   'browser:forgetRecipe': (host: string) => Promise<import('./browser').SiteRecipe[]>
+
+  // One persistent Brave window the user signs in to Cantina by hand (dedicated Goga profile)
+  'brave:openForCantina': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
+  'brave:status': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
+  'brave:confirmSignedIn': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
+  'brave:closeCantina': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
 
   // The two practice venues, the shared approval gate, the shared learning loop
   'venue:info': () => Promise<Record<import('./venues').VenueId, import('./venues').VenueInfo>>
@@ -201,7 +212,16 @@ export interface MainHandlers {
   'security:toolboxTool': (identifier: string) => Promise<import('./toolboxTypes').ToolReference | null>
   'security:checkTarget': (target: string, technique?: string) => Promise<{ decision: import('./security').ScopeDecision; program: { id: string; name: string } | null }>
   'security:approveRequest': (target: string, method: string) => Promise<{ grantId: string; decision: import('./security').ScopeDecision }>
-  'security:startBounty': (focus?: string) => Promise<{ jobId: string; declared: { host: string; targetId: string }[]; program: { id: string; name: string } }>
+  'security:previewBounty': () => Promise<{
+    program: { id: string; name: string; source: string }
+    hosts: { host: string; asset: string }[]
+    outOfScope: string[]
+    exclusions: { category: string; details: string }[]
+    automatedTestingRule: string | null
+    requiresAck: boolean
+    tools: { id: string; name: string; installed: boolean }[]
+  }>
+  'security:startBounty': (focus?: string, acknowledgeAutomationRule?: boolean) => Promise<{ jobId: string; declared: { host: string; targetId: string }[]; program: { id: string; name: string } }>
   'security:findings': () => Promise<import('./security').Finding[]>
   'security:addFinding': (input: { title: string; severity: import('./security').Finding['severity']; asset: string; summary: string; steps: string; impact: string; remediation: string; evidence: string }) => Promise<import('./security').Finding>
   'security:updateFinding': (id: string, patch: Partial<import('./security').Finding>) => Promise<import('./security').Finding>
@@ -263,6 +283,7 @@ export interface MainHandlers {
   'selfwork:apply': (id: string) => Promise<{ ok: boolean; message: string; proposal: import('./selfwork').SelfWorkProposalView | null }>
   'selfwork:revert': (id: string) => Promise<{ ok: boolean; message: string }>
   'selfwork:check': (only?: ('build' | 'typecheck' | 'tests')[]) => Promise<import('./selfwork').SelfWorkCheckReport>
+  'selfwork:resetRepairs': () => Promise<{ ok: boolean; message: string; repair: import('./selfwork').SelfWorkRepairStatus }>
 
   // Strategy: the rule-based strategies, backtests, journal, review and the paper loop
   'strategy:state': () => Promise<import('./strategy').StrategyPageState>

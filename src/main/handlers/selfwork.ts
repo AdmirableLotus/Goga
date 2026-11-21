@@ -36,4 +36,5 @@ export function registerSelfWorkHandlers(ipcMain: IpcMain) {
 
   ipcMain.handle('selfwork:check', async (_e, only?: ('build' | 'typecheck' | 'tests')[]) =>
     work().runChecks(undefined, Array.isArray(only) && only.length ? only : undefined))
+  ipcMain.handle('selfwork:resetRepairs', async () => work().resetRepairs())
 }

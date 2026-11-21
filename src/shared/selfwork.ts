@@ -92,10 +92,30 @@ export interface SelfWorkCheckReport {
 export interface SelfWorkAuditEntry {
   id: string
   at: string
-  kind: 'read' | 'search' | 'propose' | 'approve' | 'refuse' | 'discard' | 'apply' | 'check' | 'revert'
+  kind: 'read' | 'search' | 'propose' | 'approve' | 'refuse' | 'discard' | 'apply' | 'check' | 'revert' | 'repair'
   path: string
   summary: string
   detail: string
+}
+
+/**
+ * Where a repair round stands.
+ *
+ * A "repair round" opens the moment the checks fail: from then on each applied change is a
+ * correction attempt, capped at `maxAttempts`. When the cap is reached `blocked` is true and no
+ * further change applies until the checks pass (which closes the round) or the user starts a new
+ * round. This is the deterministic floor under "try twice, then stop and report what remains
+ * broken" — it is a counter in the service, not a hope about the model's behaviour.
+ */
+export interface SelfWorkRepairStatus {
+  /** True while the checks are failing and corrections are being attempted. */
+  active: boolean
+  /** How many corrections have been applied in this round. */
+  attempts: number
+  /** The cap. Two. */
+  maxAttempts: number
+  /** True once `attempts` has reached `maxAttempts`: further applies are refused until reset. */
+  blocked: boolean
 }
 
 export interface SelfWorkState {
@@ -107,4 +127,6 @@ export interface SelfWorkState {
   audit: SelfWorkAuditEntry[]
   /** The last check run, if any. */
   lastCheck: SelfWorkCheckReport | null
+  /** The state of the current repair round. */
+  repair: SelfWorkRepairStatus
 }

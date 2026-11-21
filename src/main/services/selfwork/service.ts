@@ -9,7 +9,7 @@ import { contentRefusals, normalisePath, pathRefusals, protectedFamily, withinRe
 import { unifiedDiff } from './diff'
 import type {
   RepoFile, RepoHit, RepoRead, SelfWorkAuditEntry, SelfWorkCheck, SelfWorkCheckReport,
-  SelfWorkOperation, SelfWorkProposal, SelfWorkProposalView, SelfWorkState,
+  SelfWorkOperation, SelfWorkProposal, SelfWorkProposalView, SelfWorkRepairStatus, SelfWorkState,
 } from '../../../shared/selfwork'
 
 /**
@@ -34,6 +34,16 @@ const MAX_READ_LINES = 400
 const CHECK_TIMEOUT_MS = 900_000
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'shots', 'release', 'out'])
 
+/**
+ * How many corrections Goga may apply in one repair round before it stops and reports what is
+ * still broken. Two: enough to recover from a check that fails for a reason the first fix missed,
+ * few enough that a wrong idea cannot thrash the source indefinitely.
+ */
+const MAX_REPAIR_ATTEMPTS = 2
+
+/** One command run in the repo. The seam lets the checks be driven by a stub in a test. */
+export type CommandRunner = (cwd: string, cmd: string, timeoutMs: number, signal?: AbortSignal) => Promise<{ code: number; out: string; ms: number }>
+
 export interface SelfWorkDeps {
   /** Absolutely the repo Goga is running from; defaults to the app's own path. */
   repoRoot?: string
@@ -42,6 +52,8 @@ export interface SelfWorkDeps {
   homeDir?: string
   now?: () => number
   log?: { info: (m: string) => void; warn: (m: string) => void }
+  /** How a check command is run. Defaults to the real spawn; a test passes a stub. */
+  runCommand?: CommandRunner
 }
 
 interface GateItem extends SelfWorkProposal {
@@ -61,6 +73,8 @@ export class SelfWorkService {
   private appliedProposals: SelfWorkProposal[] = []
   private auditTrail: SelfWorkAuditEntry[] = []
   private lastCheckReport: SelfWorkCheckReport | null = null
+  /** The repair round: opened by a failing check, closed by a passing one or an explicit reset. */
+  private repair = { active: false, attempts: 0 }
   private seq = 0
   private deps: Required<Omit<SelfWorkDeps, 'repoRoot' | 'log'>> & { repoRoot: string; log: { info: (m: string) => void; warn: (m: string) => void } }
 
@@ -75,6 +89,7 @@ export class SelfWorkService {
         info: (m: string) => LogService.getInstance().info(m),
         warn: (m: string) => LogService.getInstance().warn(m),
       },
+      runCommand: deps.runCommand ?? runIn,
     }
   }
 
@@ -293,6 +308,19 @@ export class SelfWorkService {
    * approval is 15 minutes old and the file on disk may not be what it was.
    */
   apply(id: string): { ok: boolean; message: string; proposal: SelfWorkProposalView | null } {
+    // The repair-round floor, checked before the gate is touched so a refused attempt neither
+    // spends the approval nor writes. Two corrections to a failing check, then Goga stops and says
+    // what is still broken rather than editing its own source a third, fourth, nth time.
+    if (this.repair.active && this.repair.attempts >= MAX_REPAIR_ATTEMPTS) {
+      const broke = this.lastCheckReport?.checks.find(c => !c.ok)
+      const message =
+        `Stopping: ${MAX_REPAIR_ATTEMPTS} repair attempts have already been applied for this round and the checks still fail`
+        + `${broke ? ` (\`${broke.name}\` exits ${broke.exitCode})` : ''}. `
+        + 'Nothing was written. Nothing more will be applied until the checks pass or you start a new repair round.'
+      this.record('refuse', 'repair-limit', `hit the ${MAX_REPAIR_ATTEMPTS}-attempt repair limit`, broke ? `${broke.name}: exit ${broke.exitCode}` : '')
+      return { ok: false, message, proposal: null }
+    }
+
     const claim = this.gate.claim(id, {
       afterExpiry: item => {
         const refusals = pathRefusals({
@@ -338,10 +366,18 @@ export class SelfWorkService {
 
     item.state = 'applied'
     this.appliedProposals = [item, ...this.appliedProposals].slice(0, 40)
+    // If a repair round is open, this applied change is one of its (at most two) attempts.
+    if (this.repair.active) {
+      this.repair.attempts++
+      this.record('repair', item.path, `repair attempt ${this.repair.attempts} of ${MAX_REPAIR_ATTEMPTS}`, 'run the checks to see whether it holds')
+    }
     this.record('apply', item.path, item.summary, `${item.operation} applied; ${item.diff.split('\n').length} diff lines`)
+    const attemptNote = this.repair.active
+      ? ` This is repair attempt ${this.repair.attempts} of ${MAX_REPAIR_ATTEMPTS}${this.repair.attempts >= MAX_REPAIR_ATTEMPTS ? ' — the last one before Goga stops and reports what is still broken' : ''}.`
+      : ''
     return {
       ok: true,
-      message: `Applied to ${item.path}. It takes effect the next time Goga is reloaded — run the checks to see whether it is sound first.`,
+      message: `Applied to ${item.path}. It takes effect the next time Goga is reloaded — run the checks to see whether it is sound first.${attemptNote}`,
       proposal: viewOf(item, true),
     }
   }
@@ -387,7 +423,7 @@ export class SelfWorkService {
       const cmd = name === 'build' ? 'npm run build'
         : name === 'typecheck' ? 'npx tsc --noEmit'
           : 'npx vitest run'
-      const result = await runIn(this.repoRoot, cmd, CHECK_TIMEOUT_MS, signal)
+      const result = await this.deps.runCommand(this.repoRoot, cmd, CHECK_TIMEOUT_MS, signal)
       const check: SelfWorkCheck = {
         name: cmd, ok: result.code === 0, exitCode: result.code,
         output: tail(result.out, 4000), ms: result.ms, at: new Date(this.now()).toISOString(),
@@ -408,7 +444,48 @@ export class SelfWorkService {
     this.lastCheckReport = report
     this.record('check', '*', report.ok ? 'checks passed' : 'checks failed',
       checks.map(c => `${c.name}: ${c.ok ? 'exit 0' : `exit ${c.exitCode}`}`).join('; '))
+    // A failing check opens (or keeps open) the repair round; a passing one closes it and clears
+    // the attempt count, so a fresh break later gets its own two attempts. A run of no checks
+    // (e.g. aborted) changes nothing.
+    if (checks.length > 0) {
+      if (report.ok) {
+        if (this.repair.active || this.repair.attempts > 0) this.record('repair', '*', 'checks pass — repair round closed', '')
+        this.repair = { active: false, attempts: 0 }
+      } else if (!this.repair.active) {
+        this.repair.active = true
+        this.record('repair', '*', 'checks fail — repair round opened', `two attempts allowed, then stop`)
+      }
+    }
     return report
+  }
+
+  /**
+   * Begin a fresh repair round after Goga stopped at the two-attempt limit.
+   *
+   * This is the user's deliberate "try again". It clears the attempt count but changes no source
+   * and runs no check — the next apply starts the count at zero again.
+   */
+  resetRepairs(): { ok: boolean; message: string; repair: SelfWorkRepairStatus } {
+    const had = this.repair.attempts
+    this.repair = { active: false, attempts: 0 }
+    this.record('repair', '*', 'repair round reset by the user', had ? `cleared ${had} attempt(s)` : '')
+    return {
+      ok: true,
+      message: had
+        ? `Repair round reset — the ${had}-attempt count is cleared. The next change you approve starts a fresh round.`
+        : 'There was no repair round in progress; nothing to reset.',
+      repair: this.repairStatus(),
+    }
+  }
+
+  /** The current repair round, for the page, the tools and the report. */
+  repairStatus(): SelfWorkRepairStatus {
+    return {
+      active: this.repair.active,
+      attempts: this.repair.attempts,
+      maxAttempts: MAX_REPAIR_ATTEMPTS,
+      blocked: this.repair.active && this.repair.attempts >= MAX_REPAIR_ATTEMPTS,
+    }
   }
 
   // ── State for the page ──────────────────────────────────────────────────────
@@ -422,6 +499,7 @@ export class SelfWorkService {
       applied: this.appliedProposals.map(p => viewOf(p, true)),
       audit: [...this.auditTrail].reverse().slice(0, 200),
       lastCheck: this.lastCheckReport,
+      repair: this.repairStatus(),
     }
   }
 

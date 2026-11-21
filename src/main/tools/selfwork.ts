@@ -162,8 +162,23 @@ reg.register({
     `Waiting for approval: ${s.proposals.length === 0 ? 'none' : s.proposals.map(p => `${p.id} ${p.path}`).join('; ')}`,
     `Applied: ${s.applied.length === 0 ? 'none' : s.applied.map(p => `${p.path} — ${p.summary}`).join('; ')}`,
     `Last check: ${s.lastCheck ? s.lastCheck.summary.split('\n')[0] : 'none run yet'}`,
+    `Repair round: ${s.repair.blocked
+      ? `STOPPED — ${s.repair.attempts}/${s.repair.maxAttempts} attempts used and checks still fail; run selfwork.resetRepairs to try again`
+      : s.repair.active
+        ? `in progress — ${s.repair.attempts}/${s.repair.maxAttempts} attempts used`
+        : 'none'}`,
   ]
   return { success: true, data: lines.join('\n') }
+})
+
+reg.register({
+  name: 'selfwork.resetRepairs',
+  description: 'Begin a fresh repair round after Goga stopped at the two-attempt limit. Clears the attempt count only — it writes no source and runs no check. Use this when the user explicitly wants to try fixing a still-broken check again.',
+  parameters: { type: 'object', properties: {}, required: [] },
+  riskLevel: 'low', reversible: true, category: 'selfwork',
+}, async () => {
+  const r = work().resetRepairs()
+  return { success: true, data: r.message }
 })
 
 export function registerSelfWorkTools() { return ToolRegistry.getInstance() }
