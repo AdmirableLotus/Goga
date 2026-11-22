@@ -4,13 +4,20 @@ import {
   declareTarget, revokeTarget, listTargets, liveTargets,
 } from '../services/lab/targets'
 import { listRuns, getRun } from '../services/lab/runs'
-import { killAll, isRunning, runningCount, killedTotal } from '../services/lab/runner'
+import { killAll, isRunning, runningCount, killedTotal, Budget } from '../services/lab/runner'
 import { portScan, runPipeline, toolAvailability, SCAN_TOOLS } from '../services/lab/scanner'
 import { idorTest } from '../services/lab/idor'
+import { labRequest } from '../services/lab/http'
+import { browserLayer } from '../services/browser/layer'
+import { ensureAttached } from './browserFirefox'
 import {
   generateWordlist, enumerateUsernames, prepareSpray, decideSpray, runSpray, listSprayProposals,
 } from '../services/lab/credentials'
 import { TARGET_KIND_LABEL } from '../../shared/lab'
+import {
+  preparePayload, decidePayload, dispatchPayload, listPayloadProposals, checkPayloadTarget,
+} from '../services/lab/payload'
+import { runWordPressXss, readSinks, CONTEXT_LABEL } from '../services/lab/wpXss'
 
 /**
  * The Lab tools, for chat.
@@ -367,6 +374,200 @@ reg.register({
   const proposals = listSprayProposals()
   if (!proposals.length) return { success: true, data: 'No spray proposals are held right now.' }
   return { success: true, data: proposals.map(p => `${p.status} — ${p.targetHost} ${p.url} · ${p.usernames.length}×${p.passwords.length} at ${p.ratePerMinute}/min  (id ${p.id})`).join('\n') }
+})
+
+// ── Payload dispatch: prepare → approve → send once → observe ───────────────
+//
+// The missing middle of an XSS find. A specialist can argue a line writes a value into an
+// attribute unescaped; this sends the one request that shows the line taking that value, and
+// records the response as an OBSERVATION. It cannot make it a finding: only the validator and
+// a browser that actually runs the script can do that.
+
+reg.register({
+  name: 'lab.checkPayloadTarget',
+  description: 'Say whether payload dispatch would be allowed to send to a URL, without sending anything. Loopback (127.0.0.1) is the local lab and needs no declaration; every other host must be covered by a live declared target, and cloud metadata is refused whatever is declared. Read-only.',
+  parameters: {
+    type: 'object',
+    properties: { url: { type: 'string', description: 'The full URL a payload would be sent to.' } },
+    required: ['url'],
+  },
+  riskLevel: 'low', reversible: true, category: 'system',
+}, async p => {
+  const check = checkPayloadTarget(String(p.url ?? ''))
+  return { success: true, data: [
+    `${check.host ?? p.url}${check.port ? `:${check.port}` : ''} — ${check.allowed ? 'ALLOWED' : 'REFUSED'}`,
+    check.reason,
+    check.targetId ? `declaration: ${check.targetId}` : check.allowed ? 'the local lab (this machine)' : '',
+  ].filter(Boolean).join('\n') }
+})
+
+reg.register({
+  name: 'lab.preparePayload',
+  description: 'Prepare ONE candidate XSS payload for dispatch — a URL template (with {payload} where the value goes) and the payload itself — and hold it for approval. This SENDS NOTHING. It refuses outright if the host is neither the local lab (127.0.0.1) nor a live declared target, and names the host it refused. The approval is bound to the exact URL, method, payload and marker.',
+  parameters: {
+    type: 'object',
+    properties: {
+      urlTemplate: { type: 'string', description: 'The URL to send to, with {payload} where the candidate goes, e.g. http://127.0.0.1:8080/sink?v={payload}. Without {payload}, the value is appended as v.' },
+      payload: { type: 'string', description: 'The exact payload text to send.' },
+      marker: { type: 'string', description: 'A unique string that is in the payload, so the response can be searched for it. At least four characters.' },
+      method: { type: 'string', enum: ['GET', 'POST'], description: 'GET (default) or POST.' },
+      why: { type: 'string', description: 'Optional: which source line or hypothesis this payload tests, so the record says what it was for.' },
+    },
+    required: ['urlTemplate', 'payload', 'marker'],
+  },
+  riskLevel: 'medium', reversible: true, category: 'web',
+}, async p => {
+  const result = preparePayload({
+    urlTemplate: String(p.urlTemplate ?? ''),
+    payload: String(p.payload ?? ''),
+    marker: String(p.marker ?? ''),
+    method: p.method === 'POST' ? 'POST' : 'GET',
+    why: p.why ? String(p.why) : undefined,
+  })
+  if (!result.ok) return { success: false, error: result.message }
+  return { success: true, data: `${result.message}\n\nProposal id: ${result.proposal?.id}` }
+})
+
+reg.register({
+  name: 'lab.decidePayload',
+  description: 'Approve or discard a prepared payload dispatch by its proposal id. Approving binds to that exact URL, method, payload and marker — if any of them changed, the dispatch refuses. This is the dispatch\'s own approval, separate from every other.',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'The proposal id from lab.preparePayload.' },
+      approved: { type: 'boolean', description: 'true to approve this exact request, false to discard it.' },
+    },
+    required: ['id', 'approved'],
+  },
+  riskLevel: 'high', reversible: false, category: 'web',
+}, async p => {
+  const result = decidePayload(String(p.id ?? ''), Boolean(p.approved))
+  return result.ok ? { success: true, data: result.message } : { success: false, error: result.message }
+})
+
+reg.register({
+  name: 'lab.dispatchPayload',
+  description: 'Send a payload you have already prepared and approved, once, and record what came back. It reports whether the value was echoed, where it landed (element text, an attribute, a textarea, a script block) and whether it survived as live markup — and it records the result as an OBSERVATION, never a finding. It refuses unless the proposal is approved and unspent, and re-checks the host before sending. Critical, so it also needs your approval of this exact run.',
+  parameters: {
+    type: 'object',
+    properties: { id: { type: 'string', description: 'The approved proposal id from lab.preparePayload.' } },
+    required: ['id'],
+  },
+  riskLevel: 'critical', reversible: false, category: 'web',
+}, async (p, ctx) => {
+  try {
+    const result = await dispatchPayload(String(p.id ?? ''), { signal: abort(ctx) })
+    const lines = [
+      `Dispatch to ${result.run.targetHost} — ${result.run.state}. HTTP ${result.status ?? '—'}, ${result.bytes} bytes.`,
+      result.reflection.verdict,
+      ...result.reflection.contexts.map(c => `  [${c.context}] …${c.excerpt}…`),
+      '',
+      result.unescaped
+        ? 'The markup survived into the response: a browser parsing this page would see a real tag, not text.'
+        : 'The value did not come back as parseable markup. That is a reflection result, not an execution result.',
+      '',
+      result.caveat,
+    ]
+    return { success: true, data: lines.join('\n') }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'lab.payloadProposals',
+  description: 'List the payload dispatches the Lab is holding, with whether each is approved, sent or expired. Read-only.',
+  parameters: { type: 'object', properties: {} },
+  riskLevel: 'low', reversible: true, category: 'system',
+}, async () => {
+  const proposals = listPayloadProposals()
+  if (!proposals.length) return { success: true, data: 'No payload dispatches are held right now.' }
+  return { success: true, data: proposals.map(p => `${p.status} — ${p.method} ${p.targetHost} · marker ${p.marker}  (id ${p.id})`).join('\n') }
+})
+
+// ── The WordPress XSS path: source → validator → local dispatch → evidence ──
+
+reg.register({
+  name: 'lab.readXssSinks',
+  description: 'Read ONE local source file with the XSS specialist and the independent validator, and say which lines the validator would confirm and where that value would land (element text, an attribute, a textarea, a script block). Read-only: nothing is sent, and nothing outside the folder you name is read. Use this before dispatching anything at a local copy.',
+  parameters: {
+    type: 'object',
+    properties: {
+      root: { type: 'string', description: 'The folder holding the local copy, e.g. C:\\Users\\you\\OS3\\goga-specialist-review\\wp\\wordpress.' },
+      file: { type: 'string', description: 'The file to read, relative to that folder or absolute inside it.' },
+    },
+    required: ['root', 'file'],
+  },
+  riskLevel: 'low', reversible: true, category: 'filesystem',
+}, async p => {
+  try {
+    const reading = readSinks(String(p.root ?? ''), String(p.file ?? ''))
+    const lines = [`${reading.file} — ${reading.bytes} bytes.`]
+    if (reading.candidates.length) {
+      lines.push('', `Candidates the validator would confirm (${reading.candidates.length}):`)
+      for (const c of reading.candidates) {
+        lines.push(`  line ${c.line} — ${CONTEXT_LABEL[c.context]}`, `    ${c.excerpt}`, `    observable: ${c.observable ?? '(none quoted)'}`)
+      }
+    } else {
+      lines.push('', 'Nothing survived the validator in this file.')
+    }
+    if (reading.dropped.length) {
+      lines.push('', `Dismissed by the validator (${reading.dropped.length}):`)
+      for (const c of reading.dropped.slice(0, 8)) lines.push(`  line ${c.line} — ${c.outcome}: ${c.why}`)
+    }
+    lines.push('', 'These are hypotheticals about a file. Nothing was sent, and a line being exploitable is not a finding until it is reproduced.')
+    return { success: true, data: lines.join('\n') }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'lab.wpXssPath',
+  description: 'Walk one XSS find end to end against a LOCAL copy: read the file with the XSS specialist, have the validator state the observable, serve a local reproduction of that exact line\'s behaviour on 127.0.0.1, dispatch the payload at it, and report whether the value took — and whether a browser actually executed it. It cannot be aimed at any host other than this machine: the reproduction is served on loopback only, and every dispatch is re-checked to 127.0.0.1 before it is sent. Critical, so it runs only after you approve this exact run.',
+  parameters: {
+    type: 'object',
+    properties: {
+      root: { type: 'string', description: 'The folder holding the local copy.' },
+      file: { type: 'string', description: 'The file to read, relative to that folder or absolute inside it.' },
+      line: { type: 'number', description: 'Optional: the exact line to reproduce, when the read found more than one candidate.' },
+    },
+    required: ['root', 'file'],
+  },
+  riskLevel: 'critical', reversible: false, category: 'web',
+}, async p => {
+  try {
+    const root = String(p.root ?? '')
+    const file = String(p.file ?? '')
+    const reading = readSinks(root, file)
+    if (!reading.candidates.length) {
+      return { success: false, error: `Nothing in ${reading.file} survived the validator, so there is nothing to reproduce. Run lab.readXssSinks to see what was dismissed and why.` }
+    }
+    // Attach the browser so execution can be checked rather than inferred. A browser that
+    // cannot start is reported by the runner, not silently skipped.
+    const ready = await ensureAttached()
+    const drive = ready.ok
+      ? { navigate: (u: string) => browserLayer().navigate(u), evaluate: (e: string) => browserLayer().evaluateScript(e) }
+      : undefined
+    const result = await runWordPressXss({
+      root, file,
+      line: p.line ? Number(p.line) : undefined,
+      drive,
+      // The reproduction is on loopback, and every dispatch is re-checked to 127.0.0.1 here
+      // before it is sent, so this path cannot reach any other host whatever it is handed.
+      dispatch: async (url, payload) => {
+        const target = url.replace('{payload}', encodeURIComponent(payload))
+        const check = checkPayloadTarget(target)
+        if (!check.allowed || check.host !== '127.0.0.1') {
+          return { status: null, body: '', bytes: 0, refused: `${check.reason} — only the local reproduction is ever dispatched at.` }
+        }
+        const budget = new Budget({ maxRequests: 4, maxPerMinute: 10 })
+        const res = await labRequest({ url: target, budget, allowLocalLab: true })
+        return { status: res.status, body: res.body, bytes: res.bytes, refused: res.refusedReason ?? undefined }
+      },
+    })
+    const lines = [...result.steps.map(s => `${s.step}: ${s.detail}`), '']
+    if (!ready.ok) lines.push(`Browser: ${ready.message}`)
+    lines.push(result.caveat)
+    if (result.finding) lines.push('', `Evidence recorded: ${result.finding.title}`, result.finding.evidence)
+    return { success: true, data: lines.join('\n') }
+  } catch (err) { return failure(err) }
 })
 
 /** The shared shape for a scan or pipeline result, so both tools read the same way. */

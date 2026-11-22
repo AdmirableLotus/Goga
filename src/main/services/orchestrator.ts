@@ -55,6 +55,7 @@ import {
   parseLocalRootCommand,
 } from './chatRoutes'
 import { findWordPressCopies, rememberedRoot, rememberRoot } from './localTarget'
+import { XSS_REQUEST, decideXssRoute } from './lab/xssRoute'
 
 // A scheduled task's run is sent as a chat message whose id starts with this.
 export const SCHEDULED_ID_PREFIX = 'sched-'
@@ -1050,6 +1051,23 @@ export class OrchestratorService {
    * only by pressing a button on a page.
    */
   private directRoute(content: string): { calls: { tool: string; params: Record<string, unknown> }[]; intent: string } | null {
+    // "do one xss bounty for me" - an XSS is proven from source, never from a scan. A live run
+    // reached lab.scan three times against a target id that was never declared. This route is
+    // checked first, because it is the only one that can produce evidence.
+    if (XSS_REQUEST.test(content) && !parseScopeQuestion(content)) {
+      const roots = [rememberedRoot(), ...findWordPressCopies()].filter((r): r is string => !!r)
+      const decision = decideXssRoute(Array.from(new Set(roots)))
+      if (decision.route === 'wp-local' && decision.root && decision.file) {
+        return {
+          calls: [{ tool: 'lab.wpXssPath', params: { root: decision.root, file: decision.file } }],
+          intent: `The local WordPress path is the one that can show an XSS, so I took it - not a scan. ${decision.why}\n\n`
+            + `Reading ${decision.file} in ${decision.root}, then reproducing that line on this machine and checking whether it actually runs.`,
+        }
+      }
+      // No tree, or more than one: say which, and what would settle it. No tool is called,
+      // because a scan cannot answer the question that was asked.
+      return { calls: [], intent: `${decision.why}\n\n${decision.next}` }
+    }
     // "use C:\src\wordpress as my local copy" — remember the folder, so a review can name
     // just the file from then on.
     const root = parseLocalRootCommand(content)

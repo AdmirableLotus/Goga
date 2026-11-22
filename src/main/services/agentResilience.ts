@@ -127,7 +127,65 @@ export function stepOutput(data: unknown): string {
   return JSON.stringify(data ?? '').slice(0, 1200)
 }
 
+// ── A precondition is not a retryable error ─────────────────────────────────
+//
+// A live run spent three approvals on the same refused call: `lab.scan` with a target id that
+// had no declaration behind it. "no such declaration" is not a transient failure — repeating
+// it with the same input can only fail the same way. These helpers name that class of error
+// and give the run the next step to offer instead of another attempt.
+
+/** The preconditions a tool checks before it will act, and the next step when one is missing. */
+const PRECONDITION_ERRORS: { test: RegExp; next: string }[] = [
+  {
+    test: /\bno such declaration\b|\bnot been declared\b|\bis not declared\b|\bundeclared\b|\bno declaration\b/i,
+    next: 'This target is not declared, so no Lab tool will accept it. Declare it in Security → Lab ("Declare this target"), '
+      + 'or say "declare 192.168.56.10 as my own VM". If you only want to prove an XSS on source you already have, the local '
+      + 'WordPress path needs no declaration: say "run the WordPress XSS path on wp-includes/blocks/legacy-widget.php".',
+  },
+  {
+    test: /\bno program\b|\bnot imported\b|\bno active program\b|\bimport a program\b/i,
+    next: 'No bug-bounty program is imported, so the scope check has nothing to check against. Import one in Security → Bug bounty first.',
+  },
+  {
+    test: /\bnot approved\b|\bhas not been approved\b|\bno approval\b|\bunapproved\b/i,
+    next: 'That request has not been approved. Prepare the exact one and approve it; an approval is single-use and repeating it will not work.',
+  },
+  {
+    test: /\bnot attached\b|\bno browser\b|\battach (?:to )?firefox\b/i,
+    next: 'No browser is attached. Open Browser → Attach, or say "start Firefox and attach", and then the run can continue.',
+  },
+  {
+    test: /\bis not a folder\b|\bnot a directory\b|\bno such file\b|\bENOENT\b|\bcannot be read\b|\bdoes not exist\b/i,
+    next: 'That path could not be read. If you have a WordPress copy on this machine, tell me its folder — "use C:\\path\\to\\wordpress as my local copy" — and I will read it there.',
+  },
+]
+
+/** The next step for a precondition failure, or null when this is an ordinary failure. */
+export function preconditionNextStep(error: string): string | null {
+  const text = String(error ?? '')
+  if (!text) return null
+  for (const p of PRECONDITION_ERRORS) if (p.test.test(text)) return p.next
+  return null
+}
+
+/** True when this error is a precondition failure, which must never be retried. */
+export function isPreconditionFailure(error: string): boolean {
+  return preconditionNextStep(error) !== null
+}
+
+/**
+ * The failure a step should carry, exactly as the tool reported it.
+ *
+ * A refusal with no cause is reported as the refusal, word for word. Nothing here guesses why
+ * — that guess is what turned "no such declaration" into "it seems there's a typo".
+ */
+export function refusalText(tool: string, error: unknown): string {
+  const text = String(error ?? '').trim()
+  return text || `${tool} refused without giving a reason. That is all the result says.`
+}
+
 export function describeDone(step: { tool: string; params: Record<string, unknown> }): string {
+
   const p = step.params ?? {}
   const s = (k: string) => String(p[k] ?? '').slice(0, 200)
   switch (step.tool) {

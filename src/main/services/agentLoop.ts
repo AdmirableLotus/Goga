@@ -15,7 +15,7 @@ import { OllamaClient } from './ollamaClient'
 import { BRAIN_LOAD_WAIT_MS, LocalLlamaService } from './localLlama'
 import { DesktopAdapter } from '../adapters/desktop'
 import { TaskMemoryService } from './taskMemory'
-import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, canonicalizeParams, describeDone, isRepeatableLookup, REPEAT_LIMIT, stepOutput, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS } from './agentResilience'
+import { FailureCycleTracker, isTaskTimedOut, TaskTimeoutController, TurnDeduplicator, canonicalizeParams, describeDone, isRepeatableLookup, REPEAT_LIMIT, stepOutput, MAX_RECOVERY, MAX_EQUIVALENT_FAILURES, OVERALL_TASK_TIMEOUT_MS, isPreconditionFailure, preconditionNextStep, refusalText } from './agentResilience'
 import { nanoid } from '../utils/nanoid'
 import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import { VerificationEngine } from './verificationEngine'
@@ -23,7 +23,7 @@ import { gapFromAgentEnd, gapJournal } from './gapJournal'
 import { resolveToolAlias } from './toolAliases'
 import { gogaIdentity } from './persona'
 import { READ_ONLY_TOOLS, checkSpecFor, describeStepForPlanner, honestyNote, unresolvedFailures } from './stepVerification'
-import { groundAgentReply } from './replyHonesty'
+import { groundAgentReply, dropUnbackedPreconditionClaims, dropInventedCause } from './replyHonesty'
 import { promptBlock as learnedBlock } from './evolution/learning'
 import type { ObservationOutcome, ObservationProgress } from './screenObservation'
 import type { AgentState, AgentStep, AgentStatus, StepCheck, ToolResult } from '../../shared/types'
@@ -339,7 +339,19 @@ export class AgentLoop {
 
         // ── APPROVAL GATE ─────────────────────────────────────────────────────
         if (decision.requiresApproval) {
-          const approved = await this.requestApproval(toolCall, decision.reason, signal)
+          // The prompt the user reads is the model's own sentence, so a precondition it
+          // asserts there is checked against the steps that have actually succeeded. A live
+          // run showed "Now that the target has been successfully declared" as an approval
+          // reason with no declaration in existence.
+          const claimFree = dropUnbackedPreconditionClaims(
+            toolCall.thought || toolCall.tool,
+            completedSteps.map(st => ({ tool: st.tool, result: st.result })),
+          )
+          if (claimFree.dropped.length) {
+            this.log.warn(`Approval prompt: dropped an unmet precondition claim before asking: ${claimFree.dropped.join(' ')}`)
+          }
+          const promptThought = claimFree.content || `${toolCall.tool} - approving runs it against the target it names.`
+          const approved = await this.requestApproval({ ...toolCall, thought: promptThought }, decision.reason, signal)
           if (!approved) {
             finalReply = `Action rejected: ${toolCall.tool}. I'll stop here.`
             this.setState({ status: 'done' })
@@ -464,7 +476,17 @@ export class AgentLoop {
 
         // ── RECOVER ───────────────────────────────────────────────────────────
         if (checkFailed) {
-          const failure = result.error ?? `check failed: ${check.detail}`
+          const failure = refusalText(toolCall.tool, result.error ?? `check failed: ${check.detail}`)
+          // A missing precondition is not a transient failure. Repeating the same call can only
+          // fail the same way, so it stops here and names the next step instead of retrying —
+          // three approvals on one refused lab.scan is exactly what this prevents.
+          const unmetNextStep = !result.success ? preconditionNextStep(failure) : null
+          if (unmetNextStep) {
+            this.log.warn(`Agent precondition failure on ${toolCall.tool}: ${failure} - stopping with a next step`)
+            finalReply = `${toolCall.tool} did not run. The tool said: "${failure}"\n\nNothing was retried: this is a missing precondition, not a temporary failure.\n\nNext: ${unmetNextStep}`
+            this.setState({ status: 'error', error: `precondition_unmet: ${toolCall.tool}` })
+            break
+          }
           recoveryAttempts++
           // Cycle detection: count identical tool+params+error signatures. This
           // catches loops that would otherwise reset recoveryAttempts by
@@ -553,6 +575,25 @@ export class AgentLoop {
     const grounded = groundAgentReply(finalReply, completedSteps.map(st => ({ tool: st.tool, result: st.result })))
     if (grounded.corrected) this.log.warn(`Agent reply corrected (${grounded.reason}): the model claimed more than the steps showed`)
     finalReply = grounded.content
+    // A precondition claim ("the target has been declared") is removed unless a step in this
+    // turn succeeded at establishing it. A live run produced exactly that sentence with no
+    // declaration behind it, then spent three approvals on the same refused call.
+    const stepsForHonesty = completedSteps.map(st => ({ tool: st.tool, result: st.result }))
+    const preconditionCheck = dropUnbackedPreconditionClaims(finalReply, stepsForHonesty)
+    if (preconditionCheck.dropped.length) {
+      this.log.warn(`Agent reply: dropped ${preconditionCheck.dropped.length} unmet precondition claim(s)`)
+      finalReply = preconditionCheck.content || 'Nothing was set up for that: no step in this turn succeeded, so I am not claiming anything was.'
+    }
+    // A diagnosis the tool result did not support is removed, and what is left says what the
+    // result actually said — never a guessed cause.
+    const lastError = [...completedSteps].reverse().find(st => !st.result.success)?.result.error
+    if (lastError) {
+      const causeCheck = dropInventedCause(finalReply, lastError)
+      if (causeCheck.dropped.length) {
+        this.log.warn(`Agent reply: dropped ${causeCheck.dropped.length} cause(s) the result did not give`)
+        finalReply = causeCheck.content || `That did not work. The tool said: ${lastError}`
+      }
+    }
     // Write down what couldn't be done, so Goga learns which abilities he is missing.
     gapJournal()?.record(gapFromAgentEnd(task, this.state.status, this.state.error, finalReply))
     return finalReply

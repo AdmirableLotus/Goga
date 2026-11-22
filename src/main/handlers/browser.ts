@@ -57,6 +57,10 @@ export function registerBrowserHandlers(ipcMain: IpcMain) {
   ipcMain.handle('brave:status', async () => brave.status())
   ipcMain.handle('brave:confirmSignedIn', async () => brave.confirmSignedIn())
   ipcMain.handle('brave:closeCantina', async () => brave.close())
+  // Navigate and read one Cantina page through the Brave engine. Read-only: no clicks, no
+  // typing, no credentials, and only the hosts a bounty page is published on.
+  ipcMain.handle('brave:navigateRead', async (_e, url: string) => brave.navigateAndRead(String(url ?? '')))
+  ipcMain.handle('brave:readCurrent', async () => brave.readCurrent())
 
   // Site learning
   ipcMain.handle('browser:recipes', async () => readRecipes())

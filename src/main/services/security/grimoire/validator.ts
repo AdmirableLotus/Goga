@@ -58,6 +58,48 @@ function window(material: string, line: number | null, radius = 4): string {
   return lines.slice(from, to).join('\n')
 }
 
+/**
+ * Does a request value actually reach the expression being written out?
+ *
+ * The old check asked whether the FILE read a request anywhere in its first 4000
+ * characters. On WordPress that is almost always true, so a taxonomy label echoed into an
+ * <h1> at line 72 was confirmed because an unrelated `$_REQUEST['fetch']` appeared hundreds
+ * of lines away. A validator that agrees with everything is decoration.
+ *
+ * This traces the variable actually written: if the expression reads a request directly, it
+ * is traced. Otherwise each variable root in the expression is looked up in the material and
+ * the assignment line is checked — and only that line, plus the two after it, so a
+ * conditional spread over a few lines still counts while an unrelated read elsewhere does
+ * not. When the trace cannot be made, the answer is "cannot confirm", never a guess.
+ */
+export function tracesFromRequest(subject: string, material: string): boolean {
+  if (INPUT_READ_ANY.test(subject)) return true
+  // Every variable root written to output, e.g. `$tax` from `$tax->labels->edit_item`.
+  const roots = new Set<string>()
+  for (const m of subject.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)) roots.add(m[1])
+  // A PHP/JS variable written bare, without the sigil.
+  if (!roots.size) {
+    for (const m of subject.matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*)\b/g)) {
+      const id = m[1]
+      if (/^(echo|print|return|res|send|write|end|document|window|innerHTML|outerHTML|then)$/i.test(id)) continue
+      if (/\($/.test(subject.slice(0, m.index + id.length + 1))) continue
+      roots.add(id)
+    }
+  }
+  if (!roots.size) return false
+
+  const lines = material.split(/\r?\n/)
+  for (const root of roots) {
+    const assign = new RegExp(`(^|[^A-Za-z0-9_$])\\$?${root}\\s*(\\[[^\\]]*\\])?\\s*=[^=]`)
+    for (let i = 0; i < lines.length; i++) {
+      if (!assign.test(lines[i])) continue
+      // The assignment, and the two lines after it, so a multi-line ternary still counts.
+      const statement = lines.slice(i, i + 3).join(' ')
+      if (INPUT_READ_ANY.test(statement)) return true
+    }
+  }
+  return false
+}
 function at(location: string, line: number | null): string {
   return line === null || line === undefined ? location : `${location}:${line}`
 }
@@ -95,7 +137,10 @@ export function validate(input: ValidationInput): ValidationVerdict {
           'The context it lands in: element text, an attribute, an event handler, or a script block.',
         ])
       }
-      const fromInput = INPUT_READ_ANY.test(near) || INPUT_READ_ANY.test(material.slice(0, 4000))
+      // Does a request value actually reach THIS write? Not "does the file read a request
+      // anywhere" — that is how a taxonomy label echoed at line 72 was confirmed because an
+      // unrelated `$_REQUEST['fetch']` appeared hundreds of lines earlier in the same file.
+      const fromInput = tracesFromRequest(subject, material)
       if (!fromInput) {
         return cannot('There is an unescaped write here, but nothing in the surrounding code shows the value coming from a request. It may be a constant or an internal value.', check, [
           'Where the written variable is assigned, and whether a request value reaches it.',

@@ -26,6 +26,15 @@ const log = () => LogService.getInstance()
 /** The one page Goga opens for the manual sign-in. */
 export const CANTINA_BOUNTY_URL = 'https://bounties.cantina.xyz/cantina/bug-bounty'
 
+/**
+ * The hosts the Brave session will navigate to and read.
+ *
+ * Cantina publishes its bounty pages on these two, and nothing else is read through this
+ * engine. A host outside this list is refused by name, so a typo or a pasted link to somewhere
+ * else cannot become a browsing session.
+ */
+export const READ_HOSTS = ['bounties.cantina.xyz', 'cantina.xyz']
+
 export type BraveSessionState =
   | 'stopped'         // nothing open
   | 'launching'       // Brave is coming up
@@ -41,6 +50,33 @@ export interface BraveSessionStatus {
   /** Words the user can act on. */
   message: string
 }
+
+/** What a page read returns. Same shape for any engine, so the caller does not branch on it. */
+export interface BravePageRead {
+  url: string
+  title: string
+  /** Visible text, whitespace-collapsed, capped so one long page cannot flood a reply. */
+  text: string
+  textClipped: boolean
+  /** The interactive elements a caller might want to name. */
+  elements: { role: string; name: string }[]
+}
+
+/** The page-reading script. Deliberately the same idea as the Firefox layer's, and read-only. */
+const READ_SCRIPT = `(() => {
+  const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const body = document.body;
+  const text = clean(body ? (body.innerText || body.textContent || '') : '');
+  const els = [];
+  const nodes = document.querySelectorAll('a,button,input,select,textarea,[role=button],[role=link]');
+  for (let i = 0; i < nodes.length && els.length < 120; i++) {
+    const el = nodes[i];
+    const name = clean(el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('name') || '');
+    if (!name) continue;
+    els.push({ role: el.tagName.toLowerCase(), name: name.slice(0, 120) });
+  }
+  return JSON.stringify({ url: location.href, title: document.title || '', text, elements: els });
+})()`
 
 /** The slice of Playwright's `chromium` this service uses — small, so a test can supply a fake. */
 export interface PersistentLauncher {
@@ -171,6 +207,93 @@ export class BraveCantinaSession {
     this.state = 'open'
     this.lastMessage = 'Noted — you confirmed you are signed in. Goga did not verify this itself; it trusts your confirmation.'
     return this.status()
+  }
+
+  /**
+   * Navigate the Brave window to one address and read the page back.
+   *
+   * This is the read half of the Brave engine: it opens the window if it is not open, goes to
+   * the address, waits for the DOM, and returns the visible text and the interactive elements.
+   * It is read-only — it clicks nothing, types nothing, and enters no credentials — and it is
+   * limited to the hosts on the session's own allow-list, so it cannot be pointed anywhere the
+   * user did not ask for.
+   *
+   * The distinction it keeps: a page that renders is not a page that is authorized to be
+   * tested. Reading Cantina's policy page is a read. It is not a permission to send anything.
+   */
+  async navigateAndRead(url: string): Promise<{ ok: boolean; read: BravePageRead | null; message: string }> {
+    const target = String(url ?? '').trim()
+    let parsed: URL
+    try { parsed = new URL(target) } catch {
+      return { ok: false, read: null, message: `"${target}" is not a web address.` }
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { ok: false, read: null, message: `Only http and https addresses are read, not "${parsed.protocol}".` }
+    }
+    if (!READ_HOSTS.includes(parsed.hostname.toLowerCase())) {
+      return {
+        ok: false, read: null,
+        message: `${parsed.hostname} is not a host this Brave session reads. It reads ${READ_HOSTS.join(', ')} — the pages a Cantina bounty is described on.`,
+      }
+    }
+
+    // Open the window if it is not already up. open() navigates to the Cantina page first; the
+    // goto below then takes it to the exact address that was asked for.
+    if (!this.alive()) {
+      const opened = await this.open()
+      if (!this.alive()) return { ok: false, read: null, message: opened.message }
+    }
+
+    try {
+      const page = this.page ?? await this.context!.newPage()
+      this.page = page
+      if (page.isClosed?.()) {
+        this.page = await this.context!.newPage()
+        return { ok: false, read: null, message: 'The Brave tab closed before it could be read. Open Brave for Cantina again.' }
+      }
+      const response = await this.page.goto(parsed.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      const raw = await this.page.evaluate(READ_SCRIPT) as string
+      let parsedRead: { url?: string; title?: string; text?: string; elements?: { role: string; name: string }[] }
+      try { parsedRead = JSON.parse(raw) } catch {
+        return { ok: false, read: null, message: 'The page did not return readable content. It may still be loading.' }
+      }
+      const fullText = parsedRead.text ?? ''
+      const textClipped = fullText.length > 20_000
+      const read: BravePageRead = {
+        url: parsedRead.url ?? parsed.toString(),
+        title: parsedRead.title ?? '',
+        text: textClipped ? fullText.slice(0, 20_000) : fullText,
+        textClipped,
+        elements: (parsedRead.elements ?? []).slice(0, 120),
+      }
+      if (this.state !== 'open') this.state = 'login-required'
+      this.lastMessage = `Read "${read.title || read.url}" through Brave — HTTP ${response?.status() ?? 'unknown'}, ${read.text.length} chars of visible text, ${read.elements.length} interactive element(s).`
+      log().info(`Brave/Cantina: read ${read.url} (${read.text.length} chars)`)
+      return { ok: true, read, message: this.lastMessage }
+    } catch (err) {
+      const failed = this.fail(err)
+      return { ok: false, read: null, message: failed.message }
+    }
+  }
+
+  /**
+   * A PNG of the page Goga's own Brave window is showing, base64, with the address it was taken
+   * at. Same Playwright page the read uses — no second capture route, and nothing from the
+   * user's own Brave profile.
+   */
+  async screenshot(): Promise<{ base64: string; url: string } | null> {
+    if (!this.alive() || !this.page || this.page.isClosed?.()) return null
+    try {
+      const buf = await this.page.screenshot({ type: 'png' })
+      return { base64: Buffer.from(buf).toString('base64'), url: safeUrl(this.page) ?? '' }
+    } catch { return null }
+  }
+
+  /** Read the page that is open now, without navigating. */  async readCurrent(): Promise<{ ok: boolean; read: BravePageRead | null; message: string }> {
+    if (!this.alive() || !this.page) {
+      return { ok: false, read: null, message: 'No Brave page is open. Open Brave for Cantina first, or navigate to an address.' }
+    }
+    return this.navigateAndRead(safeUrl(this.page) ?? CANTINA_BOUNTY_URL)
   }
 
   /** Close the window and drop the live session. The on-disk profile (and its login) is kept. */

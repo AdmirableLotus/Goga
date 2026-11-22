@@ -158,6 +158,42 @@ export interface MainHandlers {
   'brave:status': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
   'brave:confirmSignedIn': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
   'brave:closeCantina': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
+  'brave:navigateRead': (url: string) => Promise<{ ok: boolean; read: import('../main/services/browser/braveSession').BravePageRead | null; message: string }>
+  'brave:readCurrent': () => Promise<{ ok: boolean; read: import('../main/services/browser/braveSession').BravePageRead | null; message: string }>
+
+  // The Lab: declared targets, payload dispatch, and the local WordPress XSS path
+  'lab:state': () => Promise<{
+    targets: import('./lab').DeclaredTarget[]
+    runs: import('./lab').LabRun[]
+    payloads: { id: string; targetHost: string; method: string; marker: string; status: string }[]
+    running: boolean
+    killed: number
+  }>
+  'lab:stop': (reason?: string) => Promise<{ message: string }>
+  /** What the live view shows on open: the log so far, the last real capture, and whether a run is working. */
+  'lab:liveState': () => Promise<import('./lab').LabLiveState>
+  /** Ask for one fresh picture of the browser Goga drives. Read-only; it starts nothing. */
+  'lab:capturePane': () => Promise<{ ok: boolean; message?: string; frame?: import('./lab').LiveFrame | null }>
+  'lab:declareTarget': (input: { host: string; ports?: string; kind: import('./lab').TargetKind; note: string }) => Promise<{ ok: boolean; message: string; target: import('./lab').DeclaredTarget | null }>
+  'lab:revokeTarget': (id: string, reason: string) => Promise<{ ok: boolean; message: string }>
+  'lab:checkPayloadTarget': (url: string) => Promise<{ allowed: boolean; host: string | null; port: number | null; targetId: string | null; reason: string }>
+  'lab:preparePayload': (input: { urlTemplate: string; payload: string; marker: string; method?: 'GET' | 'POST'; why?: string }) => Promise<{ ok: boolean; message: string; proposal: { id: string; url: string; method: string; payload: string; marker: string; targetHost: string } | null }>
+  'lab:decidePayload': (id: string, approved: boolean) => Promise<{ ok: boolean; message: string }>
+  'lab:dispatchPayload': (id: string) => Promise<import('./lab').PayloadResult>
+  'lab:readXssSinks': (root: string, file: string) => Promise<{
+    file: string
+    bytes: number
+    candidates: { file: string; line: number; excerpt: string; context: string; observable: string | null; why: string; wouldConfirm: string[] }[]
+    dropped: { file: string; line: number; excerpt: string; context: string; outcome: string; why: string }[]
+  }>
+  'lab:wpXssPath': (root: string, file: string, line?: number) => Promise<{
+    executed: boolean; reflected: boolean; tookAsMarkup: boolean; contextMatched: boolean
+    context: string; payload: string; expectedTitle: string; status: number | null; bytes: number
+    excerpt: string; steps: { step: string; detail: string }[]
+    source: { file: string; line: number; excerpt: string; observable: string | null; wouldConfirm: string[] }
+    finding: { title: string; detail: string; evidence: string } | null
+    caveat: string
+  }>
 
   // The two practice venues, the shared approval gate, the shared learning loop
   'venue:info': () => Promise<Record<import('./venues').VenueId, import('./venues').VenueInfo>>
@@ -456,7 +492,9 @@ export interface RendererEvents {
   'evolution:status': string
   'evolution:update': import('./evolution').EvolutionState
   // Job board: any change to any job, plus the queue numbers
-  'jobs:update': import('./jobs').JobsView
+  'jobs:update': import('./jobs').JobsView  // The live view of a Lab run: one entry as it happens, one real browser picture, or a
+  // state change. A typed channel, so the renderer gets nothing it has no type for.
+  'lab:live': import('./lab').LabLiveEvent
 }
 
 export type MainChannel = keyof MainHandlers

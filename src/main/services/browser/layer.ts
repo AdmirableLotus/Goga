@@ -8,6 +8,14 @@ import { BidiClient, BidiError } from './bidi'
 import {
   DEFAULT_DEBUG_PORT, bidiUrl, launchFirefox, probePort, resolveFirefoxPath,
 } from './firefox'
+
+/** The debugging port: 9333, or GOGA_DEBUG_PORT when one instance must not take another's. */
+function resolveDebugPort(): number {
+  const raw = process.env.GOGA_DEBUG_PORT?.trim()
+  if (!raw) return DEFAULT_DEBUG_PORT
+  const n = Number(raw)
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_DEBUG_PORT
+}
 import {
   PAGE_READ_SCRIPT, readValueScript, scrollToScript, waitForTextScript,
 } from './domScripts'
@@ -44,7 +52,9 @@ interface Attached {
 
 export class BrowserLayer {
   private attached: Attached | null = null
-  private port = DEFAULT_DEBUG_PORT
+  // GOGA_DEBUG_PORT moves it, so a diagnostic instance can drive its own Firefox while
+  // another Goga already owns 9333. The user's own browser session is never touched.
+  private port = resolveDebugPort()
   private lastMessage = ''
 
   /** Goga's own Firefox profile, kept apart from the one the user browses in. */

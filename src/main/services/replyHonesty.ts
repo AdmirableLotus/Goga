@@ -212,6 +212,98 @@ function quotesPageContent(sentence: string): boolean {
 
 // One brain decides between talking and acting. When the phrase rules don't recognise a
 // request, the local brain is asked this narrow question before a chat answer is written.
+// ── Claims about a precondition ─────────────────────────────────────────────
+//
+// A live run produced this sentence inside an approval prompt: "Now that the target has been
+// successfully declared, the next step is to run the…" — with no declaration in existence, and
+// the very next tool call refused with "no such declaration". The sentence asserted a state
+// nothing had established.
+//
+// These helpers hold a sentence that asserts a precondition (declared, imported, approved,
+// attached, saved) to the step history of the same turn. A claim with no successful step behind
+// it is removed rather than softened, because the user reads the claim, not a note under it.
+
+/** The precondition states a reply may assert, and the tools that would establish each. */
+const PRECONDITION_CLAIMS: { pattern: RegExp; tools: string[]; state: string }[] = [
+  { pattern: /\b(?:target|host|domain|asset)\b[^.!?\n]{0,60}?\b(?:has|have|is|was|are)\s+(?:now\s+|already\s+|successfully\s+|been\s+)*(?:declared|registered|authorised|authorized)\b/i, tools: ['lab.declareTarget', 'lab.listTargets'], state: 'declared' },
+  { pattern: /\b(?:has|have|is|was|are)\s+(?:now\s+|already\s+|successfully\s+)+declared\b/i, tools: ['lab.declareTarget', 'lab.listTargets'], state: 'declared' },
+  { pattern: /\b(?:program|policy|scope)\b[^.!?\n]{0,60}?\b(?:has|have|is|was|been)\s+(?:now\s+|already\s+|successfully\s+)*(?:imported|loaded)\b/i, tools: ['security.importProgram', 'security.listPrograms'], state: 'imported' },
+  { pattern: /\b(?:request|dispatch|payload|spray)\b[^.!?\n]{0,60}?\b(?:has|have|is|was|been)\s+(?:now\s+|already\s+|successfully\s+)+(?:approved|authorised|authorized)\b/i, tools: ['lab.decidePayload', 'lab.decideSpray'], state: 'approved' },
+  { pattern: /\b(?:browser|firefox|brave)\b[^.!?\n]{0,40}?\b(?:is|was|has been)\s+(?:now\s+|already\s+|successfully\s+)*(?:attached|connected)\b/i, tools: ['browser.attach', 'browser.start', 'brave.openForCantina', 'brave:openForCantina'], state: 'attached' },
+]
+
+/** The precondition state this sentence claims, or null when it claims none. */
+export function preconditionClaimed(sentence: string): { state: string; tools: string[] } | null {
+  for (const claim of PRECONDITION_CLAIMS) {
+    if (claim.pattern.test(sentence)) return { state: claim.state, tools: claim.tools }
+  }
+  return null
+}
+
+/**
+ * Drop every sentence that asserts a precondition no successful step in this turn established.
+ *
+ * `steps` is the turn's own history, so this cannot be satisfied by wording — only by a tool
+ * having actually returned success for the thing claimed.
+ */
+export function dropUnbackedPreconditionClaims(reply: string, steps: StepLike[]): { content: string; dropped: string[] } {
+  const backed = new Set(steps.filter(s => s.result.success).map(s => s.tool))
+  const dropped: string[] = []
+  const kept = sentences(reply).filter(sentence => {
+    const claim = preconditionClaimed(sentence)
+    if (!claim) return true
+    if (claim.tools.some(tool => backed.has(tool))) return true
+    dropped.push(sentence.trim())
+    return false
+  })
+  return { content: kept.join(' ').trim(), dropped }
+}
+
+// ── A cause the tool result did not give ────────────────────────────────────
+//
+// "It seems there's a typo or missing closing quotation mark in the previous target" was
+// offered as a reason inside an approval prompt. The tool had said only "no such declaration".
+// When the result names a cause the reply may use it; when it does not, the reply may not
+// invent one. These are the shapes a model uses to present a guess as a diagnosis.
+
+const CAUSE_SHAPES = [
+  /\bit seems (?:that |like )?(?:there(?:'s| is| are)|the )/i,
+  /\b(?:it|this) (?:looks|seems) like\b/i,
+  /\bprobably\b/i,
+  /\bmight be (?:because|caused|due)\b/i,
+  /\bmost likely\b/i,
+  /\bI (?:suspect|guess|think) (?:that )?(?:the |there )/i,
+  /\b(?:there(?:'s| is)) (?:probably )?(?:a )?(?:typo|missing|unclosed|stray)\b/i,
+]
+
+/** True when the sentence offers a diagnosis rather than reporting what the result said. */
+export function inventsCause(sentence: string): boolean {
+  return CAUSE_SHAPES.some(r => r.test(sentence))
+}
+
+/**
+ * Remove invented diagnoses from a reply about a failure.
+ *
+ * `actual` is the error text the tool returned. A diagnosis survives only when its distinctive
+ * words appear in that text. When the result said nothing about a cause, every diagnosis-shaped
+ * sentence goes, and what remains is what the result actually said.
+ */
+export function dropInventedCause(reply: string, actual: string): { content: string; dropped: string[] } {
+  const source = String(actual ?? '').toLowerCase()
+  const STOP = /^(there|seems|looks|probably|because|about|which|should|previous|system|something|wrong|issue)$/
+  const dropped: string[] = []
+  const kept = sentences(reply).filter(sentence => {
+    if (!inventsCause(sentence)) return true
+    const words = sentence.toLowerCase().match(/[a-z]{4,}/g) ?? []
+    if (words.some(w => !STOP.test(w) && source.includes(w))) return true
+    dropped.push(sentence.trim())
+    return false
+  })
+  return { content: kept.join(' ').trim(), dropped }
+}
+
+// One brain decides between talking and acting. When the phrase rules don't recognise a
+// request, the local brain is asked this narrow question before a chat answer is written.
 export function routeQuestion(message: string, lastAssistant = ''): { role: 'system' | 'user'; content: string }[] {
   return [
     { role: 'system', content: 'Decide what the user\'s latest message asks for. ACT: carry out something on the computer or online right now (open or use an app or website, click or type, search the web, read or change files, download, send, run or check something). TALK: a question, opinion, advice, explanation, plan, writing text, feelings or small talk. Answer with exactly one word: ACT or TALK.' },

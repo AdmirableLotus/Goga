@@ -27,6 +27,15 @@ export interface LabHttpRequest {
   body?: string
   budget: Budget
   signal?: AbortSignal
+  /**
+   * Permit the loopback address without a declaration, for the local practice lab.
+   *
+   * This is off by default, and it can only ever add 127.0.0.1, ::1 and localhost. It cannot
+   * widen anything else: a declared target is still checked the same way, and a non-loopback
+   * host still has to be declared. The practice lab is this machine, so requiring the user to
+   * declare their own loopback would be a ceremony that protects nothing.
+   */
+  allowLocalLab?: boolean
 }
 
 export interface LabHttpResponse {
@@ -55,7 +64,11 @@ export async function labRequest(req: LabHttpRequest, http: typeof fetch = fetch
 
   const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80)
   const check = checkTarget(parsed.hostname, port)
-  if (!check.declared) return refused(check.reason, true)
+  // The local lab is this machine. Even with allowLocalLab, only loopback passes here, so the
+  // flag can never widen what a declared-target tool may reach.
+  const loopback = req.allowLocalLab === true &&
+    (parsed.hostname === '127.0.0.1' || parsed.hostname === '::1' || parsed.hostname === 'localhost')
+  if (!check.declared && !loopback) return refused(check.reason, true)
 
   const spent = await req.budget.spend()
   if (spent === 'cap') return refused(`request cap reached (${req.budget.maxRequests}) — nothing more was sent`)

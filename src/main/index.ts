@@ -24,6 +24,7 @@ import { registerBrokerHandlers } from './handlers/broker'
 import { registerBrowserHandlers, registerVenueHandlers } from './handlers/browser'
 import { registerSecurityHandlers } from './handlers/security'
 import { registerGrimoireHandlers } from './handlers/grimoire'
+import { registerLabHandlers } from './handlers/lab'
 import { registerEvolutionHandlers } from './handlers/evolution'
 import { registerSelfWorkHandlers } from './handlers/selfwork'
 import { registerStrategyHandlers } from './handlers/strategy'
@@ -31,6 +32,7 @@ import { registerBusinessHandlers } from './handlers/business'
 import { registerPersonaHandlers } from './handlers/persona'
 import { registerOsintHandlers } from './handlers/osint'
 import { registerJobsHandlers } from './handlers/jobs'
+import { setLivePublisher } from './services/lab/liveRun'
 import { registerSetupHandlers } from './handlers/setup'
 import { startJobs, stopJobs } from './services/jobs/instance'
 import { reconcileStaleRuns } from './services/lab/runs'
@@ -229,6 +231,7 @@ app.whenReady().then(() => {
   registerVenueHandlers(ipcMain)
   registerSecurityHandlers(ipcMain)
   registerGrimoireHandlers(ipcMain)
+  registerLabHandlers(ipcMain)
   registerEvolutionHandlers(ipcMain)
   registerSelfWorkHandlers(ipcMain)
   registerOsintHandlers(ipcMain)
@@ -243,6 +246,9 @@ app.whenReady().then(() => {
   // Jobs outlive the window, so the board is loaded here — not when the page opens — and
   // anything that was mid-run when the app last closed is marked interrupted, not lost.
   startJobs()
+  // The live view: every entry and picture a Lab run produces is forwarded to the renderer as
+  // it happens. This is a forward only â€” it has no way to start, approve or send anything.
+  setLivePublisher(event => getMainWindow()?.webContents.send('lab:live', event))
 
   // A Lab run left 'running' by a crash is marked stopped, so the record never lies that an
   // offensive process is still going when no process exists.

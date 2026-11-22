@@ -4,6 +4,7 @@ import type { ToolboxCatalog } from '../../shared/toolboxTypes'
 import { PageHeader, Card, Field, EmptyState, Alert, Chip } from '../components/ui'
 import { ToolboxSection } from '../components/Toolbox'
 import { GrimoireSection } from '../components/Grimoire'
+import { LabSection } from '../components/Lab'
 import type { DestinationId } from '../nav'
 
 /** The server-validated scope a run would use, as security:previewBounty returns it. */
@@ -60,6 +61,8 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
   const [lesson, setLesson] = useState<Lesson | null>(null)
   const [toolbox, setToolbox] = useState<ToolboxCatalog | null>(null)
   const [brave, setBrave] = useState<BraveStatus | null>(null)
+  const [braveUrl, setBraveUrl] = useState('https://bounties.cantina.xyz/cantina/bug-bounty')
+  const [braveRead, setBraveRead] = useState<{ ok: boolean; read: { url: string; title: string; text: string; textClipped: boolean; elements: { role: string; name: string }[] } | null; message: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -187,6 +190,55 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
               {!brave.braveExecutable && <Alert kind="error">Brave was not found. Install it, or set GOGA_BRAVE_PATH to brave.exe.</Alert>}
             </div>
           )}
+
+          <div className="g-inset" style={{ marginTop: 12 }}>
+            <div className="g-section-title">Read a Cantina page through Brave</div>
+            <p className="g-caption" style={{ marginTop: 0 }}>
+              Navigates and reads only — no clicks, no typing, no credentials. It reads
+              bounties.cantina.xyz and cantina.xyz, and refuses any other host by name.
+            </p>
+            <div className="g-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <input className="g-input g-input--xl" value={braveUrl} onChange={e => setBraveUrl(e.target.value)} />
+              <button className="g-btn" disabled={busy || !braveUrl} onClick={() => void work(async () => {
+                setBraveRead(await window.goga.invoke('brave:navigateRead', braveUrl))
+              })}>Read this page</button>
+              <button className="g-btn g-btn--ghost" disabled={busy} onClick={() => void work(async () => {
+                setBraveRead(await window.goga.invoke('brave:readCurrent'))
+              })}>Read the open page</button>
+            </div>
+            {braveRead && (
+              <div style={{ marginTop: 8 }}>
+                {!braveRead.ok || !braveRead.read
+                  ? <Alert kind="error">{braveRead.message}</Alert>
+                  : <>
+                      <div className="g-caption"><strong>{braveRead.read.title || braveRead.read.url}</strong> — {braveRead.read.elements.length} interactive element(s){braveRead.read.textClipped ? ', text clipped' : ''}</div>
+                      <pre className="g-mono" style={{ whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto', fontSize: 'var(--fs-caption)' }}>{braveRead.read.text.slice(0, 4000)}</pre>
+                    </>}
+              </div>
+            )}
+          </div>
+
+          {/* The honest frame, in the program's own words where there is one. */}
+          <div className="g-inset" style={{ marginTop: 12, fontSize: 'var(--fs-caption)' }}>
+            <div className="g-section-title">What this can and cannot do</div>
+            <p style={{ margin: '4px 0' }}>
+              Goga cannot deliver a bounty. What it can do is prove a bug on your own copy and hand
+              you a finding with evidence you can check. Submitting it, and answering the triager,
+              stays with you.
+            </p>
+            <p style={{ margin: '4px 0' }}>
+              <strong>WordPress's program</strong> requires you to take responsibility for AI output
+              and to disclose it: “Submitting an unverified report from an automated scan or AI agent
+              is not acceptable.” and “you must disclose what tooling you are using and to what extent
+              a report has been authored by AI.”
+            </p>
+            <p style={{ margin: '4px 0' }}>
+              <strong>Cantina's</strong> program says nothing about AI. It does warn about automated
+              testing and volume: its own rule about “excessive traffic” and automated scans is
+              quoted in the program card above, and it must be respected. Silence about AI is not
+              permission — read the program's current rules yourself before you test anything.
+            </p>
+          </div>
         </Card>
 
         {/* ── Toolbox ──────────────────────────────────────────────────────── */}
@@ -458,6 +510,9 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
 
         {/* ── Grimoire: specialist review, validator, gate, memory ─────────── */}
         <GrimoireSection programs={programs} active={active} onChanged={async () => { await load() }} />
+
+        {/* ── The Lab: declared targets, payload dispatch, the local XSS path ── */}
+        <LabSection />
 
         {/* ── Findings ───────────────────────────────────────────────────── */}
         <Card title={`Draft reports (${findings.length})`} sub="Reports stay on this PC as drafts. Goga never submits them.">
