@@ -287,7 +287,78 @@ export interface PayloadResult {
   /** Always 'observation': a response is not a finding until the validator confirms it. */
   confidence: 'observation'
   caveat: string
+  /** True when the payload came back as live markup a browser would parse, not escaped text. */
+  unescaped: boolean
+  /** The context the value landed in: element text, an attribute, a script block, or null. */
+  context: string | null
+  /** True when the payload's own bytes came back, whether escaped or not. */
+  payloadEchoed: boolean
 }
+
+// ── The live view ──────────────────────────────────────────────────────────
+
+/**
+ * The kind of thing a live entry records. One signal per line, and the kind is only there so
+ * the line can be coloured — the text always says what happened in plain words.
+ *
+ *   source    a file was read
+ *   specialist a specialist was consulted, and what it said
+ *   validator what the independent validator decided, and why
+ *   target    a host or URL was checked against a rule
+ *   send      something was sent, to which host
+ *   response  what came back
+ *   browser   the browser was driven: navigated, attached, or could not be reached
+ *   verdict   the run's own conclusion
+ *   stop      the run stopped or ended
+ */
+export type LiveKind =
+  | 'source' | 'specialist' | 'validator' | 'target'
+  | 'send' | 'response' | 'browser' | 'verdict' | 'stop'
+
+/** One line of the live log. Exists only because something occurred. */
+export interface LiveEntry {
+  id: string
+  /** When it happened, ISO 8601. */
+  at: string
+  kind: LiveKind
+  /** What happened, short and plain. */
+  label: string
+  /** Where or why, when there is more to say. Empty is normal. */
+  detail: string
+}
+
+/** One real capture of the browser Goga drives. */
+export interface LiveFrame {
+  /** PNG, base64. */
+  base64: string
+  /** The address the picture was taken at. */
+  url: string
+  capturedAt: string
+  /** False once the run has ended: the picture is the last real one, not a live view. */
+  live: boolean
+}
+
+export interface LabLiveState {
+  /** True only while a run is actually working. */
+  active: boolean
+  /** 'wp-xss' | 'payload' | ... — which path is running. Null when idle. */
+  runKind: string | null
+  /** What is running, in the user's words. */
+  label: string
+  startedAt: string | null
+  endedAt: string | null
+  entries: LiveEntry[]
+  /** The last real capture, or null when no browser picture has been taken. */
+  frame: LiveFrame | null
+  /** One sentence: working now, finished, or idle. */
+  status: string
+}
+
+/** What main pushes to the renderer as a run happens. */
+export type LabLiveEvent =
+  | { type: 'entry'; entry: LiveEntry; state: LabLiveState }
+  | { type: 'frame'; frame: LiveFrame }
+  | { type: 'state'; state: LabLiveState }
 
 /** What the Lab page shows at a glance. */
 export interface LabState {
