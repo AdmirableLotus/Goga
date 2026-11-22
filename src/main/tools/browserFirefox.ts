@@ -4,6 +4,8 @@ import { app } from 'electron'
 import { ToolRegistry } from './registry'
 import { browserLayer } from '../services/browser/layer'
 import { learnCurrentPage, recipeFor, correctRecipe } from '../services/browser/recipes'
+import { chatBrowser } from '../services/browser/chatBrowser'
+import type { BrowserEngine } from '../services/browser/engine'
 import type { ElementQuery } from '../../shared/browser'
 
 /**
@@ -23,6 +25,36 @@ import type { ElementQuery } from '../../shared/browser'
 
 const reg = ToolRegistry.getInstance()
 const layer = () => browserLayer()
+
+/**
+ * The browser a chat request drives is the one chosen in Settings - not always Firefox.
+ *
+ * browser.goto and browser.readPage used to go through the Firefox layer unconditionally, so
+ * browserEngine: "brave" was read only by the readiness display. A live run showed the result:
+ * Brave was chosen in Settings and the log said "Opening ... in Goga's own Firefox".
+ *
+ * Opens and reads now go through chatBrowser(), which picks the session by engine:
+ *   firefox -> the BiDi layer below (Goga's own Firefox profile)
+ *   brave   -> the persistent braveSession Playwright session (Goga's own Brave profile)
+ * Both are sessions Goga already holds, so nothing here opens a second window.
+ *
+ * The tools that ACT on a page (click, type, find, wait, tabs, learning) stay on the Firefox
+ * layer, because the Brave session is a read-only one - it holds the Cantina login and is not
+ * a general browsing surface. In Brave mode they say so by name instead of silently driving a
+ * different browser than the one the user picked.
+ */
+
+function chosenEngine(): BrowserEngine { return chatBrowser().engine() }
+
+function braveRefusal(tool: string): { success: false; error: string } {
+  return {
+    success: false,
+    error: `The browser is set to Brave in Settings, and ${tool} needs the general browsing session. `
+      + 'The Brave session is the read-only Cantina one: it opens and reads pages, it does not click '
+      + 'or type. Nothing was done. Switch the browser in Settings to Firefox to drive a page, or ask '
+      + 'me to read it instead.',
+  }
+}
 
 /** Firefox takes a few seconds to come up; a chat request must not fail on that. */
 export async function ensureAttached(): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -81,14 +113,27 @@ reg.register({
   },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async p => {
-  const ready = await ensureAttached()
-  if (!ready.ok) return { success: false, error: ready.message }
   const url = String(p.url ?? '').trim()
   if (!url) return { success: false, error: 'No address was given to open.' }
+  // The engine chosen in Settings decides which browser opens it. In Brave mode the open
+  // also waits for the page to render, so a client-rendered page is content by the time the
+  // read comes, not a loading shell.
+  if (chosenEngine() === 'brave') {
+    const r = await chatBrowser().openAndRead(url)
+    if (!r.ok) return { success: false, error: r.message }
+    const read = r.read
+    return {
+      success: true,
+      data: `Opened ${read?.url || url} in Goga's own Brave — the page title is "${read?.title || '(no title)'}". `
+        + `${r.message} Call browser.readPage to see what it says.`,
+    }
+  }
+  const ready = await ensureAttached()
+  if (!ready.ok) return { success: false, error: ready.message }
   const r = await layer().navigate(url)
   return {
     success: true,
-    data: `Opened ${r.url} — the page title is "${r.title || '(no title)'}". Call browser.readPage to see what it actually says.`,
+    data: `Opened ${r.url} in Goga's own Firefox — the page title is "${r.title || '(no title)'}". Call browser.readPage to see what it actually says.`,
   }
 })
 
@@ -98,6 +143,21 @@ reg.register({
   parameters: { type: 'object', properties: {}, required: [] },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async () => {
+  // Same engine as browser.goto: Brave reads through the session that drove it (which waits
+  // for the render), Firefox through the BiDi layer.
+  if (chosenEngine() === 'brave') {
+    const r = await chatBrowser().readCurrent()
+    if (!r.ok || !r.read) return { success: false, error: r.message }
+    const read = r.read
+    if (!read.text.trim() && read.elements.length === 0) {
+      return {
+        success: false,
+        error: `The page at ${read.url} returned no readable content through Brave. ${r.message}`,
+      }
+    }
+    // r.message carries whether the page rendered, so a shell is labelled as one.
+    return { success: true, data: `${describeRead(read)}\n\n${r.message}` }
+  }
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const r = await layer().readPage()
@@ -117,6 +177,7 @@ reg.register({
   parameters: { type: 'object', properties: {}, required: [] },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async () => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.listTabs')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const tabs = await layer().listTabs()
@@ -138,6 +199,7 @@ reg.register({
   },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async p => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.selectTab')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const tab = await layer().selectTab(String(p.id ?? ''))
@@ -175,6 +237,7 @@ reg.register({
   },
   riskLevel: 'medium', reversible: true, category: 'browser',
 }, async p => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.click')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const query = queryFrom(p)
@@ -199,6 +262,7 @@ reg.register({
   },
   riskLevel: 'medium', reversible: true, category: 'browser',
 }, async p => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.type')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const query = queryFrom(p)
@@ -222,6 +286,7 @@ reg.register({
   },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async p => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.find')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const query = queryFrom(p)
@@ -252,6 +317,7 @@ reg.register({
   },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async p => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.waitForText')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const r = await layer().waitForText(String(p.text ?? ''), !!p.exact, Number(p.timeoutMs) || undefined)
@@ -266,12 +332,11 @@ reg.register({
   parameters: { type: 'object', properties: {}, required: [] },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async () => {
-  const ready = await ensureAttached()
-  if (!ready.ok) return { success: false, error: ready.message }
+  // Both engines can photograph their own page, so this one dispatches rather than refusing.
   const dir = path.join(app.getPath('userData'), 'screenshots')
   const file = path.join(dir, `page-${Date.now()}.png`)
-  const saved = await layer().screenshotToFile(file)
-  return { success: true, data: `Screenshot saved (${saved.bytes} bytes): ${saved.path}` }
+  const shot = await chatBrowser().screenshotToFile(file)
+  return shot.ok ? { success: true, data: shot.message } : { success: false, error: shot.message }
 })
 
 // ── Learning a site ──────────────────────────────────────────────────────────
@@ -282,6 +347,7 @@ reg.register({
   parameters: { type: 'object', properties: {}, required: [] },
   riskLevel: 'low', reversible: true, category: 'browser',
 }, async () => {
+  if (chosenEngine() === 'brave') return braveRefusal('browser.learnSite')
   const ready = await ensureAttached()
   if (!ready.ok) return { success: false, error: ready.message }
   const recipe = await learnCurrentPage()

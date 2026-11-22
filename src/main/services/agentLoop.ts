@@ -21,6 +21,7 @@ import { plannerDiagnostic, redactDiagnosticText } from './plannerDiagnostics'
 import { VerificationEngine } from './verificationEngine'
 import { gapFromAgentEnd, gapJournal } from './gapJournal'
 import { resolveToolAlias } from './toolAliases'
+import { cantinaProgramTarget } from './browser/siteResolve'
 import { gogaIdentity } from './persona'
 import { READ_ONLY_TOOLS, checkSpecFor, describeStepForPlanner, honestyNote, unresolvedFailures } from './stepVerification'
 import { groundAgentReply, dropUnbackedPreconditionClaims, dropInventedCause } from './replyHonesty'
@@ -259,8 +260,22 @@ export class AgentLoop {
         // ── DONE ──────────────────────────────────────────────────────────────
         if (toolCall.done) {
           if (toolCall._planningFailed) {
-            finalReply = toolCall.reply || 'Model failed to produce a valid tool call.'
-            this.setState({ status: 'error', error: 'planning_failed: invalid planner response' })
+            // The planner returning prose where JSON was expected used to end the turn with a
+            // generic line — and in one live run with nothing at all after the acknowledgement.
+            // The page may already have been read, or the reason it could not be read may
+            // already be in the steps, so the reply is taken from there before giving up.
+            const fromPage = AgentLoop.answerAfterRead(task, completedSteps)
+            // The planner's own words carry why it failed (a backend error, say) and the last
+            // step carries why the work stopped, so both are kept rather than one replacing the
+            // other. The point is only that something is said.
+            const stepReason = AgentLoop.failureAnswer(completedSteps)
+            const parts = fromPage
+              ? [fromPage]
+              : [toolCall.reply || 'Model failed to produce a valid tool call.', stepReason]
+            finalReply = (parts.filter(Boolean).join('\n\n') || 'Model failed to produce a valid tool call.')
+              + honestyNote(completedSteps)
+            this.setState({ status: fromPage ? 'done' : 'error',
+              error: fromPage ? undefined : 'planning_failed: invalid planner response' })
             this.log.error(`Agent planning failed: model did not emit valid JSON after retry`)
           } else {
             finalReply = (toolCall.reply || 'Task complete.') + honestyNote(completedSteps)
@@ -820,6 +835,19 @@ What is the next single action to take?`
     // exactly how "I've opened https://www.hackerone.com/" reached the user with nothing
     // opened. A URL or a known site plus an open/read verb is unambiguous, so it is not
     // left to the model to decide.
+    // "read the Cantina program page scope" names a program, not a URL. It must resolve to the
+    // program's own page — the one that carries the scope — and not to the directory of all
+    // programs, which says nothing about scope. Checked before siteToOpen so the word "Cantina"
+    // alone cannot decide it.
+    const cantinaProgram = cantinaProgramTarget(task)
+    if (cantinaProgram) {
+      return {
+        thought: `Reading ${cantinaProgram.program} — the program's own page, so the scope comes from the page rather than from the directory that lists every program.`,
+        tool: 'browser.goto',
+        params: { url: cantinaProgram.url },
+        done: false,
+      }
+    }
     // A Cantina bounty page is read for its SCOPE with the dedicated importer, not merely
     // opened in a browser: that tool reads the program's assets and entry bar, which is what
     // working a bounty actually needs. Checked before siteToOpen so a Cantina URL in the
@@ -921,6 +949,22 @@ What is the next single action to take?`
    * already in the step history and re-planning only risks a worse answer — or, as happened
    * live, no answer at all.
    */
+  /**
+   * True when the request asks what the page says, not merely for it to be opened.
+   *
+   * One predicate, because three places need the same answer: the read issued after a
+   * navigation, the reply taken from that read, and the fallback when planning fails. They used
+   * to carry their own copies of a regex that did not cover "read the Cantina program page
+   * scope" — so a scope request opened the page and then stopped with no answer at all.
+   */
+  static wantsPageContent(task: string): boolean {
+    const t = String(task ?? '')
+    return /\b(tell me|what (it|the page|this page) (says|shows|contains)|read (it|the page|what)|what'?s (on|in) (it|the page)|summari[sz]e|explain what|find out what|check what)\b/i.test(t)
+      // "read the Cantina program page scope", "read the program rules", "get me the scope"
+      || /\bread\b[^.!?]*\b(scope|program|programme|rules|policy|page)\b/i.test(t)
+      || /\b(scope|rules|policy)\b/i.test(t) && /\b(read|show|get|fetch|open|check|look at|pull up)\b/i.test(t)
+  }
+
   static answerAfterRead(task: string, steps: AgentStep[]): string | null {
     if (steps.length < 2) return null
     const last = steps[steps.length - 1]
@@ -929,10 +973,36 @@ What is the next single action to take?`
     // The first step has to have been a successful navigation under the same request.
     const first = steps[0]
     if (!first.result.success || !/^(browser\.goto|browser\.navigate)$/.test(first.tool)) return null
-    if (!/\b(tell me|what (it|the page|this page) (says|shows|contains)|read (it|the page|what)|what'?s (on|in) (it|the page)|summari[sz]e|explain what|find out what|check what)\b/i.test(task)) return null
+    if (!AgentLoop.wantsPageContent(task)) return null
     const data = last.result.data
     if (typeof data !== 'string' || !data.trim()) return null
     return AgentLoop.readablePageAnswer(data)
+  }
+
+  /**
+   * What to say when a turn ends without an answer, from the steps that did run.
+   *
+   * A run that cannot read a page must still end with words that say why — not an
+   * acknowledgement with nothing after it. This takes the last failed step and states the
+   * reason it gave, in plain language, rather than a generic "could not plan".
+   */
+  static failureAnswer(steps: AgentStep[]): string | null {
+    const last = steps[steps.length - 1]
+    if (!last) return null
+    if (last.result.success) return null
+    const reason = String(last.result.error ?? '').trim()
+    if (!reason) return null
+    // Name what actually failed. A navigation that never happened is not a read that failed,
+    // and reporting the wrong one is its own small lie.
+    if (last.tool === 'browser.readPage') {
+      return `I could not read the page, so there is nothing from it to report. The step said: "${reason}"`
+    }
+    if (last.tool === 'browser.goto' || last.tool === 'browser.navigate') {
+      return `I could not open the page, so nothing was read. The step said: "${reason}"`
+    }
+    // The step's own words carry the reason; the internal tool name does not belong in what
+    // the user reads.
+    return `I could not finish that step, so there is no result to report. The step said: "${reason}"`
   }
 
   /**
@@ -967,7 +1037,7 @@ What is the next single action to take?`
     if (!first.result.success) return null
     if (!/^(browser\.goto|browser\.navigate|browser\.open)$/.test(first.tool)) return null
     // The request has to ask for the content, not just the visit.
-    if (!/\b(tell me|what (it|the page|this page) (says|shows|contains)|read (it|the page|what)|what'?s (on|in) (it|the page)|summari[sz]e|explain what|find out what|check what)\b/i.test(task)) return null
+    if (!AgentLoop.wantsPageContent(task)) return null
     return {
       thought: 'The page is open. Reading it now, so the answer comes from the page and not from memory.',
       tool: 'browser.readPage',
@@ -1021,6 +1091,9 @@ What is the next single action to take?`
     // A full URL wins.
     const url = t.match(/https?:\/\/[^\s"'<>)]+/i)
     if (url) return url[0].replace(/[.,;:]+$/, '')
+    // A named Cantina program is its own page, not the directory that lists every program.
+    const cantinaProgram = cantinaProgramTarget(task)
+    if (cantinaProgram) return cantinaProgram.url
     // A bare domain, with an optional path.
     const bare = t.match(/\b((?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|co|edu|gov|tv|me|us|uk)(?:\/[^\s"'<>)]*)?)/i)
     if (bare) return `https://${bare[1].replace(/[.,;:]+$/, '')}`
