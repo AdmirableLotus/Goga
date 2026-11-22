@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/goga-userdata' } }))
 vi.mock('../../logs', () => ({ LogService: { getInstance: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } }))
 
-import { BraveCantinaSession, CANTINA_BOUNTY_URL, READ_HOSTS, type PersistentLauncher } from '../braveSession'
+import { BraveCantinaSession, CANTINA_BOUNTY_URL, READ_HOSTS, VISIBLE_TEXT_SCRIPT, rendered, type PersistentLauncher } from '../braveSession'
 
 interface FakePageOptions {
   /** What evaluate() returns for the read script. */
@@ -155,3 +155,132 @@ describe('the Cantina read path through Brave', () => {
     expect(Object.keys(page)).not.toContain('fill')
   })
 })
+
+/**
+ * The render wait.
+ *
+ * A live run against the real Cantina page returned 110 characters — "Bounties All bounties
+ * Loading program …" — in 1.9 s, because the read was taken straight after domcontentloaded and
+ * the page's own JavaScript had not yet replaced the shell with the program. These tests pin the
+ * behaviour that fixes it: the read waits for the shell to go, and when it never goes, the reply
+ * says it is still the shell rather than presenting it as the program.
+ */
+describe('the wait for a client-rendered page', () => {
+  it('the real shell from the live run is recognised as a shell, and the real page is not', () => {
+    expect(rendered('Bounties All bounties Loading program Maximum reward (USDC) © 2026 Cantina. All rights reserved. Terms Privacy')).toBe(false)
+    expect(rendered(`Cantina Bug Bounty Program. Scope: cantina.xyz and its subdomains, cantina.security and its subdomains, email infrastructure. ${'x'.repeat(400)}`)).toBe(true)
+    // A small page that never mentions loading is content, not a shell — it is not held.
+    expect(rendered('Sign in to join. No identity verification required.')).toBe(true)
+  })
+
+  it('waits for the shell to be replaced, then reads the real content', async () => {
+    // The page answers with the shell twice, then with the program.
+    const texts = [
+      'Bounties All bounties Loading program Maximum reward (USDC)',
+      'Bounties All bounties Loading program Maximum reward (USDC)',
+      'Cantina Bug Bounty Program Critical $5,000 High $2,000 Scope: cantina.xyz, cantina.security. Out of scope: phishing. Sign in to join.',
+    ]
+    let i = 0
+    const page = {
+      goto: vi.fn(async () => ({ status: () => 200 })),
+      url: () => CANTINA_BOUNTY_URL,
+      isClosed: () => false,
+      evaluate: vi.fn(async (script: string) => {
+        // The render-wait script returns the visible text; the read script the full payload.
+        if (/Loading|Loading program/i.test(texts[Math.min(i, texts.length - 1)]) && script === VISIBLE_TEXT_SCRIPT) {
+          const t = texts[Math.min(i, texts.length - 1)]
+          i++
+          return t
+        }
+        return JSON.stringify({ url: CANTINA_BOUNTY_URL, title: 'Cantina Bug Bounty Program', text: texts[texts.length - 1], elements: [] })
+      }),
+      on: () => {},
+    }
+    const ctx = { pages: () => [page], newPage: vi.fn(async () => page), on: () => {}, close: vi.fn() }
+    const session = new BraveCantinaSession(
+      async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
+      () => 'C:\\Brave\\brave.exe',
+    )
+    const result = await session.navigateAndRead(CANTINA_BOUNTY_URL)
+    expect(result.ok).toBe(true)
+    expect(result.read?.text).toContain('$5,000')
+    expect(result.message).toMatch(/Content rendered after \d+ ms/)
+  })
+
+  it('when the page never renders, says so instead of presenting the shell as the program', async () => {
+    const shell = 'Bounties All bounties Loading program Maximum reward (USDC) © 2026 Cantina.'
+    const page = {
+      goto: vi.fn(async () => ({ status: () => 200 })),
+      url: () => CANTINA_BOUNTY_URL,
+      isClosed: () => false,
+      evaluate: vi.fn(async (script: string) => script === VISIBLE_TEXT_SCRIPT
+        ? shell
+        : JSON.stringify({ url: CANTINA_BOUNTY_URL, title: 'Cantina Bounty · Cantina Bounties', text: shell, elements: [] })),
+      on: () => {},
+    }
+    const ctx = { pages: () => [page], newPage: vi.fn(async () => page), on: () => {}, close: vi.fn() }
+    const session = new BraveCantinaSession(
+      async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
+      () => 'C:\\Brave\\brave.exe',
+    )
+    const result = await session.navigateAndRead(CANTINA_BOUNTY_URL)
+    expect(result.ok).toBe(true)
+    expect(result.message).toMatch(/still showing its loading shell/i)
+    expect(result.message).not.toMatch(/Content rendered/)
+    // It still returns what the page says — it just does not call the shell the program.
+    expect(result.read?.text).toBe(shell)
+  }, 30_000)
+
+  it('the wait is bounded: it gives up at its own timeout rather than hanging the read', async () => {
+    const full = `Cantina Bug Bounty Program Critical $5,000 ${'z'.repeat(500)}`
+    let state = 'ready'
+    const page = {
+      goto: vi.fn(async () => ({ status: () => 200 })),
+      url: () => CANTINA_BOUNTY_URL,
+      isClosed: () => false,
+      evaluate: vi.fn(async (script: string) => {
+        if (script === VISIBLE_TEXT_SCRIPT) return state === 'ready' ? full : 'Loading program'
+        return JSON.stringify({ url: CANTINA_BOUNTY_URL, title: 't', text: state === 'ready' ? full : 'Loading program', elements: [] })
+      }),
+      on: () => {},
+    }
+    const ctx = { pages: () => [page], newPage: vi.fn(async () => page), on: () => {}, close: vi.fn() }
+    const session = new BraveCantinaSession(
+      async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
+      () => 'C:\\Brave\\brave.exe',
+    )
+    // Open a page first, so the wait has something to watch; then it stops rendering.
+    await session.navigateAndRead(CANTINA_BOUNTY_URL)
+    state = 'stuck'
+    const started = Date.now()
+    const waited = await session.waitForRender(1_200)
+    const took = Date.now() - started
+    expect(waited.rendered).toBe(false)
+    expect(took).toBeGreaterThanOrEqual(1_000)
+    expect(took).toBeLessThan(5_000)
+  })
+
+  it('a page that is already rendered costs one check, not the whole timeout', async () => {
+    const full = `Cantina Bug Bounty Program Critical $5,000 High $2,000 ${'y'.repeat(500)}`
+    const page = {
+      goto: vi.fn(async () => ({ status: () => 200 })),
+      url: () => CANTINA_BOUNTY_URL,
+      isClosed: () => false,
+      evaluate: vi.fn(async (script: string) => script === VISIBLE_TEXT_SCRIPT
+        ? full
+        : JSON.stringify({ url: CANTINA_BOUNTY_URL, title: 'ready', text: full, elements: [] })),
+      on: () => {},
+    }
+    const ctx = { pages: () => [page], newPage: vi.fn(async () => page), on: () => {}, close: vi.fn() }
+    const session = new BraveCantinaSession(
+      async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
+      () => 'C:\\Brave\\brave.exe',
+    )
+    const started = Date.now()
+    const result = await session.navigateAndRead(CANTINA_BOUNTY_URL)
+    expect(result.ok).toBe(true)
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(result.message).toMatch(/Content rendered/)
+  })
+})
+

@@ -78,6 +78,35 @@ const READ_SCRIPT = `(() => {
   return JSON.stringify({ url: location.href, title: document.title || '', text, elements: els });
 })()`
 
+/**
+ * How long a page gets to replace its loading shell with real content, and how often it is checked.
+ *
+ * Cantina's bounty pages are built by client-side JavaScript: `domcontentloaded` fires while the
+ * body still reads "Bounties All bounties Loading program" — about 110 characters — and the
+ * program itself arrives a second or two later. A read taken straight after the DOM event
+ * therefore returns the shell, honestly labelled as the page's text. This wait is what makes the
+ * read return the program.
+ *
+ * It is a wait for CONTENT, not a fixed sleep: the page is asked, repeatedly, whether its visible
+ * text has changed from the shell it started with. A page that is already rendered costs one
+ * check; a page that never renders costs the timeout and is then read as it is, so the reply is
+ * "the shell" rather than a lie or a hang.
+ */
+export const RENDER_WAIT_MS = 15_000
+const RENDER_POLL_MS = 250
+
+/** The text a client-rendered page shows before its content arrives. */
+export const LOADING_SHELL_RE = /\bLoading\b/i
+
+/** The smallest page that is worth considering "rendered": more than the shell's chrome. */
+const RENDERED_MIN_CHARS = 400
+
+/** A script that reports the page's current visible text, for the render wait to compare. */
+export const VISIBLE_TEXT_SCRIPT = `(() => {
+  const b = document.body;
+  return String(b ? (b.innerText || b.textContent || '') : '').replace(/\\s+/g, ' ').trim();
+})()`
+
 /** The slice of Playwright's `chromium` this service uses — small, so a test can supply a fake. */
 export interface PersistentLauncher {
   launchPersistentContext(userDataDir: string, options: Record<string, unknown>): Promise<BrowserContext>
@@ -252,6 +281,10 @@ export class BraveCantinaSession {
         return { ok: false, read: null, message: 'The Brave tab closed before it could be read. Open Brave for Cantina again.' }
       }
       const response = await this.page.goto(parsed.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      // A client-rendered page answers domcontentloaded while it is still showing its loading
+      // shell. Read now and the reply is the shell, honestly labelled — which is what happened
+      // live: 110 chars, "Bounties All bounties Loading program". Wait for the content instead.
+      const waited = await this.waitForRender()
       const raw = await this.page.evaluate(READ_SCRIPT) as string
       let parsedRead: { url?: string; title?: string; text?: string; elements?: { role: string; name: string }[] }
       try { parsedRead = JSON.parse(raw) } catch {
@@ -267,13 +300,47 @@ export class BraveCantinaSession {
         elements: (parsedRead.elements ?? []).slice(0, 120),
       }
       if (this.state !== 'open') this.state = 'login-required'
-      this.lastMessage = `Read "${read.title || read.url}" through Brave — HTTP ${response?.status() ?? 'unknown'}, ${read.text.length} chars of visible text, ${read.elements.length} interactive element(s).`
+      // Say whether the page actually rendered, so "the shell" is never presented as the program.
+      const renderNote = waited.rendered
+        ? ` Content rendered after ${waited.ms} ms.`
+        : ` The page was still showing its loading shell after ${waited.ms} ms, so what is below is the shell, not the program.`
+      this.lastMessage = `Read "${read.title || read.url}" through Brave — HTTP ${response?.status() ?? 'unknown'}, ${read.text.length} chars of visible text, ${read.elements.length} interactive element(s).${renderNote}`
       log().info(`Brave/Cantina: read ${read.url} (${read.text.length} chars)`)
       return { ok: true, read, message: this.lastMessage }
     } catch (err) {
       const failed = this.fail(err)
       return { ok: false, read: null, message: failed.message }
     }
+  }
+
+  /**
+   * Wait until the page stops showing a loading shell, or the budget runs out.
+   *
+   * Cantina's bounty pages are client-rendered: right after `domcontentloaded` the body reads
+   * "Bounties All bounties Loading program" (110 characters), and the program arrives a second
+   * or two later. This polls the page's own visible text and returns as soon as it is no longer
+   * that shell — so a rendered page costs one check, and a page that never renders costs the
+   * timeout and is then read as it is.
+   *
+   * Returns the elapsed time either way, so the reply can say which of the two happened instead
+   * of presenting a shell as if it were the program.
+   */
+  async waitForRender(timeoutMs = RENDER_WAIT_MS): Promise<{ rendered: boolean; ms: number }> {
+    const started = Date.now()
+    if (!this.page || this.page.isClosed?.()) return { rendered: false, ms: 0 }
+    const deadline = started + Math.max(0, timeoutMs)
+    let last = ''
+    while (Date.now() < deadline) {
+      try {
+        last = String(await this.page.evaluate(VISIBLE_TEXT_SCRIPT) ?? '')
+      } catch {
+        // The page is navigating or the window closed; the read below will report what is there.
+        return { rendered: false, ms: Date.now() - started }
+      }
+      if (rendered(last)) return { rendered: true, ms: Date.now() - started }
+      await new Promise(resolve => setTimeout(resolve, RENDER_POLL_MS))
+    }
+    return { rendered: rendered(last), ms: Date.now() - started }
   }
 
   /**
@@ -318,6 +385,20 @@ export class BraveCantinaSession {
 
 function safeUrl(page: Page): string | null {
   try { return page.url() } catch { return null }
+}
+
+/**
+ * Whether a page's visible text looks like content rather than a loading shell.
+ *
+ * The shell is short and says "Loading": Cantina's is 110 characters, "Bounties All bounties
+ * Loading program …". Real content is far longer than that. So a page is still a shell when it is
+ * BOTH shorter than the chrome-worth of content AND still saying "Loading". A small page that
+ * never mentions loading counts as rendered, and so does a long page, so the wait does not hold
+ * every page for its full timeout.
+ */
+export function rendered(text: string): boolean {
+  const t = String(text ?? '').trim()
+  return !(t.length < RENDERED_MIN_CHARS && LOADING_SHELL_RE.test(t))
 }
 
 let instance: BraveCantinaSession | null = null
