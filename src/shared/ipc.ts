@@ -48,6 +48,8 @@ export interface MainHandlers {
 
   // Settings
   'settings:get': () => Promise<AppSettings>
+  // A readable reason the settings file was not used, or null when it loaded.
+  'settings:load-error': () => Promise<string | null>
   'settings:set': (settings: Partial<AppSettings>) => Promise<AppSettings>
 
   // Desktop (direct IPC — also available as agent tools)

@@ -1,6 +1,6 @@
 import { registerMarketsHandlers } from './handlers/markets'
 import 'dotenv/config'
-import { app, BrowserWindow, ipcMain, globalShortcut, Notification } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, Notification, dialog } from 'electron'
 import path from 'path'
 import dotenv from 'dotenv'
 import { onWindowClose, startSleepMode, startedAsleep, stopSleepMode, wakeGoga } from './sleepMode'
@@ -241,6 +241,23 @@ app.whenReady().then(() => {
   registerJobsHandlers(ipcMain)
   registerSetupHandlers(ipcMain)
   createWindow()
+  // If the settings file could not be parsed Goga starts on defaults; say so once,
+  // in plain words, instead of leaving a silent difference in behaviour.
+  {
+    const loadError = SettingsService.getInstance().getLoadError()
+    if (loadError) {
+      setTimeout(() => {
+        const options = {
+          type: 'warning' as const,
+          title: 'Goga could not read its settings',
+          message: 'Goga started on default settings.',
+          detail: loadError + '\n\nYour settings file has not been changed.'
+        }
+        const win = getMainWindow()
+        void (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options))
+      }, 1500)
+    }
+  }
   startSleepMode(getMainWindow, createWindow)
 
   // Jobs outlive the window, so the board is loaded here — not when the page opens — and

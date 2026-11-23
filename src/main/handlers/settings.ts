@@ -12,6 +12,9 @@ const settings = SettingsService.getInstance()
 
 export function registerSettingsHandlers(ipcMain: IpcMain) {
   ipcMain.handle('settings:get', async () => settings.get())
+  // A settings file that could not be parsed is reported here, so the window can
+  // say so in plain words instead of the app dying before it opens.
+  ipcMain.handle('settings:load-error', async () => settings.getLoadError())
   ipcMain.handle('settings:set', async (_e, patch: Record<string, unknown>) => {
     const previous = settings.get()
     const updated = settings.set(patch)
