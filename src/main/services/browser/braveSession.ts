@@ -363,6 +363,38 @@ export class BraveCantinaSession {
     return this.navigateAndRead(safeUrl(this.page) ?? CANTINA_BOUNTY_URL)
   }
 
+  /**
+   * Visit ONE address in Goga's own Brave window for a joined live attempt, and report what the
+   * page did.
+   *
+   * This is the only method on this class that navigates outside the read allow-list, and it is
+   * deliberately not a general browsing surface: the caller is the joining run, whose exact URL
+   * the scope gate has allowed and the user has approved with a single-use approval. What it
+   * returns is the status, the title and the visible text — the three things the execution rule
+   * needs. It reads no cookie, no storage, no token and no password, and it types nothing: there
+   * is no code here that could sign in as the user.
+   *
+   * It does not open the window. If the session is not up, the caller is told so and nothing is
+   * navigated.
+   */
+  async visitForJoin(url: string): Promise<{ status: number | null; title: string; bodyText: string }> {
+    if (!this.alive() || !this.page) throw new Error('Goga\'s Brave window is not open')
+    const page = this.page
+    if (page.isClosed?.()) throw new Error('the Brave tab closed')
+    const response = await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 30_000 })
+    // A client-rendered page answers domcontentloaded before its content arrives. Wait the same
+    // way the read does, so a payload that runs just after load is not missed by reading early.
+    await this.waitForRender().catch(() => ({ rendered: false, ms: 0 }))
+    const raw = await page.evaluate(READ_SCRIPT) as string
+    let parsed: { title?: string; text?: string } = {}
+    try { parsed = JSON.parse(raw) } catch { /* the fields stay empty, which is the honest answer */ }
+    return {
+      status: response?.status() ?? null,
+      title: String(parsed.title ?? ''),
+      bodyText: String(parsed.text ?? ''),
+    }
+  }
+
   /** Close the window and drop the live session. The on-disk profile (and its login) is kept. */
   async close(): Promise<BraveSessionStatus> {
     const ctx = this.context

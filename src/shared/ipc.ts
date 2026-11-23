@@ -195,6 +195,22 @@ export interface MainHandlers {
     caveat: string
   }>
 
+  // Joining a source finding to a live attempt in the signed-in Brave session
+  /** The policy quotes and the rate/volume ceiling the join view must show. Read-only. */
+  'lab:joinPolicy': () => Promise<import('./lab').JoinPolicyView>
+  /** Promote a source finding to a proposed live attempt. Sends nothing. */
+  'lab:joinPrepare': (input: {
+    root: string; file: string; line?: number; targetUrl: string
+    limits?: Partial<import('./lab').RunBudget>
+  }) => Promise<{ ok: boolean; message: string; attempt: import('./lab').JoinAttemptView | null }>
+  'lab:joinDecide': (id: string, approved: boolean) => Promise<{ ok: boolean; message: string; attempt: import('./lab').JoinAttemptView | null }>
+  'lab:joinSend': (id: string) => Promise<import('./lab').JoinSendResult>
+  'lab:joins': () => Promise<import('./lab').JoinAttemptView[]>
+  /** The kill switch for one joining run. */
+  'lab:joinStop': (id: string) => Promise<{ ok: boolean; message: string }>
+  /** Assemble a draft from a confirmed finding. Local only; there is no submission path. */
+  'lab:joinDraft': (id: string, notes?: { verifiedByUser: boolean; aiExtent?: string }) => Promise<{ ok: boolean; message: string; draft: import('./lab').JoinDraft | null }>
+
   // The two practice venues, the shared approval gate, the shared learning loop
   'venue:info': () => Promise<Record<import('./venues').VenueId, import('./venues').VenueInfo>>
   'venue:halt': (venue: import('./venues').VenueId, halted: boolean, reason: string) => Promise<import('../main/services/venues/state').VenueHalt>

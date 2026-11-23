@@ -18,6 +18,8 @@ import {
   preparePayload, decidePayload, dispatchPayload, listPayloadProposals, checkPayloadTarget,
 } from '../services/lab/payload'
 import { runWordPressXss, readSinks, CONTEXT_LABEL } from '../services/lab/wpXss'
+import { prepareJoin, decideJoin, sendJoin, buildJoinDraft } from '../services/lab/joinRun'
+import { JOIN_CEILING } from '../services/lab/joinBudget'
 
 /**
  * The Lab tools, for chat.
@@ -568,6 +570,123 @@ reg.register({
     if (result.finding) lines.push('', `Evidence recorded: ${result.finding.title}`, result.finding.evidence)
     return { success: true, data: lines.join('\n') }
   } catch (err) { return failure(err) }
+})
+
+// ── Joining a source finding to a live attempt ───────────────────────────────
+
+reg.register({
+  name: 'lab.joinPrepare',
+  description: 'Promote ONE validated source finding to a proposed LIVE attempt, and hold it for approval. This SENDS NOTHING. It reads the file with the XSS specialist, takes the payload its sink context implies, and checks the host before anything exists: the host must be covered by an imported program\'s eligible scope, or by a declaration you made, or be 127.0.0.1. A deny rule, an out-of-scope host and a missing program each refuse here and name which one it was. The limits are capped in code at ' + String(JOIN_CEILING.maxRequests) + ' requests and ' + String(JOIN_CEILING.maxPerMinute) + ' a minute.',
+  parameters: {
+    type: 'object',
+    properties: {
+      root: { type: 'string', description: 'The folder holding the source tree.' },
+      file: { type: 'string', description: 'The file to read, relative to that folder or absolute inside it.' },
+      line: { type: 'number', description: 'Optional: the exact line to promote. Empty uses the strongest candidate the validator kept.' },
+      targetUrl: { type: 'string', description: 'The live URL, with {payload} where the value goes. Must be in an imported program\'s scope, or declared.' },
+      maxRequests: { type: 'number', description: `Total requests for this run. Capped at ${JOIN_CEILING.maxRequests}.` },
+      maxPerMinute: { type: 'number', description: `Requests per minute. Capped at ${JOIN_CEILING.maxPerMinute}.` },
+    },
+    required: ['root', 'file', 'targetUrl'],
+  },
+  riskLevel: 'medium', reversible: true, category: 'web',
+}, async p => {
+  try {
+    const r = prepareJoin({
+      root: String(p.root ?? ''),
+      file: String(p.file ?? ''),
+      line: p.line !== undefined && p.line !== null ? Number(p.line) : undefined,
+      targetUrl: String(p.targetUrl ?? ''),
+      limits: {
+        maxRequests: p.maxRequests !== undefined ? Number(p.maxRequests) : undefined,
+        maxPerMinute: p.maxPerMinute !== undefined ? Number(p.maxPerMinute) : undefined,
+      },
+    })
+    if (!r.ok) return { success: false, error: r.message }
+    return { success: true, data: `${r.message}\n\nAttempt id: ${r.attempt?.id}` }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'lab.joinDecide',
+  description: 'Approve or discard a prepared joining attempt by its id. Approving binds to that exact URL, method, payload and marker; if any of them changed, the send refuses. One approval covers one request, and it expires.',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'The attempt id from lab.joinPrepare.' },
+      approved: { type: 'boolean', description: 'true to approve this exact request, false to discard it.' },
+    },
+    required: ['id', 'approved'],
+  },
+  riskLevel: 'high', reversible: false, category: 'web',
+}, async p => {
+  const r = decideJoin(String(p.id ?? ''), Boolean(p.approved))
+  return r.ok ? { success: true, data: r.message } : { success: false, error: r.message }
+})
+
+reg.register({
+  name: 'lab.joinSend',
+  description: 'Send ONE approved joining attempt, in Goga\'s own persistent Brave window where you signed in by hand. It refuses unless the attempt is approved, unspent, unexpired and unchanged; unless the host is still in scope; and unless that Brave session is marked signed in. It reads the page title and text only — never a cookie, token or password — and records a result as CONFIRMED only when the title became a value only the injected script could set. A marker in the page is a reflection and is reported as one. Critical, so it also needs your approval of this exact run.',
+  parameters: {
+    type: 'object',
+    properties: { id: { type: 'string', description: 'The approved attempt id from lab.joinPrepare.' } },
+    required: ['id'],
+  },
+  riskLevel: 'critical', reversible: false, category: 'web',
+}, async p => {
+  try {
+    const { braveCantinaSession } = await import('../services/browser/braveSession')
+    const r = await sendJoin(String(p.id ?? ''), {
+      driver: {
+        state: () => braveCantinaSession().status().state,
+        visit: (u: string) => braveCantinaSession().visitForJoin(u),
+      },
+    })
+    const lines = [
+      r.sent
+        ? `Sent to ${r.host} — HTTP ${r.status ?? '—'}, ${r.elapsedMs} ms.`
+        : `Not sent: ${r.caveat}`,
+    ]
+    if (r.sent) {
+      lines.push(
+        r.executed
+          ? `EXECUTED: the page title became "${r.expectedTitle}", a value only the injected script could set.`
+          : `NOT executed. The marker came back ${r.observationContext}.`,
+        '',
+        r.caveat,
+      )
+    }
+    return { success: r.sent, data: lines.join('\n'), error: r.sent ? undefined : r.caveat }
+  } catch (err) { return failure(err) }
+})
+
+reg.register({
+  name: 'lab.joinDraft',
+  description: 'Assemble a DRAFT report from a joining attempt whose payload actually ran. It stays in Goga\'s local store: there is no submission path in Goga, and you send it yourself. Refuses when the result was a reflection, because a reflection cannot become a report.',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'The attempt id.' },
+      verifiedByUser: { type: 'boolean', description: 'True only when you have reproduced it by hand and take responsibility for the report.' },
+    },
+    required: ['id'],
+  },
+  riskLevel: 'low', reversible: true, category: 'web',
+}, async p => {
+  const r = buildJoinDraft(String(p.id ?? ''), { verifiedByUser: Boolean(p.verifiedByUser) })
+  if (!r.ok || !r.draft) return { success: false, error: r.message }
+  const d = r.draft
+  return { success: true, data: [
+    `Draft for ${d.asset} — ${d.severity}. It stays on this machine; nothing was submitted.`,
+    '', `Program: ${d.program}`, `Class: ${d.vulnerabilityClass}`,
+    '', `Source evidence:\n${d.sourceEvidence}`,
+    '', `Live evidence:\n${d.liveEvidence}`,
+    '', `Steps:\n${d.steps}`,
+    '', `Severity: ${d.severityBasis}`,
+    '', `Remediation:\n${d.remediation}`,
+    '', `AI assistance:\n${d.aiDisclosure}`,
+    '', d.caveat,
+  ].join('\n') }
 })
 
 /** The shared shape for a scan or pipeline result, so both tools read the same way. */

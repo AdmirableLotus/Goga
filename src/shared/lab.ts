@@ -295,6 +295,95 @@ export interface PayloadResult {
   payloadEchoed: boolean
 }
 
+// ── Joining a source finding to a live attempt ─────────────────────────────
+
+/**
+ * A source finding promoted to a live attempt: the sink context, the exact payload, the target
+ * URL and the evidence line from source, carried together so the live attempt is traceable to
+ * the code that suggested it.
+ */
+export interface JoinAttemptView {
+  id: string
+  createdAt: string
+  expiresAt: string
+  url: string
+  host: string
+  method: string
+  payload: string
+  marker: string
+  /** The value only the running script can set. */
+  expectedTitle: string
+  approved: boolean
+  status: string
+  /** Which authority allowed the host: the program's scope, your declaration, or loopback. */
+  authority: { via: string | null; rule: string | null; reason: string }
+  program: { id: string; name: string; source: string } | null
+  source: {
+    file: string
+    line: number
+    excerpt: string
+    /** Element text, a quoted attribute, a textarea or a script block. */
+    context: string
+    observable: string | null
+    wouldConfirm: string[]
+    /** `file:line: excerpt` — the evidence line, carried through to the draft. */
+    evidenceLine: string
+  }
+  limits: RunBudget
+  sent: boolean
+  result: JoinSendResult | null
+}
+
+/** What one live request did. */
+export interface JoinSendResult {
+  sent: boolean
+  url: string
+  host: string
+  status: number | null
+  title: string
+  expectedTitle: string
+  /** True only when the title became the nonce — a value only running script could set. */
+  executed: boolean
+  /** True when the marker came back in the page text. A reflection, never execution. */
+  reflected: boolean
+  markerInBody: boolean
+  observationContext: string
+  elapsedMs: number
+  /** 'confirmed' only when `executed`. Otherwise 'observation'. */
+  confidence: 'observation' | 'confirmed'
+  caveat: string
+}
+
+/** A draft report assembled from a confirmed finding. Local only; there is no submission path. */
+export interface JoinDraft {
+  program: string
+  /** The in-scope asset the request went to. */
+  asset: string
+  inScopeRule: string
+  vulnerabilityClass: string
+  sourceEvidence: string
+  liveEvidence: string
+  steps: string
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical'
+  /** Why that severity, mapped to the program's own published definitions where it has them. */
+  severityBasis: string
+  remediation: string
+  /** What the AI did, and what the user verified. */
+  aiDisclosure: string
+  caveat: string
+  createdAt: string
+}
+
+/** The policy quotes and caps the joining view must carry on screen. */
+export interface JoinPolicyView {
+  /** The program's own automated-testing warning, quoted. Null when nothing is imported. */
+  automatedTestingRule: string | null
+  /** The program's own words on whose accounts may be tested. */
+  ownAccountsRule: string
+  ceiling: RunBudget
+  defaults: RunBudget
+}
+
 // ── The live view ──────────────────────────────────────────────────────────
 
 /**

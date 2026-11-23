@@ -19,6 +19,12 @@ import {
 } from '../services/lab/liveRun'
 import { braveCantinaSession } from '../services/browser/braveSession'
 import type { TargetKind } from '../../shared/lab'
+import {
+  prepareJoin, decideJoin, sendJoin, listJoins, stopJoin, buildJoinDraft,
+} from '../services/lab/joinRun'
+import { JOIN_CEILING, JOIN_DEFAULT } from '../services/lab/joinBudget'
+import { activeProgram } from '../services/security/store'
+import { automationRule } from '../services/security/bounty'
 
 /**
  * Lab IPC: the declared-target list, payload dispatch, and the local WordPress XSS path.
@@ -241,5 +247,80 @@ export function registerLabHandlers(ipcMain: IpcMain) {
       finding: result.finding ? { title: result.finding.title, detail: result.finding.detail, evidence: result.finding.evidence } : null,
       caveat: result.caveat,
     }
+  })
+
+  // ── Joining a source finding to a live attempt ────────────────────────────
+  //
+  // The page can prepare, approve, send once and draft. It cannot widen anything: the scope
+  // decision, the single-use approval and the rate cap are all made in main, before a request
+  // exists, and the send runs in Goga's own Brave window where the user signed in by hand.
+
+  /** The policy quotes and the fixed ceiling. Read-only, so the controls can state them. */
+  ipcMain.handle('lab:joinPolicy', async () => {
+    const program = activeProgram()
+    return {
+      automatedTestingRule: program ? automationRule(program) : null,
+      ownAccountsRule: 'Use only your own accounts or test accounts for testing.',
+      ceiling: JOIN_CEILING,
+      defaults: JOIN_DEFAULT,
+    }
+  })
+
+  ipcMain.handle('lab:joinPrepare', async (_e, input: {
+    root: string; file: string; line?: number; targetUrl: string
+    limits?: { maxRequests?: number; maxPerMinute?: number }
+  }) => {
+    return prepareJoin({
+      root: String(input?.root ?? ''),
+      file: String(input?.file ?? ''),
+      line: input?.line !== undefined ? Number(input.line) : undefined,
+      targetUrl: String(input?.targetUrl ?? ''),
+      limits: input?.limits,
+    })
+  })
+
+  ipcMain.handle('lab:joinDecide', async (_e, id: string, approved: boolean) => decideJoin(String(id ?? ''), !!approved))
+
+  ipcMain.handle('lab:joins', async () => listJoins())
+
+  ipcMain.handle('lab:joinStop', async (_e, id: string) => stopJoin(String(id ?? '')))
+
+  /**
+   * Send one approved attempt, in Goga's own Brave session.
+   *
+   * The driver is the persistent Brave session this app already holds — the same one the
+   * Security page opens for a manual sign-in. `state()` is read fresh, so a session that is not
+   * signed in refuses here rather than pretending. Every request is published to the live view
+   * as it settles, with the host, the outcome and the elapsed time.
+   */
+  ipcMain.handle('lab:joinSend', async (_e, id: string) => {
+    const attempt = listJoins().find(a => a.id === String(id ?? ''))
+    if (attempt) beginLiveRun('join', `Live attempt on ${attempt.host}`)
+    publishEntry('target', `Sending one approved request`, `${attempt?.url ?? ''}`)
+    const driver = {
+      state: () => braveCantinaSession().status().state,
+      visit: (u: string) => braveCantinaSession().visitForJoin(u),
+    }
+    let result: Awaited<ReturnType<typeof sendJoin>>
+    try {
+      result = await sendJoin(String(id ?? ''), {
+        driver,
+        onRequest: line => {
+          publishEntry('send', `${line.index}. ${line.host}`, `${line.outcome} · ${line.elapsedMs} ms`)
+        },
+      })
+    } finally {
+      // The live view closes whatever happened: a run is one request, and a send that failed
+      // must not leave the page saying it is still working.
+      endLiveRun('The live attempt finished.')
+    }
+    return result
+  })
+
+  ipcMain.handle('lab:joinDraft', async (_e, id: string, notes?: { verifiedByUser?: boolean; aiExtent?: string }) => {
+    return buildJoinDraft(String(id ?? ''), {
+      verifiedByUser: !!notes?.verifiedByUser,
+      aiExtent: notes?.aiExtent ? String(notes.aiExtent) : undefined,
+    })
   })
 }

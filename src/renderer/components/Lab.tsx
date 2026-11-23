@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Card, Field, EmptyState, Alert, Chip } from './ui'
 import { LabLiveView } from './LabLive'
+import { LabJoinView } from './LabJoin'
 import type { DeclaredTarget, TargetKind } from '../../shared/lab'
 
 /**
@@ -300,6 +301,8 @@ export function LabSection() {
           </div>
         )}
       </Card>
+
+      <LabJoinView />
 
       <Card title="Recent runs" sub="What the Lab has actually done, newest first">
         {runs.length === 0
