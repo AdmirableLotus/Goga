@@ -143,9 +143,11 @@ export class ChatBrowser {
     }
     const allowed = this.deps.braveReadHosts()
     if (allowed.includes(host)) return null
-    return `${host} is not a host Goga's Brave profile reads. That profile is the Cantina one, and it `
-      + `reads ${allowed.join(', ')} only — so nothing was opened and nothing was read. `
-      + 'Switch the browser in Settings to Firefox to browse other sites.'
+    // Says "session", not "profile": in everyday mode this is the user's own Brave, and calling it
+    // Goga's profile would be a lie about which browser is being driven.
+    return `${host} is not a host Goga's Brave session reads. It `
+      + `reads ${allowed.join(', ')} only — the pages a Cantina bounty is described on — so nothing `
+      + 'was opened and nothing was read. Switch the browser in Settings to Firefox to browse other sites.'
   }
 }
 

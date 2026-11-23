@@ -590,6 +590,16 @@ export default function SettingsPage() {
             <option value="brave">Brave (Playwright/Chromium — installed Brave)</option>
           </select>
         </Field>
+        <Field label="Which Brave Goga uses for the Cantina work">
+          <select
+            value={settings.braveSessionMode ?? 'everyday'}
+            onChange={e => update({ braveSessionMode: e.target.value as AppSettings['braveSessionMode'] })}
+            style={styles.select}
+          >
+            <option value="everyday">your everyday Brave — attach to the one you already use</option>
+            <option value="own-profile">own profile — a separate Brave that Goga starts</option>
+          </select>
+        </Field>
         {browserReady && (() => {
           const chosen = (settings.browserEngine ?? 'firefox') === 'brave' ? browserReady.brave : browserReady.firefox
           return (

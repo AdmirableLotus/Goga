@@ -248,6 +248,10 @@ export interface AppSettings {
   // tools against installed Brave. This is the user's browsing preference only — it does NOT
   // relax any bug-bounty scope check, approval, or program rule.
   browserEngine: 'firefox' | 'brave'
+  // Which Brave Goga drives for the Cantina work: 'everyday' attaches over CDP to the Brave the
+  // user already has open and signed in (their real browser); 'own-profile' launches a Brave with
+  // a profile of its own under Goga's userData. See shared/braveMode.ts for what each one means.
+  braveSessionMode: 'own-profile' | 'everyday'
   ttsProvider: 'kokoro' | 'sapi' | 'elevenlabs'
   // Sleep mode: closing the window keeps Goga in the tray, watching and listening
   sleepOnClose: boolean
@@ -409,6 +413,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoReadFrames: true,
   webLearnEnabled: true,
   browserEngine: 'firefox',
+  braveSessionMode: 'everyday',
   ttsProvider: 'sapi',
   sleepOnClose: true,
   startWithWindows: true,

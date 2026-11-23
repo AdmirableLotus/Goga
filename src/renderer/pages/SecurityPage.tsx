@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { Curriculum, Finding, Lesson, PlatformConnection, ProgramImport, ProgramSource, ProgramSummary, ScopeDecision, SecurityAuditEntry } from '../../shared/security'
 import type { ToolboxCatalog } from '../../shared/toolboxTypes'
 import { PageHeader, Card, Field, EmptyState, Alert, Chip } from '../components/ui'
+import { cantinaCardText, cantinaSignInHint, braveSessionModeLabel } from '../../shared/braveMode'
 import { ToolboxSection } from '../components/Toolbox'
 import { GrimoireSection } from '../components/Grimoire'
 import { LabSection } from '../components/Lab'
@@ -156,37 +157,82 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
         {error && <Alert kind="error">{error}</Alert>}
         {notice && <Alert kind="ok">{notice}</Alert>}
 
-        {/* ── Brave for Cantina (manual sign-in) ───────────────────────────── */}
-        <Card title="Open Brave for Cantina" sub="Goga's own Brave profile — you sign in by hand">
+        {/* ── Brave for Cantina ────────────────────────────────────────────── */}
+        <Card
+          title={brave?.mode === 'own-profile' ? 'Open Brave for Cantina' : 'Brave for Cantina'}
+          sub={brave ? `Driving: ${braveSessionModeLabel(brave.mode)}` : 'Which Brave Goga drives'}
+        >
+          <div className="g-row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span className="g-caption">Which Brave Goga drives:</span>
+            {(['everyday', 'own-profile'] as const).map(m => (
+              <button
+                key={m}
+                className={'g-btn g-btn--sm' + (brave?.mode === m ? ' g-btn--primary' : ' g-btn--ghost')}
+                disabled={busy}
+                aria-pressed={brave?.mode === m}
+                onClick={() => void work(async () => {
+                  const r = await window.goga.invoke('brave:setMode', m)
+                  setBrave(r.status)
+                  setNotice(`Now driving ${braveSessionModeLabel(r.mode)}. ${r.mode === 'everyday'
+                    ? 'Goga attaches to the Brave you already use; it does not start one.'
+                    : 'Goga will start its own Brave profile for the next action.'}`)
+                })}
+              >{braveSessionModeLabel(m)}</button>
+            ))}
+            {brave && <Chip tone={brave.mode === 'everyday' ? 'warn' : undefined}>{brave.mode === 'everyday' ? 'your real browser' : 'separate profile'}</Chip>}
+          </div>
           <p className="g-muted" style={{ marginTop: 0 }}>
-            Goga opens the Cantina bug-bounty page in a Brave window that uses a profile of its own —
-            never your everyday Brave, passwords or cookies. You sign in yourself in that window; Goga
-            never enters credentials and does not touch CAPTCHA or MFA. The login is remembered across
-            restarts. Being signed in is not permission to test — every request still passes the scope gate.
+            {brave?.cardText ?? cantinaCardText('everyday')}
           </p>
+          <p className="g-caption" style={{ marginTop: 0 }}>{brave?.signInHint ?? cantinaSignInHint('everyday')}</p>
           <div className="g-row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button className="g-btn g-btn--primary" disabled={busy} onClick={() => void work(async () => {
               setBrave(await window.goga.invoke('brave:openForCantina'))
-            })}>Open Brave for Cantina</button>
-            <button className="g-btn" disabled={busy || !brave || (brave.state !== 'login-required' && brave.state !== 'open')} onClick={() => void work(async () => {
-              setBrave(await window.goga.invoke('brave:confirmSignedIn'))
-            })}>I've signed in</button>
+            })}>{brave?.mode === 'own-profile' ? 'Open Brave for Cantina' : 'Attach to your everyday Brave'}</button>
+            {brave?.mode === 'own-profile' && (
+              <button className="g-btn" disabled={busy || !brave || (brave.state !== 'login-required' && brave.state !== 'open')} onClick={() => void work(async () => {
+                setBrave(await window.goga.invoke('brave:confirmSignedIn'))
+              })}>I've signed in</button>
+            )}
+            {brave?.mode !== 'own-profile' && (
+              <button className="g-btn" disabled={busy || !brave || brave.state === 'stopped'} onClick={() => void work(async () => {
+                setBrave(await window.goga.invoke('brave:checkSignedIn'))
+              })}>Check the page</button>
+            )}
             <button className="g-btn g-btn--ghost" disabled={busy || !brave || brave.state === 'stopped'} onClick={() => void work(async () => {
               setBrave(await window.goga.invoke('brave:closeCantina'))
-            })}>Close window</button>
+            })}>{brave?.mode === 'own-profile' ? 'Close window' : "Close Goga's tab"}</button>
             <button className="g-btn g-btn--ghost g-btn--sm" disabled={busy} onClick={() => void work(async () => {
               setBrave(await window.goga.invoke('brave:status'))
             })}>Refresh</button>
           </div>
           {brave && (
             <div style={{ marginTop: 10 }}>
-              <Chip tone={brave.state === 'open' ? 'ok' : brave.state === 'login-required' || brave.state === 'launching' ? 'warn' : brave.state === 'disconnected' ? 'bad' : undefined}>
-                {brave.state === 'open' ? 'signed in (your confirmation)'
-                  : brave.state === 'login-required' ? 'open — sign in'
-                  : brave.state === 'disconnected' ? 'window closed'
-                  : brave.state === 'launching' ? 'starting…' : 'not open'}
-              </Chip>
+              <div className="g-row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <Chip tone={brave.state === 'open' ? 'ok' : brave.state === 'login-required' || brave.state === 'launching' || brave.state === 'attaching' ? 'warn' : brave.state === 'disconnected' ? 'bad' : undefined}>
+                  {brave.state === 'open'
+                    ? (brave.mode === 'own-profile' ? 'signed in (your confirmation)' : 'signed in (read off the page)')
+                    : brave.state === 'login-required' ? (brave.mode === 'own-profile' ? 'open — sign in' : 'attached — not signed in')
+                    : brave.state === 'disconnected' ? (brave.mode === 'own-profile' ? 'window closed' : 'connection dropped')
+                    : brave.state === 'launching' ? 'starting…'
+                    : brave.state === 'attaching' ? 'attaching…' : 'not attached'}
+                </Chip>
+                {/* Always say which browser, and which tab, so it is never ambiguous. */}
+                <Chip tone={brave.mode === 'everyday' ? 'warn' : 'accent'}>{braveSessionModeLabel(brave.mode)}</Chip>
+                {brave.tab && <Chip>{brave.tab.openedByGoga ? "Goga's own tab" : 'a tab Goga did not open'}</Chip>}
+              </div>
               <p className="g-muted" style={{ marginBottom: 0 }}>{brave.message}</p>
+              {brave.mode === 'everyday' && brave.debugPort && (
+                <p className="g-caption" style={{ marginBottom: 0 }}>
+                  Looking for remote debugging on port {brave.debugPort}. Brave must be started with{' '}
+                  <code className="g-mono">--remote-debugging-port={brave.debugPort}</code> for Goga to attach.
+                </p>
+              )}
+              {brave.tab && (
+                <p className="g-caption" style={{ marginBottom: 0 }}>
+                  Tab Goga is driving: {brave.tab.title || '(no title)'} — <span className="g-mono">{brave.tab.url}</span>
+                </p>
+              )}
               {!brave.braveExecutable && <Alert kind="error">Brave was not found. Install it, or set GOGA_BRAVE_PATH to brave.exe.</Alert>}
             </div>
           )}
@@ -195,7 +241,8 @@ export default function SecurityPage({ onNavigate }: { onNavigate?: (dest: Desti
             <div className="g-section-title">Read a Cantina page through Brave</div>
             <p className="g-caption" style={{ marginTop: 0 }}>
               Navigates and reads only — no clicks, no typing, no credentials. It reads
-              bounties.cantina.xyz and cantina.xyz, and refuses any other host by name.
+              bounties.cantina.xyz and cantina.xyz, and refuses any other host by name before
+              anything is opened, in both modes.
             </p>
             <div className="g-row" style={{ gap: 8, flexWrap: 'wrap' }}>
               <input className="g-input g-input--xl" value={braveUrl} onChange={e => setBraveUrl(e.target.value)} />

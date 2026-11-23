@@ -43,6 +43,7 @@ function harness(opts: { brave?: string | null } = {}) {
   const session = new BraveCantinaSession(
     async () => launcher,
     () => (opts.brave === undefined ? 'C:\\Brave\\brave.exe' : opts.brave),
+    () => 'own-profile',
   )
   return { session, ctx, launch }
 }

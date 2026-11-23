@@ -161,7 +161,13 @@ export class BrowserAdapter implements ToolAdapter {
     const browser = await chromium.launch({
       ...(bravePath ? { executablePath: bravePath } : {}),
       headless,
-      args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
+      // The Chromium sandbox stays ON. This used to pass --no-sandbox, which made Brave print
+      // "You are using an unsupported command-line flag: --no-sandbox" across the top of every
+      // window and turned the renderer sandbox off besides. Playwright adds --no-sandbox itself
+      // unless chromiumSandbox is explicitly true, so the flag has to be removed from the args
+      // AND the sandbox requested here — either one alone leaves the warning in place.
+      chromiumSandbox: true,
+      args: ['--disable-blink-features=AutomationControlled']
     })
     const context = await browser.newContext({
       viewport: { width: 1280, height: 800 },

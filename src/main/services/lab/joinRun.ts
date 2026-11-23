@@ -283,6 +283,8 @@ export function listJoins(): JoinAttemptView[] {
 export interface BraveJoinDriver {
   /** The session's own state. 'open' is the only state a live attempt may run in. */
   state(): string
+  /** Which Brave this is, in the mode's own words. Absent means Goga's own profile. */
+  label?(): string
   /**
    * Navigate Goga's own Brave page to one URL and report what the page did.
    * This reads the DOM only: no cookies, no storage, no credentials.
@@ -303,7 +305,7 @@ export interface JoinSendOptions {
 
 /** The message a not-signed-in session gets. It says exactly what is wrong and whose job it is. */
 export const NOT_SIGNED_IN =
-  'Goga\'s Brave window is not signed in. A sign-in is yours — do it by hand in that window, then tell me you are signed in. Nothing was sent.'
+  'The Brave Goga drives is not signed in. A sign-in is yours — do it by hand in that window, then tell me you are signed in. Nothing was sent.'
 
 /**
  * Send an approved attempt once, in Goga's own Brave session, and record what happened.
@@ -356,7 +358,7 @@ export async function sendJoin(id: string, opts: JoinSendOptions = {}): Promise<
   }
   if (driver.state() !== 'open') {
     proposal.status = 'refused'
-    audit('blocked', `joining send refused: ${proposal.targetHost} — the Brave session is not signed in`)
+    audit('blocked', `joining send refused: ${proposal.targetHost} — the Brave session is not signed in (${driver.label?.() ?? 'own profile'})`)
     publishEntry('stop', 'Not signed in', NOT_SIGNED_IN)
     return refusal(NOT_SIGNED_IN)
   }
@@ -428,7 +430,7 @@ export async function sendJoin(id: string, opts: JoinSendOptions = {}): Promise<
     // A finding needs the observable actually met. Nothing else promotes it.
     confidence: executed ? 'confirmed' : 'observation',
     caveat: executed
-      ? 'The payload ran in Goga\'s own Brave window: the page title became a value only the injected script could set. This is execution on a host the program\'s scope (or your declaration) allowed.'
+      ? `The payload ran in the Brave Goga drives (${driver.label?.() ?? 'its own profile'}): the page title became a value only the injected script could set. This is execution on a host the program's scope (or your declaration) allowed.`
       : markerInBody
         ? 'The marker came back in the page, but the payload did not run. That is a reflection, and a reflection is never reported as execution.'
         : 'The request completed and nothing came back. That is not a clean result — it is no result.',

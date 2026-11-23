@@ -67,7 +67,7 @@ function harness(pageOpts: FakePageOptions = {}, brave: string | null = 'C:\\Bra
   const page = fakePage(pageOpts)
   const ctx = fakeContext(page)
   const launcher: PersistentLauncher = { launchPersistentContext: vi.fn(async () => ctx as never) }
-  const session = new BraveCantinaSession(async () => launcher, () => brave)
+  const session = new BraveCantinaSession(async () => launcher, () => brave, () => 'own-profile')
   return { session, page, ctx }
 }
 
@@ -200,6 +200,7 @@ describe('the wait for a client-rendered page', () => {
     const session = new BraveCantinaSession(
       async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
       () => 'C:\\Brave\\brave.exe',
+      () => 'own-profile',
     )
     const result = await session.navigateAndRead(CANTINA_BOUNTY_URL)
     expect(result.ok).toBe(true)
@@ -222,6 +223,7 @@ describe('the wait for a client-rendered page', () => {
     const session = new BraveCantinaSession(
       async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
       () => 'C:\\Brave\\brave.exe',
+      () => 'own-profile',
     )
     const result = await session.navigateAndRead(CANTINA_BOUNTY_URL)
     expect(result.ok).toBe(true)
@@ -248,6 +250,7 @@ describe('the wait for a client-rendered page', () => {
     const session = new BraveCantinaSession(
       async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
       () => 'C:\\Brave\\brave.exe',
+      () => 'own-profile',
     )
     // Open a page first, so the wait has something to watch; then it stops rendering.
     await session.navigateAndRead(CANTINA_BOUNTY_URL)
@@ -275,6 +278,7 @@ describe('the wait for a client-rendered page', () => {
     const session = new BraveCantinaSession(
       async () => ({ launchPersistentContext: vi.fn(async () => ctx as never) }),
       () => 'C:\\Brave\\brave.exe',
+      () => 'own-profile',
     )
     const started = Date.now()
     const result = await session.navigateAndRead(CANTINA_BOUNTY_URL)

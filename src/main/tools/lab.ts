@@ -639,6 +639,7 @@ reg.register({
     const r = await sendJoin(String(p.id ?? ''), {
       driver: {
         state: () => braveCantinaSession().status().state,
+        label: () => braveCantinaSession().status().browserLabel,
         visit: (u: string) => braveCantinaSession().visitForJoin(u),
       },
     })

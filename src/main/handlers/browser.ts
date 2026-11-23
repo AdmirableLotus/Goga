@@ -4,6 +4,8 @@ import type { VenueId } from '../../shared/venues'
 import { browserLayer } from '../services/browser/layer'
 import { braveCantinaSession } from '../services/browser/braveSession'
 import { asBrowserEngine, browserReadiness } from '../services/browser/engine'
+import { asBraveSessionMode } from '../../shared/braveMode'
+import { LogService } from '../services/logs'
 import { SettingsService } from '../services/settings'
 import { correctRecipe, forgetRecipe, learnCurrentPage, readRecipes } from '../services/browser/recipes'
 import { approvalGate } from '../services/venues/guard'
@@ -21,6 +23,8 @@ import { VENUES } from '../../shared/venues'
  * send an order without the shared gate having a matching approval, and it cannot reach
  * the browser except through these primitives.
  */
+
+const log = () => LogService.getInstance()
 
 export function registerBrowserHandlers(ipcMain: IpcMain) {
   const layer = browserLayer()
@@ -61,6 +65,24 @@ export function registerBrowserHandlers(ipcMain: IpcMain) {
   // typing, no credentials, and only the hosts a bounty page is published on.
   ipcMain.handle('brave:navigateRead', async (_e, url: string) => brave.navigateAndRead(String(url ?? '')))
   ipcMain.handle('brave:readCurrent', async () => brave.readCurrent())
+  // Which Brave Goga drives, and switching between the user's everyday Brave and Goga's own
+  // profile. The mode is a browser choice, persisted in settings; it grants nothing. Switching it
+  // drops the held session so the next action attaches or launches in the new mode rather than
+  // silently carrying on in the old browser.
+  ipcMain.handle('brave:mode', async () => ({ mode: brave.mode(), status: brave.status() }))
+  ipcMain.handle('brave:setMode', async (_e, mode: unknown) => {
+    const next = asBraveSessionMode(mode)
+    const settings = SettingsService.getInstance()
+    const previous = settings.get().braveSessionMode
+    if (previous !== next) {
+      settings.set({ braveSessionMode: next })
+      await brave.close()
+      log().info(`Brave/Cantina: session mode changed ${previous} -> ${next} from the Security page; the old session was dropped`)
+    }
+    return { mode: brave.mode(), status: brave.status() }
+  })
+  // The sign-in step in everyday mode: read the page, do not inspect cookies or storage.
+  ipcMain.handle('brave:checkSignedIn', async () => brave.checkSignedIn())
 
   // Site learning
   ipcMain.handle('browser:recipes', async () => readRecipes())

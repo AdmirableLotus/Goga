@@ -304,9 +304,20 @@ export function registerLabHandlers(ipcMain: IpcMain) {
   ipcMain.handle('lab:joinSend', async (_e, id: string) => {
     const attempt = listJoins().find(a => a.id === String(id ?? ''))
     if (attempt) beginLiveRun('join', `Live attempt on ${attempt.host}`)
+    // Which browser, and which tab, in the live log — before the request, so it is on the record
+    // the user can watch. Everyday mode means these are the user's real, signed-in pages.
+    const before = braveCantinaSession().status()
+    publishEntry(
+      'browser',
+      before.mode === 'everyday' ? 'Driving your everyday Brave' : "Driving Goga's own Brave profile",
+      before.tab
+        ? `Tab: ${before.tab.title || '(no title)'} — ${before.tab.url}`
+        : `No tab attached yet (state: ${before.state}).`,
+    )
     publishEntry('target', `Sending one approved request`, `${attempt?.url ?? ''}`)
     const driver = {
       state: () => braveCantinaSession().status().state,
+      label: () => braveCantinaSession().status().browserLabel,
       visit: (u: string) => braveCantinaSession().visitForJoin(u),
     }
     let result: Awaited<ReturnType<typeof sendJoin>>

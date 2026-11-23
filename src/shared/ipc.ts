@@ -160,6 +160,11 @@ export interface MainHandlers {
   'brave:closeCantina': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
   'brave:navigateRead': (url: string) => Promise<{ ok: boolean; read: import('../main/services/browser/braveSession').BravePageRead | null; message: string }>
   'brave:readCurrent': () => Promise<{ ok: boolean; read: import('../main/services/browser/braveSession').BravePageRead | null; message: string }>
+  /** Which Brave Goga drives, and switching it. Persisted in settings. */
+  'brave:mode': () => Promise<{ mode: import('./braveMode').BraveSessionMode; status: import('../main/services/browser/braveSession').BraveSessionStatus }>
+  'brave:setMode': (mode: import('./braveMode').BraveSessionMode) => Promise<{ mode: import('./braveMode').BraveSessionMode; status: import('../main/services/browser/braveSession').BraveSessionStatus }>
+  /** Read the Cantina page Goga is on and say whether that page shows a signed-in account. */
+  'brave:checkSignedIn': () => Promise<import('../main/services/browser/braveSession').BraveSessionStatus>
 
   // The Lab: declared targets, payload dispatch, and the local WordPress XSS path
   'lab:state': () => Promise<{
