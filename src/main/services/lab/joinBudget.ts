@@ -37,7 +37,7 @@ export interface JoinLimits {
  */
 export const JOIN_CEILING: JoinLimits = { maxRequests: 20, maxPerMinute: 6 }
 
-/** What a run gets when the user does not choose: two requests, at most two a minute. */
+/** What a run gets when the user does not choose: five requests in total, at most two a minute. */
 export const JOIN_DEFAULT: JoinLimits = { maxRequests: 5, maxPerMinute: 2 }
 
 /** The minimum that still lets a run do its job: a benign marker, then the payload. */

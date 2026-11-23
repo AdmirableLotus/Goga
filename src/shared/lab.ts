@@ -382,6 +382,11 @@ export interface JoinPolicyView {
   ownAccountsRule: string
   ceiling: RunBudget
   defaults: RunBudget
+  /**
+   * What the stored active-program pointer means, so the panel never says "nothing is imported"
+   * when programs are in fact imported and only the pointer dangles.
+   */
+  programState?: { state: 'active' | 'none' | 'stale'; staleId: string | null; programCount: number }
 }
 
 // ── The live view ──────────────────────────────────────────────────────────

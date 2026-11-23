@@ -84,9 +84,31 @@ export function getProgram(id: string): ProgramImport | null {
   return load().programs.find(p => p.id === id) ?? null
 }
 
-export function activeProgram(): ProgramImport | null {
+/**
+ * What the stored pointer to the active program actually means.
+ *
+ * Three states, because `null` alone cannot tell "nothing is imported" from "something is
+ * imported but the pointer names a program that is no longer here". The second is a real state: a
+ * program is re-imported under a new id and replaces the old copy, so any pointer still naming the
+ * old id dangles. Reporting that as "none" would say something false — that no scope exists —
+ * when programs are in fact imported and the user simply has to pick one.
+ */
+export type ActiveProgramState =
+  | { state: 'active'; program: ProgramImport }
+  | { state: 'none' }
+  | { state: 'stale'; staleId: string; programCount: number }
+
+export function activeProgramState(): ActiveProgramState {
   const s = load()
-  return s.activeProgramId ? s.programs.find(p => p.id === s.activeProgramId) ?? null : null
+  if (!s.activeProgramId) return { state: 'none' }
+  const found = s.programs.find(p => p.id === s.activeProgramId)
+  if (found) return { state: 'active', program: found }
+  return { state: 'stale', staleId: s.activeProgramId, programCount: s.programs.length }
+}
+
+export function activeProgram(): ProgramImport | null {
+  const state = activeProgramState()
+  return state.state === 'active' ? state.program : null
 }
 
 export function setActiveProgram(id: string | null): void {
@@ -101,8 +123,16 @@ export function addProgram(program: Omit<ProgramImport, 'id' | 'importedAt'>): P
   const s = load()
   const full: ProgramImport = { ...program, id: nanoid(), importedAt: new Date().toISOString() }
   // Re-importing the same program replaces the old copy, so scope never goes stale in two places.
+  const replaced = s.programs.find(p => p.source === full.source && p.handle === full.handle) ?? null
   s.programs = [...s.programs.filter(p => !(p.source === full.source && p.handle === full.handle)), full]
-  if (!s.activeProgramId) s.activeProgramId = full.id
+  // The pointer must follow the program it named. If the copy being replaced was the active one,
+  // the stored id would otherwise name a program that no longer exists and every request would be
+  // refused as "no program". Re-pointing it here keeps the user's choice across a re-import.
+  if (replaced && s.activeProgramId === replaced.id) {
+    s.activeProgramId = full.id
+  } else if (!s.activeProgramId) {
+    s.activeProgramId = full.id
+  }
   s.audit.push({ id: nanoid(), time: new Date().toISOString(), kind: 'import', detail: `imported ${full.source} ${full.handle}: ${full.assets.filter(a => a.eligibleForSubmission).length} eligible asset(s), ${full.assets.filter(a => !a.eligibleForSubmission).length} deny rule(s), ${full.exclusions.length} exclusion(s)` })
   save(s)
   return full

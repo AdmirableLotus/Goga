@@ -1,6 +1,6 @@
 import type { ProgramImport, ScopeDecision } from '../../../shared/security'
 import { assetCovers, decideScope, forbiddenTarget, parseTarget } from '../security/scope'
-import { activeProgram, getProgram } from '../security/store'
+import { activeProgram, activeProgramState, getProgram } from '../security/store'
 import { checkTarget } from './targets'
 
 /**
@@ -11,10 +11,14 @@ import { checkTarget } from './targets'
  * The declaration half stays where it already lives (`lab/targets.ts`), so there is one rule for
  * a declared host and not two.
  *
- * The three refusals it can return are deliberately distinguishable, because they need different
+ * The refusals it can return are deliberately distinguishable, because they need different
  * things from the user and a single "out of scope" would hide that:
  *
  *   - **no program** — nothing is imported, so nothing authorises a public host. Import one.
+ *   - **stale pointer** — programs ARE imported, but the stored pointer names one that no longer
+ *     exists (a re-import replaces a program under a new id). Nothing is wrong with the imports;
+ *     the pointer needs re-pointing, and the user picks the active program in the UI. Saying
+ *     "no program is imported" here would be false.
  *   - **deny rule** — the program lists this host and marks it NOT eligible for submission.
  *     Nothing overrides that: not a wildcard elsewhere in the program, not a declaration, not
  *     an approval.
@@ -28,8 +32,11 @@ import { checkTarget } from './targets'
 
 export type JoinVia = 'loopback' | 'declaration' | 'program'
 
-/** Which refusal this was. Named, so the UI can say which of the three it is. */
-export type JoinRefusal = 'no-program' | 'deny-rule' | 'out-of-scope' | 'forbidden' | 'bad-url'
+/**
+ * Which refusal this was. Named, so the UI can say which of them it is — and so "nothing is
+ * imported" is never confused with "the pointer names a program that no longer exists".
+ */
+export type JoinRefusal = 'no-program' | 'stale-pointer' | 'deny-rule' | 'out-of-scope' | 'forbidden' | 'bad-url'
 
 export interface ProgramScopeVerdict {
   allowed: boolean
@@ -107,16 +114,25 @@ export function programScopeFor(
   }
 }
 
-/** The active program's verdict, or null when there is no active program or it ignores the host. */
+/** The active program's verdict, or null when it ignores the host or there is no active program. */
 export function activeProgramScope(rawUrl: string, technique: string | null = 'xss'): ProgramScopeVerdict | null {
-  const program = activeProgram()
-  if (!program) {
+  const state = activeProgramState()
+  if (state.state === 'stale') {
+    // A dangling pointer is its own answer. It is not "no program", and it is not the program's
+    // silence about the host either: until the pointer names a program that exists, no active
+    // scope can authorise anything, and saying otherwise would misdescribe the store.
+    return {
+      allowed: false, via: 'program', host: '', port: 0, rule: null, refusal: 'stale-pointer', decision: null,
+      reason: `${state.programCount} program(s) are imported, but the active program pointer names ${state.staleId}, which matches none of them — the program it pointed at no longer exists, because a re-import replaced it under a new id. Nothing is wrong with the imports; select the active program on the Security page.`,
+    }
+  }
+  if (state.state === 'none') {
     return {
       allowed: false, via: 'program', host: '', port: 0, rule: null, refusal: 'no-program', decision: null,
       reason: 'no program scope is imported — import a program before any request to a public host',
     }
   }
-  return programScopeFor(rawUrl, program, technique)
+  return programScopeFor(rawUrl, state.program, technique)
 }
 
 /** A named program's verdict, for a caller that resolved one explicitly. */
@@ -214,6 +230,15 @@ export function decideJoinTarget(rawUrl: string): JoinDecision {
       refusal: 'forbidden', reason: describeRefusal(verdict),
     }
   }
+  if (verdict?.refusal === 'stale-pointer') {
+    // The active scope is unknown, so nothing here can be read as "the program does not mention
+    // this host" — that reading needs a program that exists. A declaration is not consulted,
+    // because a program that is imported and merely unselected may well deny the host.
+    return {
+      allowed: false, host, port, via: null, targetId: null, rule: null,
+      refusal: 'stale-pointer', reason: describeRefusal(verdict),
+    }
+  }
 
   // The program said nothing about the host (or there is none). The user's declaration is the
   // remaining authority, and it is the same check every other Lab tool uses.
@@ -255,6 +280,10 @@ export function describeRefusal(v: ProgramScopeVerdict): string {
   switch (v.refusal) {
     case 'no-program':
       return 'No program is imported, so nothing authorises a request to that host.'
+    case 'stale-pointer':
+      // The verdict already carries the counts and the stale id; the prefix only names what
+      // this refusal is, so it is never read as the no-program one.
+      return `The active program pointer is stale — this is not the same as no program being imported. ${v.reason}`
     case 'deny-rule':
       return `The program marks ${v.rule ?? 'that asset'} as NOT eligible for submission — that is a deny rule, and nothing overrides it. ${v.reason}`
     case 'out-of-scope':

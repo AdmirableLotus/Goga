@@ -151,7 +151,19 @@ export function LabJoinView() {
           </Alert>
         )}
 
-        {!policy?.automatedTestingRule && (
+        {policy?.programState?.state === 'stale' && (
+          <Alert kind="error">
+            No request can be authorised yet, and it is not because nothing is imported:{' '}
+            {policy.programState.programCount} program(s) are imported, but the active program
+            pointer names <span className="g-mono">{policy.programState.staleId}</span>, which is not
+            one of them. That happens when a program you were using is re-imported — the import
+            replaces it under a new id and the pointer is left naming the old one. Choose the
+            program you meant in the active-program control on the Security page, and this clears.
+            The local reproduction on 127.0.0.1 needs no program either way.
+          </Alert>
+        )}
+
+        {(!policy || (policy.programState?.state !== 'stale' && !policy.automatedTestingRule)) && (
           <p className="g-caption g-faint">
             No program is imported, so nothing authorises a request to a public host right now.
             Import a program on this page, or declare a host you own, before preparing a live

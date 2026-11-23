@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron'
-import { audit } from '../services/security/store'
+import { activeProgramState, audit } from '../services/security/store'
 import {
   declareTarget, revokeTarget, listTargets, type DeclareResult,
 } from '../services/lab/targets'
@@ -258,8 +258,16 @@ export function registerLabHandlers(ipcMain: IpcMain) {
   /** The policy quotes and the fixed ceiling. Read-only, so the controls can state them. */
   ipcMain.handle('lab:joinPolicy', async () => {
     const program = activeProgram()
+    const pointer = activeProgramState()
     return {
       automatedTestingRule: program ? automationRule(program) : null,
+      // The pointer's real state, so the panel can say "programs are imported but none is active"
+      // instead of the false "no program is imported" when a re-import orphaned the pointer.
+      programState: {
+        state: pointer.state,
+        staleId: pointer.state === 'stale' ? pointer.staleId : null,
+        programCount: pointer.state === 'stale' ? pointer.programCount : 0,
+      },
       ownAccountsRule: 'Use only your own accounts or test accounts for testing.',
       ceiling: JOIN_CEILING,
       defaults: JOIN_DEFAULT,
